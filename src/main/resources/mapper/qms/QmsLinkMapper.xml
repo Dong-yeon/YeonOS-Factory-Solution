@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- QMS 공개 계약 구현용 조회 (docs/29_P3 14장·16장·18장) -->
+<mapper namespace="io.smarthappy.module.qms.QmsLinkMapper">
+
+    <select id="findDocIdByNo" resultType="java.lang.Long">
+        select doc_id from mst_doc where upper(doc_no) = upper(#{docNo}) and use_yn = 'Y' order by doc_id limit 1
+    </select>
+
+    <!--
+      협력사 수입검사 품질(docs/29_P3 16장) — 회사 범위는 RLS.
+      net: 협력사 LOT 의 살아 있는 NCR(취소 제외)마다 불량 수량 = NCR 수량 − 특채(USE_AS_IS) 처리량, 0 미만이면 0.
+      live: 협력사 LOT 마다 가장 최근의 판정 확정 수입검사(무효 제외) — 기간은 그 판정 시각 [fromTs, toTs).
+      insp(판정)·rej(출처 INSP NCR — LOT 기준, QQ-1)·other(검사 없이 생긴 NCR, 발생 시각 기준)를 품목·단위로 맞붙인다.
+    -->
+    <select id="receiptQuality" resultType="io.smarthappy.module.qms.QmsLinkMapper$QualityRow">
+        with net as (
+            select n.lot_id, n.insp_id, n.item_id, n.unit_cd, n.source, n.status, n.occurred_at,
+                   greatest(n.nc_qty - coalesce((select sum(d.qty) from qms_ncr_disp d
+                                                  where d.ncr_id = n.ncr_id and d.disp_type = 'USE_AS_IS'), 0), 0) as net_qty
+              from qms_ncr n
+              join lot_master l on l.lot_id = n.lot_id
+             where l.supplier_cust_id = #{custId} and n.status &lt;&gt; 'CANCELLED'
+        ), live as (
+            select distinct on (h.lot_id) h.lot_id, h.insp_id, h.result, h.judged_at, l.item_id, l.unit_cd, l.qty_created
+              from qms_insp h
+              join lot_master l on l.lot_id = h.lot_id
+             where h.insp_type = 'RECEIVE' and h.status = 'JUDGED' and l.supplier_cust_id = #{custId}
+             order by h.lot_id, h.judged_at desc, h.insp_id desc
+        ), lots as (
+            -- 분모 LOT(LOT 당 한 번): 살아 있는 최근 판정이 기간 안 + 판정이 모두 무효인데 그 근거 검사로 불량(출처 INSP NCR)을 낸 LOT(QE-1)
+            select v.lot_id, v.item_id, v.unit_cd, v.qty_created, 1 as judged, case when v.result = 'NG' then 1 else 0 end as ng
+              from live v
+             where v.judged_at &gt;= #{fromTs} and v.judged_at &lt; #{toTs}
+            union all
+            select x.lot_id, l.item_id, l.unit_cd, l.qty_created, 0, 0
+              from (select distinct t.lot_id
+                      from net t
+                      join qms_insp b on b.insp_id = t.insp_id
+                      left join live v on v.lot_id = t.lot_id
+                     where t.source = 'INSP' and v.lot_id is null and b.judged_at &gt;= #{fromTs} and b.judged_at &lt; #{toTs}) x
+              join lot_master l on l.lot_id = x.lot_id
+        ), insp as (
+            select item_id, unit_cd, sum(qty_created) as inspected_qty, sum(judged) as inspection_cnt, sum(ng) as ng_cnt
+              from lots
+             group by item_id, unit_cd
+        ), rej as (
+            -- 출처 INSP NCR 은 근거 검사의 재검사·무효와 무관하게 그 LOT 에 붙는다(QQ-1): 기준 시각 = LOT 의 살아 있는 최근 판정,
+            -- 살아 있는 판정이 없으면(모두 무효) 근거 검사의 판정 시각
+            select t.item_id, t.unit_cd, sum(t.net_qty) as rejected_qty, count(*) filter (where t.status in ('OPEN', 'PENDING')) as open_cnt
+              from net t
+              left join live v on v.lot_id = t.lot_id
+              left join qms_insp b on b.insp_id = t.insp_id
+             where t.source = 'INSP' and coalesce(v.judged_at, b.judged_at) &gt;= #{fromTs} and coalesce(v.judged_at, b.judged_at) &lt; #{toTs}
+             group by t.item_id, t.unit_cd
+        ), other as (
+            select t.item_id, t.unit_cd, sum(t.net_qty) as other_qty
+              from net t
+             where t.source &lt;&gt; 'INSP' and t.occurred_at &gt;= #{fromTs} and t.occurred_at &lt; #{toTs}
+             group by t.item_id, t.unit_cd
+        ), keys as (
+            select item_id, unit_cd from insp union select item_id, unit_cd from rej union select item_id, unit_cd from other
+        )
+        select k.item_id, i.item_cd, k.unit_cd,
+               coalesce(a.inspected_qty, 0) as inspected_qty, coalesce(r.rejected_qty, 0) as rejected_qty,
+               coalesce(a.inspection_cnt, 0)::int as inspection_cnt, coalesce(a.ng_cnt, 0)::int as ng_cnt,
+               coalesce(r.open_cnt, 0)::int as open_ncr_cnt, coalesce(o.other_qty, 0) as other_nc_qty
+          from keys k
+          join mst_item i on i.item_id = k.item_id
+          left join insp a on a.item_id = k.item_id and a.unit_cd = k.unit_cd
+          left join rej r on r.item_id = k.item_id and r.unit_cd = k.unit_cd
+          left join other o on o.item_id = k.item_id and o.unit_cd = k.unit_cd
+         order by i.item_cd, k.unit_cd
+    </select>
+
+    <!-- 협력사 LOT 의 닫힌 NCR(종결 시각 [fromTs, toTs)) 반품 처리 줄 -->
+    <select id="supplierReturns" resultType="io.smarthappy.module.qms.QmsLinkMapper$ReturnRow">
+        select n.ncr_id, n.ncr_no, d.line_no, n.lot_id, l.lot_no, l.supplier_lot_no, n.item_id, i.item_cd, d.qty, n.unit_cd,
+               f.defect_cd, f.defect_nm, n.closed_at
+          from qms_ncr n
+          join qms_ncr_disp d on d.ncr_id = n.ncr_id and d.disp_type = 'RETURN'
+          join lot_master l on l.lot_id = n.lot_id
+          join mst_item i on i.item_id = n.item_id
+          left join qms_defect f on f.defect_id = n.defect_id
+         where n.status = 'CLOSED' and l.supplier_cust_id = #{custId} and n.closed_at &gt;= #{fromTs} and n.closed_at &lt; #{toTs}
+         order by n.closed_at, n.ncr_id, d.line_no
+         limit #{limit}
+    </select>
+
+    <sql id="ncrCols">
+        select n.ncr_id, n.ncr_no, n.status, n.source, n.lot_id, l.lot_no, l.supplier_lot_no, l.supplier_cust_id, n.item_id, i.item_cd, n.nc_qty,
+               coalesce((select sum(d.qty) from qms_ncr_disp d where d.ncr_id = n.ncr_id and d.disp_type = 'RETURN'), 0) as return_qty,
+               n.unit_cd, f.defect_cd, f.defect_nm, n.description, h.insp_no, n.occurred_at, n.closed_at
+          from qms_ncr n
+          join lot_master l on l.lot_id = n.lot_id
+          join mst_item i on i.item_id = n.item_id
+          left join qms_defect f on f.defect_id = n.defect_id
+          left join qms_insp h on h.insp_id = n.insp_id
+    </sql>
+
+    <select id="ncrDetail" resultType="io.smarthappy.module.qms.QmsLinkMapper$NcrRow">
+        <include refid="ncrCols"/>
+         where n.ncr_id = #{ncrId}
+    </select>
+
+    <!-- 협력사 LOT 의 NCR — 발견 시각 [fromTs, toTs), 취소 제외 -->
+    <select id="supplierNcrs" resultType="io.smarthappy.module.qms.QmsLinkMapper$NcrRow">
+        <include refid="ncrCols"/>
+         where l.supplier_cust_id = #{custId} and n.status &lt;&gt; 'CANCELLED' and n.occurred_at &gt;= #{fromTs} and n.occurred_at &lt; #{toTs}
+         order by n.occurred_at, n.ncr_id
+         limit #{limit}
+    </select>
+
+    <!-- 검사계획 행(docs/29_P3 18장) — 확정본이라 규격·특별특성·자료형은 스냅샷 칸 -->
+    <select id="planLines" resultType="io.smarthappy.module.qms.QmsLinkMapper$PlanLineRow">
+        select l.line_no, l.char_id, c.char_no, c.char_nm, l.special_cls, l.data_type, l.nominal, l.lsl, l.usl, l.unit_nm, l.scale,
+               l.method_nm, l.gauge_class, s.plan_cd as sampling_plan_cd, l.freq_type, l.freq_n, l.reaction_plan
+          from qms_insp_plan_line l
+          join qms_char c on c.char_id = l.char_id
+          join qms_sampling_plan s on s.sampling_plan_id = l.sampling_plan_id
+         where l.insp_plan_id = #{planId}
+         order by l.line_no
+    </select>
+
+    <!-- 검사계획 머리 키(InspPlanLookup.keys) — 상태 무관, 회사 범위는 RLS -->
+    <select id="planKeys" resultType="io.smarthappy.module.qms.QmsLinkMapper$PlanKeyRow">
+        select insp_plan_id, insp_type, item_id, item_class_id, proc_id, alt_no, rev, status
+          from qms_insp_plan
+         where insp_plan_id in
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by insp_plan_id
+    </select>
+
+    <!-- 4M 변경 세부(docs/29_P3 20장 B안) — ECO 목록은 PLM 계약이 정하고 여기선 세부만. 회사 범위는 RLS -->
+    <select id="changeDetails" resultType="io.smarthappy.module.qms.QmsLinkMapper$ChangeRow">
+        select c.eco_id, c.eco_no, array_to_string(c.m4_types, ',') as m4_text, c.before_desc, c.after_desc, c.reason_desc, c.impact_desc,
+               c.revert_cond,
+               (select string_agg(x.char_id::text, ',' order by x.line_no) from qms_change_char x
+                 where x.eco_id = c.eco_id and x.char_id is not null) as char_id_text,
+               (select string_agg(x.insp_plan_id::text, ',' order by x.line_no) from qms_change_char x
+                 where x.eco_id = c.eco_id and x.insp_plan_id is not null) as insp_plan_id_text
+          from qms_change c
+         where c.eco_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by c.eco_id
+    </select>
+</mapper>

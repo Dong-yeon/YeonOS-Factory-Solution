@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- PMS 사람 × 주 부하 (docs/32 4.26, 사용자 결정 P-14). 회사 범위는 RLS — 조건에 comp_cd 를 쓰지 않는다 -->
+<mapper namespace="io.smarthappy.module.pms.LoadMapper">
+
+    <select id="findPlanTasks" resultType="io.smarthappy.module.pms.LoadMapper$PlanTask">
+        select t.task_id, t.proj_id, p.proj_no, p.proj_nm, t.task_nm, t.owner_user_id, t.plan_start, t.plan_end, t.plan_hours, t.status
+          from pms_task t join pms_project p on p.proj_id = t.proj_id
+         where t.is_summary = 'N' and t.task_type = 'TASK' and t.status &lt;&gt; 'CANCELLED' and p.status &lt;&gt; 'CANCELLED'
+           and t.plan_hours &gt; 0 and t.plan_start &lt;= #{to} and t.plan_end &gt;= #{from}
+        <if test="projId != null">and t.proj_id = #{projId}</if>
+        <if test="ownerId != null">and t.owner_user_id = #{ownerId}</if>
+        <if test="unassigned">and t.owner_user_id is null</if>
+         order by t.plan_start, t.task_id
+         limit #{limit}
+    </select>
+
+    <select id="findConfirmed" resultType="io.smarthappy.module.pms.LoadMapper$ConfWeek">
+        select w.user_id, date_trunc('week', w.work_day::timestamp)::date as week_start, sum(w.hours) as hours
+          from pms_work_log w
+         where w.status = 'CONFIRMED' and w.work_day between #{from} and #{to}
+        <if test="projId != null">and w.proj_id = #{projId}</if>
+         group by w.user_id, date_trunc('week', w.work_day::timestamp)::date
+    </select>
+
+    <select id="findUsers" resultType="io.smarthappy.module.pms.LoadMapper$UserRow">
+        <!-- 저장된 id(작업 담당·공수 기록자)의 이름 표시 — 고르기가 아니라 조인(UserPickGuardTest) -->
+        select u.user_id, u.login_id, u.user_nm, u.use_yn
+          from unnest(array[<foreach collection="ids" item="i" separator=",">#{i}</foreach>]::bigint[]) as x(id)
+          join sys_user u on u.user_id = x.id
+    </select>
+</mapper>

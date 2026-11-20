@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설비 연동 (cms-equip-link) — 장비 연동 E0 (docs/65 16장). 설비마다 연결 방식(DIRECT 설치형 / EDGE SaaS)·대신 말하는 장치·하트비트 주기·쓰기 활성화,
+  논리 태그 쓰기 허용 목록, 명령 4단(의도·쓰기·다시 읽기·결과), 연동 사건, 수신 원문(격리·충돌). 명령 쓰기는 FN1 권한(설정 SAVE 와 나눔).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설비 연동</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.col.plant}">공장</span><select name="plantCd" id="plantSearch"></select></label>
+    <label><span th:text="#{cms.link.keyword}">설비 코드·이름</span><input name="keyword" maxlength="100"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <table class="hb-cmp-table hb-plant-table" id="links">
+            <thead><tr>
+                <th th:text="#{cms.link.col.equip}">설비</th>
+                <th th:text="#{cms.link.col.node}">작업장</th>
+                <th th:text="#{cms.link.col.connMode}">연결</th>
+                <th th:text="#{cms.link.col.terminal}">장치</th>
+                <th th:text="#{cms.link.col.judge}">연결 상태</th>
+                <th th:text="#{cms.link.col.packState}">장비 상태(PackML)</th>
+                <th th:text="#{cms.link.col.stateCat}">분류</th>
+                <th th:text="#{cms.link.col.machinery}">상위 상태</th>
+                <th th:text="#{cms.link.col.lastSeen}">마지막 수신</th>
+                <th th:text="#{cms.link.col.open}">진행 명령·알람</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+
+        <section class="hb-sub" id="inboundBox">
+            <h2 th:text="#{cms.link.inbound}">수신 원문</h2>
+            <p class="hb-muted" th:text="#{cms.link.inboundHint}">엣지가 보낸 원문은 먼저 저장되고 처리는 따로 합니다. 처리 오류는 여기(격리)에 남고 상대에게는 가지 않습니다.</p>
+            <fieldset class="hb-seg" id="inboundStatus">
+                <legend th:text="#{cms.link.col.status}">상태</legend>
+                <label><input type="radio" name="inboundStatus" value="QUARANTINE" checked><span th:text="#{code.INBOUND_STATUS.QUARANTINE}">격리</span></label>
+                <label><input type="radio" name="inboundStatus" value="CONFLICT"><span th:text="#{code.INBOUND_STATUS.CONFLICT}">충돌</span></label>
+                <label><input type="radio" name="inboundStatus" value="REJECTED"><span th:text="#{code.INBOUND_STATUS.REJECTED}">거부</span></label>
+                <label><input type="radio" name="inboundStatus" value="STALE"><span th:text="#{code.INBOUND_STATUS.STALE}">늦음</span></label>
+                <label><input type="radio" name="inboundStatus" value=""><span th:text="#{common.all}">전체</span></label>
+            </fieldset>
+            <table class="hb-cmp-table hb-plant-table" id="inbound">
+                <thead><tr>
+                    <th>#</th>
+                    <th th:text="#{cms.link.col.route}">경로</th>
+                    <th th:text="#{cms.link.col.bizKey}">업무 키</th>
+                    <th th:text="#{cms.link.col.status}">상태</th>
+                    <th th:text="#{cms.link.col.result}">결과</th>
+                    <th th:text="#{cms.link.col.dup}">중복</th>
+                    <th th:text="#{cms.link.col.receivedAt}">받은 시각</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.link.select}">왼쪽에서 설비를 고르세요.</p>
+        <div id="linkBox" hidden>
+        <form id="linkForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{cms.link.col.connMode}">연결</span>
+                <select data-field="connMode" data-help-key="cms-equip-link.connMode">
+                    <option value="EDGE" th:text="#{code.EQUIP_CONN_MODE.EDGE}">엣지</option>
+                    <option value="DIRECT" th:text="#{code.EQUIP_CONN_MODE.DIRECT}">직접</option>
+                </select></label>
+            <label><span th:text="#{cms.link.col.terminal}">장치</span>
+                <select data-field="terminalCd" id="terminalSel" data-help-key="cms-equip-link.terminalCd"></select></label>
+            <label class="hb-wide"><span th:text="#{cms.link.adapterUrl}">어댑터 주소(DIRECT)</span>
+                <input data-field="adapterUrl" maxlength="200" placeholder="http://10.0.0.20:8088" data-help-key="cms-equip-link.adapterUrl"></label>
+            <label><span th:text="#{cms.link.hbSec}">하트비트 주기(초)</span>
+                <input data-field="hbSec" inputmode="numeric" maxlength="4" data-help-key="cms-equip-link.hbSec"></label>
+            <label><span th:text="#{cms.link.writeEnabled}">명령 쓰기</span>
+                <select data-field="writeEnabledYn" data-help-key="cms-equip-link.writeEnabledYn">
+                    <option value="N" th:text="#{cms.link.writeOff}">끔</option>
+                    <option value="Y" th:text="#{cms.link.writeOn}">켬</option>
+                </select></label>
+            <label><span th:text="#{cms.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">예</option>
+                    <option value="N" th:text="#{yn.N}">아니오</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+        </div>
+
+        <section class="hb-sub" id="tagsBox" hidden>
+            <h2 th:text="#{cms.link.tags}">논리 태그(쓰기 허용 목록)</h2>
+            <table class="hb-cmp-table hb-plant-table" id="tags">
+                <thead><tr>
+                    <th th:text="#{cms.link.col.tag}">태그</th>
+                    <th th:text="#{cms.link.col.dataType}">형식</th>
+                    <th th:text="#{cms.link.col.range}">범위</th>
+                    <th th:text="#{cms.link.col.allowedStates}">쓸 수 있는 상태</th>
+                    <th th:text="#{cms.col.useYn}">사용</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <div th:if="${actions.contains('SAVE')}">
+            <form id="tagForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{cms.link.col.tag}">태그</span>
+                    <input data-field="tagCd" maxlength="30" data-help-key="cms-equip-link.tagCd"></label>
+                <label><span th:text="#{cms.link.tagNm}">이름</span><input data-field="tagNm" maxlength="100"></label>
+                <label><span th:text="#{cms.link.col.dataType}">형식</span>
+                    <select data-field="dataType"><option value="NUM">NUM</option><option value="BOOL">BOOL</option></select></label>
+                <label><span th:text="#{cms.link.minValue}">하한</span><input data-field="minValue" inputmode="decimal" maxlength="20"></label>
+                <label><span th:text="#{cms.link.maxValue}">상한</span><input data-field="maxValue" inputmode="decimal" maxlength="20"></label>
+                <label><span th:text="#{cms.link.unit}">단위</span><input data-field="unit" maxlength="20"></label>
+                <label class="hb-wide"><span th:text="#{cms.link.col.allowedStates}">쓸 수 있는 상태</span>
+                    <input data-field="allowedStates" maxlength="100" placeholder="IDLE,STOPPED" data-help-key="cms-equip-link.allowedStates"></label>
+                <label><span th:text="#{cms.col.useYn}">사용</span>
+                    <select data-field="useYn"><option value="Y" th:text="#{yn.Y}">예</option><option value="N" th:text="#{yn.N}">아니오</option></select></label>
+            </form>
+            <p><button type="button" id="tagNewBtn" class="hb-btn-secondary" th:text="#{cms.link.tagNew}">새 태그</button>
+               <button type="button" id="tagSaveBtn" th:text="#{cms.link.tagSave}">태그 저장</button></p>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="cmdBox" hidden>
+            <h2 th:text="#{cms.link.commands}">명령(의도 → 쓰기 → 다시 읽기 → 결과)</h2>
+            <div th:if="${actions.contains('FN1')}">
+            <form id="cmdForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{cms.link.col.tag}">태그</span><select data-field="tagCd" id="cmdTag"></select></label>
+                <label><span th:text="#{cms.link.value}">값</span><input data-field="value" maxlength="30"></label>
+                <label class="hb-wide"><span th:text="#{cms.link.reason}">사유</span><input data-field="reason" maxlength="500"></label>
+            </form>
+            <p><button type="button" id="cmdBtn" class="hb-btn-danger" th:text="#{cms.link.send}">명령 보내기</button></p>
+            </div>
+            <table class="hb-cmp-table hb-plant-table" id="cmds">
+                <thead><tr>
+                    <th th:text="#{cms.link.col.requestedAt}">요청</th>
+                    <th th:text="#{cms.link.col.tag}">태그</th>
+                    <th th:text="#{cms.link.value}">값</th>
+                    <th th:text="#{cms.link.col.status}">상태</th>
+                    <th th:text="#{cms.link.col.readback}">다시 읽은 값</th>
+                    <th th:text="#{cms.link.col.steps}">단계</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+
+        <section class="hb-sub" id="logBox" hidden>
+            <h2 th:text="#{cms.link.logs}">연동 사건</h2>
+            <p id="consLine" class="hb-muted"></p>
+            <table class="hb-cmp-table hb-plant-table" id="logs">
+                <thead><tr>
+                    <th th:text="#{cms.link.col.occurredAt}">시각</th>
+                    <th th:text="#{cms.link.col.event}">사건</th>
+                    <th th:text="#{cms.link.col.detail}">내용</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/equip-link.js}"></script>
+</body>
+</html>

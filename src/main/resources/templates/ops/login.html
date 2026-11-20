@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="#{ops.title}">YeonOS 운영자</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+</head>
+<!-- 운영자 로그인: 비밀번호 → TOTP(첫 로그인은 등록). 회사 사용자 로그인과 별개 -->
+<body class="hb-page hb-ops-login" data-login-url="/ops/login">
+<h1 th:text="#{ops.title}">YeonOS 운영자</h1>
+
+<form id="pwForm" class="hb-form-narrow" autocomplete="off">
+    <label class="hb-field"><span th:text="#{ops.loginId}">운영자 아이디</span>
+        <input id="loginId" maxlength="50" autocomplete="username" required></label>
+    <label class="hb-field"><span th:text="#{ops.password}">비밀번호</span>
+        <input id="password" type="password" maxlength="72" autocomplete="current-password" required></label>
+    <button type="submit" th:text="#{ops.next}">다음</button>
+</form>
+
+<form id="codeForm" class="hb-form-narrow" hidden autocomplete="off">
+    <section id="enroll" hidden>
+        <p th:text="#{ops.enrollGuide}">인증 앱(예: Google Authenticator)에 아래 비밀 키를 추가한 뒤 6자리 코드를 입력하세요.</p>
+        <p><code id="secret" class="hb-code"></code></p>
+        <p class="hb-muted"><code id="otpauth" class="hb-code-small"></code></p>
+    </section>
+    <label class="hb-field"><span th:text="#{ops.code}">인증 코드 6자리</span>
+        <input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></label>
+    <button type="submit" th:text="#{ops.signIn}">로그인</button>
+</form>
+
+<p id="msg" class="hb-msg hb-msg-error" role="status"></p>
+
+<script th:src="@{/js/common/hb.js}"></script>
+<script th:src="@{/js/ops/login.js}"></script>
+</body>
+</html>

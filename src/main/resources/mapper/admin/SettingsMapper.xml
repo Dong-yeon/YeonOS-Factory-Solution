@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  시스템관리 2단계 (docs/36 9장) — 부서·정책·회사 공통코드·채번 규칙·회사 정보.
+  회사별 표는 RLS 가 회사를 거른다(다른 회사 id·코드는 0건 → 404). 전역 정의(sys_policy_def·sys_code_grp·sys_code)는 읽기만.
+-->
+<mapper namespace="io.smarthappy.module.admin.SettingsMapper">
+
+    <!-- ===================== 부서 ===================== -->
+
+    <sql id="deptColumns">
+        d.dept_id, d.parent_id, d.dept_cd, d.dept_nm, d.sort_no, d.use_yn, d.row_ver,
+        (select count(*) from sys_user u where u.dept_id = d.dept_id and u.use_yn = 'Y') as member_cnt,
+        d.head_user_id, h.user_nm as head_nm, h.login_id as head_login_id,
+        coalesce(h.use_yn = 'Y' and not (h.lock_yn = 'Y' and h.locked_until is null), false) as head_active
+    </sql>
+    <!-- 부서장 이름 표시(저장된 id) — 장이 나중에 사용 중지되면 head_active = false 로 화면에 표시 -->
+    <sql id="deptFrom">sys_dept d left join sys_user h on h.user_id = d.head_user_id</sql>
+
+    <select id="findDepts" resultType="io.smarthappy.module.admin.SettingsDtos$DeptRow">
+        select <include refid="deptColumns"/> from <include refid="deptFrom"/> order by d.sort_no, d.dept_cd
+    </select>
+
+    <select id="findDept" resultType="io.smarthappy.module.admin.SettingsDtos$DeptRow">
+        select <include refid="deptColumns"/> from <include refid="deptFrom"/> where d.dept_id = #{deptId}
+    </select>
+
+    <select id="existsDeptCd" resultType="boolean">
+        select exists (select 1 from sys_dept where dept_cd = #{deptCd})
+    </select>
+
+    <select id="insertDept" resultType="long" flushCache="true">
+        insert into sys_dept (comp_cd, parent_id, dept_cd, dept_nm, sort_no, use_yn, head_user_id, created_by, updated_by)
+        values (hb_current_comp(), #{f.parentId}, #{f.deptCd}, #{f.deptNm}, #{f.sortNo}, #{f.useYn}, #{f.headUserId}, #{by}, #{by})
+        returning dept_id
+    </select>
+
+    <!-- 부서 코드는 추가 뒤 고정(다른 업무가 글자로 남길 수 있다) -->
+    <update id="updateDept">
+        update sys_dept
+           set parent_id = #{f.parentId}, dept_nm = #{f.deptNm}, sort_no = #{f.sortNo}, use_yn = #{f.useYn},
+               head_user_id = #{f.headUserId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where dept_id = #{deptId} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ===================== 정책 ===================== -->
+
+    <resultMap id="policyRow" type="io.smarthappy.module.admin.SettingsDtos$PolicyRow">
+        <id property="policyKey" column="policy_key"/>
+        <result property="valueType" column="value_type"/>
+        <result property="defaultValue" column="default_value"/>
+        <result property="allowedValues" column="allowed_values" typeHandler="org.apache.ibatis.type.ArrayTypeHandler"/>
+        <result property="minValue" column="min_value"/>
+        <result property="maxValue" column="max_value"/>
+        <result property="plantScopeYn" column="plant_scope_yn"/>
+        <result property="descKey" column="desc_key"/>
+    </resultMap>
+
+    <select id="findPolicyDefs" resultMap="policyRow">
+        select policy_key, value_type, default_value, allowed_values, min_value, max_value, plant_scope_yn, desc_key
+          from sys_policy_def
+         order by policy_key
+    </select>
+
+    <select id="findPolicyValues" resultType="io.smarthappy.module.admin.SettingsDtos$PolicyValueRow">
+        select plant_cd, policy_key, policy_value, row_ver, updated_at, updated_by
+          from sys_policy
+         order by policy_key, plant_cd
+    </select>
+
+    <!-- 저장 전 버전 확인용 — 행을 잡아 동시 저장과 직렬화 -->
+    <select id="findPolicyValue" resultType="io.smarthappy.module.admin.SettingsDtos$PolicyValueRow" flushCache="true">
+        select plant_cd, policy_key, policy_value, row_ver, updated_at, updated_by
+          from sys_policy
+         where policy_key = #{policyKey} and plant_cd = #{plantCd}
+           for update
+    </select>
+
+    <delete id="deletePolicyValue">
+        delete from sys_policy where policy_key = #{policyKey} and plant_cd = #{plantCd} and row_ver = #{rowVer}
+    </delete>
+
+    <select id="findPlantCds" resultType="string">
+        select plant_cd from sys_plant where use_yn = 'Y' order by plant_cd
+    </select>
+
+    <!-- ===================== 회사 공통코드 ===================== -->
+
+    <select id="findExtGroups" resultType="io.smarthappy.module.admin.SettingsDtos$CodeGroupRow">
+        select grp_cd, grp_nm_key, code_max_len from sys_code_grp where comp_ext_yn = 'Y' and use_yn = 'Y' order by grp_cd
+    </select>
+
+    <!-- 목록·grid 공통: 시스템 코드 + 회사 코드(사용 중지 포함).
+         시스템 코드의 use_yn = 이 회사에서 보이는지(전역 사용 중지 또는 회사 숨김이면 N, docs/68 Q4), hideable = 회사가 숨길 수 있는지 -->
+    <sql id="groupCodeUnion">
+        select c.grp_cd, c.code, null as code_nm, c.code_nm_key, c.sort_no,
+               case when c.use_yn = 'Y' and h.code is null then 'Y' else 'N' end as use_yn,
+               true as system_yn, c.attrs::text as attrs, 0 as row_ver,
+               (c.use_yn = 'Y' and c.fixed_yn = 'N') as hideable
+          from sys_code c
+          left join sys_comp_code_hide h on h.grp_cd = c.grp_cd and h.code = c.code
+         where c.grp_cd = #{grpCd}
+        union all
+        select grp_cd, code, code_nm, null, sort_no, use_yn, false, attrs::text, row_ver, false
+          from sys_comp_code
+         where grp_cd = #{grpCd}
+    </sql>
+
+    <!-- 시스템 코드 한 개(회사 숨김 여부 포함) — 숨기기·되살리기(docs/68 Q4) -->
+    <select id="findSystemCode" resultType="io.smarthappy.module.admin.SettingsDtos$CompCodeRow">
+        select c.grp_cd, c.code, null as code_nm, c.code_nm_key, c.sort_no,
+               case when h.code is null then 'Y' else 'N' end as use_yn,
+               true as system_yn, c.attrs::text as attrs, 0 as row_ver,
+               (c.use_yn = 'Y' and c.fixed_yn = 'N') as hideable
+          from sys_code c
+          left join sys_comp_code_hide h on h.grp_cd = c.grp_cd and h.code = c.code
+         where c.grp_cd = #{grpCd} and c.code = #{code}
+    </select>
+
+    <insert id="hideSystemCode">
+        insert into sys_comp_code_hide (comp_cd, grp_cd, code, created_by)
+        values (hb_current_comp(), #{grpCd}, #{code}, #{by})
+        on conflict (comp_cd, grp_cd, code) do nothing
+    </insert>
+
+    <delete id="unhideSystemCode">
+        delete from sys_comp_code_hide where grp_cd = #{grpCd} and code = #{code}
+    </delete>
+
+    <select id="findGroupCodes" resultType="io.smarthappy.module.admin.SettingsDtos$CompCodeRow">
+        <include refid="groupCodeUnion"/>
+         order by sort_no, code
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만, 마지막에 (코드, 시스템 여부) -->
+    <select id="findGroupCodePage" resultType="io.smarthappy.module.admin.SettingsDtos$CompCodeRow">
+        select * from (<include refid="groupCodeUnion"/>) c
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CODE'">c.code</when>
+                <when test="s.key == 'USE_YN'">c.use_yn</when>
+                <otherwise>c.sort_no</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         c.code, c.system_yn
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countGroupCodes" resultType="long">
+        select count(*) from (<include refid="groupCodeUnion"/>) c
+    </select>
+
+    <select id="findCompCode" resultType="io.smarthappy.module.admin.SettingsDtos$CompCodeRow">
+        select grp_cd, code, code_nm, null as code_nm_key, sort_no, use_yn, false as system_yn, attrs::text as attrs, row_ver
+          from sys_comp_code
+         where grp_cd = #{grpCd} and code = #{code}
+    </select>
+
+    <insert id="insertCompCode">
+        insert into sys_comp_code (comp_cd, grp_cd, code, code_nm, sort_no, attrs, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{grpCd}, #{f.code}, #{f.codeNm}, #{f.sortNo}, #{attrs}::jsonb, #{f.useYn}, #{by}, #{by})
+    </insert>
+
+    <update id="updateCompCode">
+        update sys_comp_code
+           set code_nm = #{f.codeNm}, sort_no = #{f.sortNo}, attrs = #{attrs}::jsonb, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where grp_cd = #{grpCd} and code = #{f.code} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ===================== 채번 ===================== -->
+
+    <sql id="ruleColumns">
+        rule_cd, rule_nm, pattern, reset_cycle, use_yn, row_ver, updated_at, updated_by
+    </sql>
+
+    <select id="findRules" resultType="io.smarthappy.module.admin.SettingsDtos$RuleRow">
+        select <include refid="ruleColumns"/> from sys_numbering_rule order by rule_cd
+    </select>
+
+    <!-- grid(UI 단계 3 ①) 조건 — 검색어 없으면 목록과 같은 행 -->
+    <sql id="ruleWhere">
+        <where>
+            <if test="keyword != null">(rule_cd ilike #{keyword} escape '\' or rule_nm ilike #{keyword} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findRulePage" resultType="io.smarthappy.module.admin.SettingsDtos$RuleRow">
+        select <include refid="ruleColumns"/> from sys_numbering_rule
+        <include refid="ruleWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'RULE_NM'">rule_nm</when>
+                <when test="s.key == 'RESET_CYCLE'">reset_cycle</when>
+                <when test="s.key == 'USE_YN'">use_yn</when>
+                <otherwise>rule_cd</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         rule_cd
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countRules" resultType="long">
+        select count(*) from sys_numbering_rule <include refid="ruleWhere"/>
+    </select>
+
+    <select id="findRule" resultType="io.smarthappy.module.admin.SettingsDtos$RuleRow">
+        select <include refid="ruleColumns"/> from sys_numbering_rule where rule_cd = #{ruleCd}
+    </select>
+
+    <select id="findLastNo" resultType="long">
+        select last_no from sys_numbering_seq where rule_cd = #{ruleCd} and period_key = #{periodKey}
+    </select>
+
+    <insert id="insertRule">
+        insert into sys_numbering_rule (comp_cd, rule_cd, rule_nm, pattern, reset_cycle, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.ruleCd}, #{f.ruleNm}, #{f.pattern}, #{f.resetCycle}, #{f.useYn}, #{by}, #{by})
+    </insert>
+
+    <update id="updateRule">
+        update sys_numbering_rule
+           set rule_nm = #{f.ruleNm}, pattern = #{f.pattern}, reset_cycle = #{f.resetCycle}, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where rule_cd = #{f.ruleCd} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ===================== 회사 정보 ===================== -->
+
+    <select id="findComp" resultType="io.smarthappy.module.admin.SettingsDtos$CompRow">
+        select comp_cd, comp_nm, comp_en_nm, biz_no, ceo_nm, tel_no, addr, time_zone, locale_cd, row_ver, updated_at, updated_by
+          from sys_comp
+         where comp_cd = hb_current_comp()
+    </select>
+
+    <!-- 상태·사용 여부는 운영자 몫이라 여기서 바꾸지 않는다 -->
+    <update id="updateComp">
+        update sys_comp
+           set comp_nm = #{f.compNm}, comp_en_nm = #{f.compEnNm}, biz_no = #{f.bizNo}, ceo_nm = #{f.ceoNm},
+               tel_no = #{f.telNo}, addr = #{f.addr}, time_zone = #{f.timeZone}, locale_cd = #{f.localeCd},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where comp_cd = hb_current_comp() and row_ver = #{f.rowVer}
+    </update>
+</mapper>

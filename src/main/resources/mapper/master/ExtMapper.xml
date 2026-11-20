@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 외부 시스템·외부 ID 매핑·코드 매핑 (P1 7a, docs/22) -->
+<mapper namespace="io.smarthappy.module.master.ext.ExtMapper">
+
+    <!-- ================================================================ 시스템 -->
+
+    <sql id="systemCols">
+        s.system_id, s.system_cd, s.system_nm, s.system_type, s.conn_mode, s.cust_id, c.cust_cd, c.cust_nm, s.use_yn, s.remark, s.row_ver,
+        s.updated_at, s.updated_by,
+        (select count(*) from mst_ext_id_map m where m.system_id = s.system_id and m.use_yn = 'Y') as map_cnt,
+        (select count(*) from if_code_map k where k.system_id = s.system_id and k.use_yn = 'Y') as code_map_cnt
+    </sql>
+
+    <select id="findSystems" resultType="io.smarthappy.module.master.ext.ExtDtos$SystemRow">
+        select <include refid="systemCols"/> from mst_ext_system s left join mst_cust c on c.cust_id = s.cust_id
+        <where><if test="useYn != null">s.use_yn = #{useYn}</if></where>
+        order by s.system_type, s.system_cd
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): 기존 목록과 같은 조건, 정렬 허용 열은 SystemSort, 끝 키 system_id -->
+    <select id="findSystemPage" resultType="io.smarthappy.module.master.ext.ExtDtos$SystemRow">
+        select <include refid="systemCols"/> from mst_ext_system s left join mst_cust c on c.cust_id = s.cust_id
+        <where><if test="useYn != null">s.use_yn = #{useYn}</if></where>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'SYSTEM_CD'">s.system_cd</when>
+                <when test="o.key == 'SYSTEM_NM'">s.system_nm</when>
+                <when test="o.key == 'MAP_CNT'">map_cnt</when>
+                <when test="o.key == 'CODE_MAP_CNT'">code_map_cnt</when>
+                <otherwise>s.system_type</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        s.system_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countSystems" resultType="long">
+        select count(*) from mst_ext_system s <where><if test="useYn != null">s.use_yn = #{useYn}</if></where>
+    </select>
+
+    <select id="findSystem" resultType="io.smarthappy.module.master.ext.ExtDtos$SystemRow">
+        select <include refid="systemCols"/> from mst_ext_system s left join mst_cust c on c.cust_id = s.cust_id
+         where s.system_id = #{id}
+    </select>
+
+    <select id="findSystemByCd" resultType="io.smarthappy.module.master.ext.ExtDtos$SystemRow">
+        select <include refid="systemCols"/> from mst_ext_system s left join mst_cust c on c.cust_id = s.cust_id
+         where s.system_cd = #{systemCd}
+    </select>
+
+    <select id="findCustId" resultType="long">
+        select cust_id from mst_cust where cust_cd = #{custCd}
+    </select>
+
+    <select id="custUseYn" resultType="string">
+        select use_yn from mst_cust where cust_id = #{custId}
+    </select>
+
+    <select id="insertSystem" resultType="long" flushCache="true">
+        insert into mst_ext_system (comp_cd, system_cd, system_nm, system_type, conn_mode, cust_id, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.systemCd}, #{f.systemNm}, #{f.systemType}, #{f.connMode}, #{f.custId}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning system_id
+    </select>
+
+    <update id="updateSystem">
+        update mst_ext_system
+           set system_nm = #{f.systemNm}, system_type = #{f.systemType}, conn_mode = #{f.connMode}, cust_id = #{f.custId}, use_yn = #{f.useYn},
+               remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where system_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 코드 매핑 -->
+
+    <sql id="codeMapCols">code_map_id, system_id, code_type, ext_code, int_code, use_yn, row_ver, updated_at, updated_by</sql>
+
+    <select id="findCodeMaps" resultType="io.smarthappy.module.master.ext.ExtDtos$CodeMapRow">
+        select <include refid="codeMapCols"/> from if_code_map where system_id = #{systemId}
+         order by code_type, use_yn desc, lower(ext_code)
+    </select>
+
+    <select id="findCodeMap" resultType="io.smarthappy.module.master.ext.ExtDtos$CodeMapRow">
+        select <include refid="codeMapCols"/> from if_code_map where code_map_id = #{id}
+    </select>
+
+    <select id="insertCodeMap" resultType="long" flushCache="true">
+        insert into if_code_map (comp_cd, system_id, code_type, ext_code, int_code, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{systemId}, #{f.codeType}, #{f.extCode}, #{f.intCode}, #{f.useYn}, #{by}, #{by})
+        returning code_map_id
+    </select>
+
+    <update id="updateCodeMap">
+        update if_code_map
+           set ext_code = #{f.extCode}, int_code = #{f.intCode}, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where code_map_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="intCodeUsable" resultType="boolean">
+        <choose>
+            <when test="codeType == 'UOM'">
+                select exists (select 1 from sys_code where grp_cd = 'UNIT' and code = #{code} and use_yn = 'Y')
+                    or exists (select 1 from sys_comp_code where grp_cd = 'UNIT' and code = #{code} and use_yn = 'Y')
+            </when>
+            <when test="codeType == 'ITEM_TYPE'">
+                select exists (select 1 from sys_code where grp_cd = 'ITEM_TYPE' and code = #{code} and use_yn = 'Y')
+            </when>
+            <otherwise>
+                select exists (select 1 from mst_equip_hier where node_cd = #{code} and node_type = 'WH' and use_yn = 'Y')
+            </otherwise>
+        </choose>
+    </select>
+
+    <!-- ================================================================ 외부 ID -->
+
+    <sql id="idMapCols">
+        m.map_id, m.system_id, s.system_cd, s.system_nm, s.system_type, m.entity_type, m.internal_id, m.external_id,
+        m.external_nm, m.use_yn, m.row_ver, m.updated_at, m.updated_by
+    </sql>
+
+    <select id="findIdMaps" resultType="io.smarthappy.module.master.ext.ExtDtos$IdMapRow">
+        select <include refid="idMapCols"/> from mst_ext_id_map m join mst_ext_system s on s.system_id = m.system_id
+         where m.entity_type = #{entityType} and m.internal_id = #{internalId}
+         order by m.use_yn desc, s.system_type, s.system_cd, m.map_id
+    </select>
+
+    <select id="findIdMap" resultType="io.smarthappy.module.master.ext.ExtDtos$IdMapRow">
+        select <include refid="idMapCols"/> from mst_ext_id_map m join mst_ext_system s on s.system_id = m.system_id
+         where m.map_id = #{id}
+    </select>
+
+    <select id="targetExists" resultType="boolean">
+        <choose>
+            <when test="entityType == 'ITEM'">select exists (select 1 from mst_item where item_id = #{internalId})</when>
+            <otherwise>select exists (select 1 from mst_cust where cust_id = #{internalId})</otherwise>
+        </choose>
+    </select>
+
+    <select id="insertIdMap" resultType="long" flushCache="true">
+        insert into mst_ext_id_map (comp_cd, system_id, entity_type, internal_id, external_id, external_nm, use_yn,
+                                    created_by, updated_by)
+        values (hb_current_comp(), #{f.systemId}, #{f.entityType}, #{f.internalId}, #{f.externalId}, #{f.externalNm},
+                #{f.useYn}, #{by}, #{by})
+        returning map_id
+    </select>
+
+    <update id="updateIdMap">
+        update mst_ext_id_map
+           set external_id = #{f.externalId}, external_nm = #{f.externalNm}, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where map_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+    <!-- 품목 ERP 품번 (docs/17 9장) -->
+    <select id="findErpSystemId" resultType="long">
+        select system_id from mst_ext_system where system_type = 'ERP' and use_yn = 'Y' order by system_cd limit 1
+    </select>
+
+    <select id="findItemMaps" resultType="map">
+        select external_id, internal_id from mst_ext_id_map
+         where system_id = #{systemId} and entity_type = 'ITEM' and use_yn = 'Y'
+    </select>
+
+    <select id="itemExtIdTaken" resultType="boolean">
+        select exists (select 1 from mst_ext_id_map
+                        where system_id = #{systemId} and entity_type = 'ITEM' and external_id = #{externalId} and use_yn = 'Y')
+    </select>
+</mapper>

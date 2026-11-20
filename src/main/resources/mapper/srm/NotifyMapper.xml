@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 협력사 통지 이력 (SRM S4, 2부 R4d) — sys_outbox(RLS) 의 SRM_PO_ISSUED / SRM_PO_CANCELLED / SRM_CLAIM_SENT.
+     번호 칸(po_no) = 발주 번호 또는 클레임 번호(화면 칸 "발주·클레임") -->
+<mapper namespace="io.smarthappy.module.srm.notify.NotifyMapper">
+
+    <sql id="cols">
+        o.outbox_id, o.topic, o.biz_key, (o.payload ->> 'poId')::bigint as po_id, (o.payload ->> 'claimId')::bigint as claim_id,
+        coalesce(o.payload ->> 'poNo', o.payload ->> 'claimNo') as po_no,
+        (o.payload ->> 'rev')::int as rev, o.payload ->> 'custNm' as cust_nm, o.payload ->> 'to' as to_addr, o.status, o.attempts,
+        o.last_error, o.created_at, o.sent_at
+    </sql>
+
+    <!-- 목록·grid 공통 조건(c = NoticeCrit) -->
+    <sql id="noticeWhere">
+         where o.topic in ('SRM_PO_ISSUED', 'SRM_PO_CANCELLED', 'SRM_CLAIM_SENT')
+           and o.created_at &gt;= #{c.from} and o.created_at &lt; #{c.to}
+        <if test="c.status != null">and o.status = #{c.status}</if>
+        <if test="c.poId != null">and (o.payload ->> 'poId')::bigint = #{c.poId}</if>
+    </sql>
+
+    <select id="findNotices" resultType="io.smarthappy.module.srm.notify.NotifyDtos$NoticeRow">
+        select <include refid="cols"/> from sys_outbox o
+        <include refid="noticeWhere"/>
+         order by o.created_at desc, o.outbox_id desc
+         limit 2000
+    </select>
+
+    <!-- grid 정렬(o 별칭 필요) — 허용 목록 enum 이름으로만 고른다(문자열 치환 없이), 마지막에 PK. 안쪽·바깥 지연 조인이 같이 쓴다 -->
+    <sql id="noticeOrder">
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'TOPIC'">o.topic</when>
+                <when test="s.key == 'PO_NO'">(coalesce(o.payload ->> 'poNo', o.payload ->> 'claimNo')) is null, coalesce(o.payload ->> 'poNo', o.payload ->> 'claimNo')</when>
+                <when test="s.key == 'SUPPLIER'">(o.payload ->> 'custNm') is null, o.payload ->> 'custNm'</when>
+                <when test="s.key == 'STATUS'">o.status</when>
+                <otherwise>o.created_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         o.outbox_id desc
+    </sql>
+
+    <!-- grid(UI 단계 3 ①, docs/31 5.2) — 지연 조인(QA offset M4, docs/31 5.4): 안쪽은 정렬 키로 쪽 하나의 outbox_id 만 고르고(좁은 정렬),
+         바깥은 그 행만 PK 로 읽어 칸을 뽑은 뒤 같은 키로 다시 정렬한다 -->
+    <select id="findNoticePage" resultType="io.smarthappy.module.srm.notify.NotifyDtos$NoticeRow">
+        select <include refid="cols"/>
+          from (select o.outbox_id from sys_outbox o
+                <include refid="noticeWhere"/>
+                <include refid="noticeOrder"/>
+                 limit #{page.size} offset #{page.offset}) k
+          join sys_outbox o on o.outbox_id = k.outbox_id
+        <include refid="noticeOrder"/>
+    </select>
+
+    <select id="countNotices" resultType="long">
+        select count(*) from sys_outbox o <include refid="noticeWhere"/>
+    </select>
+
+    <select id="findNotice" resultType="io.smarthappy.module.srm.notify.NotifyDtos$NoticeRow">
+        select <include refid="cols"/> from sys_outbox o
+         where o.outbox_id = #{id} and o.topic in ('SRM_PO_ISSUED', 'SRM_PO_CANCELLED', 'SRM_CLAIM_SENT')
+    </select>
+</mapper>

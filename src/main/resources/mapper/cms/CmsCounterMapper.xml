@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 1부 C3 — 사용량 카운터·읽기 (docs/33 4.4). 누적은 언제나 Σ 증가량(무효 제외) -->
+<mapper namespace="io.smarthappy.module.cms.CmsCounterMapper">
+
+    <sql id="counterCols">
+        c.counter_id, c.counter_cd, c.counter_nm, c.target_type, c.equip_id, c.asset_id,
+        coalesce(e.equip_cd, a.asset_cd) as target_cd, coalesce(e.equip_nm, a.asset_nm) as target_nm,
+        coalesce(e.plant_cd, (select e2.plant_cd from mst_asset_install i join mst_equip e2 on e2.equip_id = i.equip_id
+                               where i.asset_id = c.asset_id and i.removed_at is null and i.void_yn = 'N' limit 1)) as plant_cd,
+        c.counter_kind, c.unit_nm, c.scale, c.use_yn, c.remark, c.row_ver, c.updated_at, c.updated_by, a.life_shots,
+        s.total, s.reading_cnt,
+        (select count(*) from cms_pm_plan p where p.counter_id = c.counter_id and p.use_yn = 'Y') as plan_cnt,
+        l.reading_id as last_reading_id, l.read_at as last_read_at,
+        (select r.gauge_value from cms_counter_reading r where r.counter_id = c.counter_id and r.void_yn = 'N' and r.gauge_value is not null
+          order by r.read_at desc, r.reading_id desc limit 1) as last_gauge
+    </sql>
+    <sql id="counterFrom">
+        from cms_counter c
+        left join mst_equip e on e.equip_id = c.equip_id
+        left join mst_phys_asset a on a.asset_id = c.asset_id
+        left join lateral (select r.reading_id, r.read_at from cms_counter_reading r where r.counter_id = c.counter_id and r.void_yn = 'N'
+                            order by r.read_at desc, r.reading_id desc limit 1) l on true
+        left join lateral (select coalesce(sum(r.delta_qty), 0) as total, count(*) as reading_cnt from cms_counter_reading r
+                            where r.counter_id = c.counter_id and r.void_yn = 'N') s on true   -- 합·수를 한 번 훑기로(ix_cms_counter_reading_sum)
+    </sql>
+
+    <!-- 목록·grid 공통 조건 -->
+    <sql id="counterWhere">
+        <where>
+            <if test="useYn != null">c.use_yn = #{useYn}</if>
+            <if test="targetType != null">and c.target_type = #{targetType}</if>
+            <if test="equipId != null">and c.equip_id = #{equipId}</if>
+            <if test="assetId != null">and c.asset_id = #{assetId}</if>
+            <if test="keyword != null">and (c.counter_cd like #{keyword} escape '\' or c.counter_nm ilike #{keyword} escape '\'
+                or e.equip_cd like #{keyword} escape '\' or a.asset_cd like #{keyword} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findCounters" resultType="io.smarthappy.module.cms.CmsCounterDtos$CounterRow">
+        select <include refid="counterCols"/> <include refid="counterFrom"/>
+        <include refid="counterWhere"/>
+         order by c.counter_cd
+         limit #{limit}
+    </select>
+
+    <!-- 안쪽 정렬(허용 목록) — 최근 판독 시각은 그 정렬을 고를 때만 계수기마다 색인 한 건(ix_cms_counter_reading_counter 뒤에서) — 바깥 counterSort 와 같은 순서 -->
+    <sql id="counterSortInner">
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'COUNTER_NM'">c.counter_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TARGET_CD'">coalesce(e.equip_cd, a.asset_cd)<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'COUNTER_KIND'">c.counter_kind<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'LAST_READ_AT'">(select r.read_at from cms_counter_reading r where r.counter_id = c.counter_id and r.void_yn = 'N'
+                                                    order by r.read_at desc, r.reading_id desc limit 1)<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'USE_YN'">c.use_yn<if test="s.desc"> desc</if></when>
+                <otherwise>c.counter_cd<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         c.counter_id
+    </sql>
+
+    <!-- 바깥 정렬(허용 목록 enum 이름으로만) — 마지막 PK -->
+    <sql id="counterSort">
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'COUNTER_NM'">c.counter_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TARGET_CD'">coalesce(e.equip_cd, a.asset_cd)<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'COUNTER_KIND'">c.counter_kind<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'LAST_READ_AT'">l.read_at<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'USE_YN'">c.use_yn<if test="s.desc"> desc</if></when>
+                <otherwise>c.counter_cd<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         c.counter_id
+    </sql>
+
+    <!-- grid(UI 단계 3 ①) — 지연 조인(docs/33 13.13, QA M1): 안쪽 = 조건·정렬·쪽만(최근 판독은 그 정렬일 때만 정렬 식에서), 바깥 = 그 쪽 계수기만
+         판독 합·수·최근 게이지. 대상 조건(equipId·assetId)은 쓰지 않는다 -->
+    <select id="findCounterPage" resultType="io.smarthappy.module.cms.CmsCounterDtos$CounterRow">
+        select <include refid="counterCols"/> <include refid="counterFrom"/>
+         where c.counter_id in (select c.counter_id from cms_counter c
+                                  left join mst_equip e on e.equip_id = c.equip_id
+                                  left join mst_phys_asset a on a.asset_id = c.asset_id
+                                <include refid="counterWhere"/>
+                                 order by <include refid="counterSortInner"/>
+                                 limit #{page.size} offset #{page.offset})
+         order by <include refid="counterSort"/>
+    </select>
+
+    <select id="countCounters" resultType="long">
+        select count(*) from cms_counter c
+        left join mst_equip e on e.equip_id = c.equip_id
+        left join mst_phys_asset a on a.asset_id = c.asset_id
+        <include refid="counterWhere"/>
+    </select>
+
+    <select id="findCounter" resultType="io.smarthappy.module.cms.CmsCounterDtos$CounterRow">
+        select <include refid="counterCols"/> <include refid="counterFrom"/> where c.counter_id = #{id}
+    </select>
+
+    <select id="findCounterByCd" resultType="io.smarthappy.module.cms.CmsCounterDtos$CounterRow">
+        select <include refid="counterCols"/> <include refid="counterFrom"/> where c.counter_cd = #{counterCd}
+    </select>
+
+    <select id="lockCounter" resultType="java.lang.Long">
+        select counter_id from cms_counter where counter_id = #{id} for update
+    </select>
+
+    <select id="insertCounter" resultType="long" flushCache="true">
+        insert into cms_counter (comp_cd, counter_cd, counter_nm, target_type, equip_id, asset_id, counter_kind, unit_nm, scale, use_yn,
+                                 remark, created_by, updated_by)
+        values (hb_current_comp(), #{c.counterCd}, #{c.counterNm}, #{c.targetType}, #{c.equipId}, #{c.assetId}, #{c.counterKind},
+                #{c.unitNm}, #{c.scale}, #{c.useYn}, #{c.remark}, #{by}, #{by})
+        returning counter_id
+    </select>
+
+    <update id="updateCounter">
+        update cms_counter
+           set counter_nm = #{c.counterNm}, unit_nm = #{c.unitNm}, use_yn = #{c.useYn}, remark = #{c.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where counter_id = #{c.counterId} and row_ver = #{c.rowVer}
+    </update>
+
+    <!-- 누적은 유효 행만 더한다(무효 행은 누적 칸 비움). 최신 limit 행 -->
+    <select id="findReadings" resultType="io.smarthappy.module.cms.CmsCounterDtos$ReadingRow">
+        select x.*, c.scale from (
+            select r.reading_id, r.read_at, r.gauge_value, r.delta_qty, r.reset_yn, r.source, r.remark, r.recorded_at, r.recorded_by,
+                   r.void_yn, r.void_reason, r.voided_by, r.voided_at, r.counter_id,
+                   case when r.void_yn = 'N' then sum(case when r.void_yn = 'N' then r.delta_qty else 0 end)
+                        over (order by r.read_at, r.reading_id rows between unbounded preceding and current row) end as cumulative
+              from cms_counter_reading r where r.counter_id = #{counterId}
+        ) x join cms_counter c on c.counter_id = x.counter_id
+         order by x.read_at desc, x.reading_id desc
+         limit #{limit}
+    </select>
+
+    <select id="findReading" resultType="io.smarthappy.module.cms.CmsCounterDtos$ReadingRow">
+        select r.reading_id, r.read_at, r.gauge_value, r.delta_qty, r.reset_yn, r.source, r.remark, r.recorded_at, r.recorded_by,
+               r.void_yn, r.void_reason, r.voided_by, r.voided_at, c.scale
+          from cms_counter_reading r join cms_counter c on c.counter_id = r.counter_id
+         where r.counter_id = #{counterId} and r.reading_id = #{readingId}
+    </select>
+
+    <select id="insertReading" resultType="long" flushCache="true">
+        insert into cms_counter_reading (comp_cd, counter_id, read_at, gauge_value, delta_qty, reset_yn, source, remark, recorded_by)
+        values (hb_current_comp(), #{counterId}, #{readAt}, #{gauge}, #{delta}, #{resetYn}, 'MANUAL', #{remark}, #{by})
+        returning reading_id
+    </select>
+
+    <update id="voidReading">
+        update cms_counter_reading
+           set void_yn = 'Y', void_reason = #{reason}, voided_by = #{by}, voided_at = now()
+         where reading_id = #{readingId} and void_yn = 'N'
+    </update>
+
+    <select id="total" resultType="java.math.BigDecimal">
+        select coalesce(sum(delta_qty), 0) from cms_counter_reading where counter_id = #{counterId} and void_yn = 'N'
+    </select>
+
+    <select id="totalSince" resultType="java.math.BigDecimal">
+        select coalesce(sum(delta_qty), 0) from cms_counter_reading
+         where counter_id = #{counterId} and void_yn = 'N' and read_at &gt;= #{from}
+    </select>
+</mapper>

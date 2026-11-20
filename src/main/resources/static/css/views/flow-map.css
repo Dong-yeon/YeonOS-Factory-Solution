@@ -1,0 +1,117 @@
+/*
+ * 업무 흐름 지도 (home-flow-map, docs/46 12장). 색·크기는 tokens.css 의미 토큰만(DesignTokenGuardTest).
+ * 넓을 때 = 판(.hb-fm-stage)에 상자를 자리(--fm-x·--fm-y, flow-map.js 가 CSSOM 으로)에 놓고 뒤에 SVG 선, 판 전체를
+ *   배율(--fm-scale, 기본 = 화면에 맞춤)로 줄인다. 그 아래 요약 띠(가로 전부, 높이 고정·접기). 두 높이(--fm-map-h·--fm-band-h)는 창 아래까지.
+ * 작업 영역 900 미만 = 세로 목록(단계 제목·"다음: …" 글, 자리·선 없음) + 요약은 아래.
+ * 상자 폭·높이(148·48 — 이름·코드만, 설명은 요약에)는 flow-map.js 의 GRID 와 같게.
+ */
+.hb-fm .hb-fm-body { max-width: none; }
+
+.hb-fm-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-4) var(--hb-space-7); }
+.hb-fm-pick { display: inline-flex; align-items: center; gap: var(--hb-space-4); font-weight: var(--hb-fw-semibold); }
+.hb-fm-pick select { min-width: 18rem; font-weight: var(--hb-fw-regular); }
+.hb-fm-desc { margin: var(--hb-space-4) 0 0; color: var(--hb-text-muted); }
+.hb-fm-hint { margin: var(--hb-space-2) 0 0; font-size: var(--hb-fs-sm); color: var(--hb-text-subtle); }
+
+/* 보일 선 켜고 끄기 */
+.hb-fm-kinds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3) var(--hb-space-6); margin: 0; padding: 0;
+    border: 0; font-size: var(--hb-fs-sm); }
+.hb-fm-kinds legend { float: left; margin-right: var(--hb-space-4); padding: 0; font-weight: var(--hb-fw-semibold); }
+.hb-fm-kinds label { display: inline-flex; align-items: center; gap: var(--hb-space-3); min-height: var(--hb-target-min); cursor: pointer; }
+.hb-fm-key { display: inline-block; width: 24px; height: 0; border-top: 2px solid var(--hb-text-subtle); }
+.hb-fm-key-skip { border-top-color: var(--hb-action); }
+.hb-fm-key-back { border-top-style: dashed; }
+
+/* 그림판(가로 전부) + 아래 요약 띠(가로 전부, 높이 고정). 두 높이(--fm-map-h·--fm-band-h)는 flow-map.js 가 창 아래까지 나눈다 —
+   요약이 상자를 가리지 않고, 상자를 골라도 그림판 크기가 그대로라 다시 배치되지 않는다 */
+.hb-fm-body { display: flex; flex-direction: column; gap: 8px; margin-top: var(--hb-space-4); }
+.hb-fm-zoom { display: inline-flex; align-items: center; gap: var(--hb-space-2); }
+.hb-page .hb-fm-zoom button { min-width: var(--hb-target-min); }
+.hb-page .hb-fm-zoom button#zoomFit { min-width: 5.5rem; }
+
+.hb-fm-scroll { height: var(--fm-map-h, 50vh); overflow: auto; border: 1px solid var(--hb-border-subtle);
+    border-radius: var(--hb-radius-lg); background: var(--hb-bg-subtle); }
+.hb-fm-canvas { position: relative; width: var(--fm-cw, 100%); height: var(--fm-ch, 240px); }
+.hb-fm-stage { position: absolute; top: 0; left: 0; width: var(--fm-w, 100%); height: var(--fm-h, 240px);
+    transform: scale(var(--fm-scale, 1)); transform-origin: 0 0; }
+.hb-fm-lines { position: absolute; top: 0; left: 0; z-index: 0; overflow: visible; pointer-events: none; }
+.hb-fm-col > ul { margin: 0; padding: 0; list-style: none; }
+
+/* 상자 = 버튼, 자리는 --fm-x·--fm-y */
+.hb-fm-node { position: absolute; z-index: 1; left: var(--fm-x, 0); top: var(--fm-y, 0); width: 148px; }
+.hb-fm-node.is-drag { z-index: 2; }
+.hb-page button.hb-fm-box { display: flex; flex-direction: column; align-items: flex-start; gap: 0; width: 100%; height: 48px;
+    min-height: 0; padding: var(--hb-space-2) var(--hb-space-4); position: relative; justify-content: center; overflow: visible; text-align: left; color: var(--hb-text);
+    background: var(--hb-bg-surface); border: 1px solid var(--hb-border); border-left: 4px solid var(--hb-action);
+    border-radius: var(--hb-radius-lg); box-shadow: var(--hb-shadow-1); cursor: grab; touch-action: none; user-select: none; }
+.hb-page button.hb-fm-box:hover { background: var(--hb-action-faint); }
+.hb-fm-node.is-drag button.hb-fm-box { cursor: grabbing; box-shadow: var(--hb-shadow-2); }
+.hb-page button.hb-fm-box[aria-pressed="true"] { background: var(--hb-action-faint); border-color: var(--hb-action); outline: 2px solid var(--hb-action); }
+.hb-fm-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--hb-fw-semibold);
+    font-size: var(--hb-fs-sm); line-height: 1.3; }
+.hb-fm-code { font-family: var(--hb-font-mono); font-size: var(--hb-fs-xs); color: var(--hb-text-subtle); }
+/* 배지는 상자 오른쪽 위 작은 표시(상자가 작아 줄을 차지하지 않게) */
+.hb-fm-tags { position: absolute; top: -8px; right: -4px; display: flex; gap: var(--hb-space-1); pointer-events: none; }
+.hb-fm-tags .hb-status { font-size: var(--hb-fs-xs); background: var(--hb-bg-surface); }
+.hb-fm-tags:empty { display: none; }
+
+/* 권한 없음 = 회색 + 점선 + "권한 없음" 배지(색만으로 알리지 않음) */
+.hb-page button.hb-fm-box.is-off { color: var(--hb-text-subtle); background: var(--hb-bg-muted); border-style: dashed;
+    border-left: 4px solid var(--hb-border); box-shadow: none; }
+.hb-page button.hb-fm-box.is-open { border-left-color: var(--hb-status-success-fg); }
+
+/* 선: 기본 옅게, 고른 상자의 선만 진하게 */
+.hb-fm-line { fill: none; stroke: var(--hb-text-subtle); stroke-width: 1.5; }
+.hb-fm-line.k-skip { stroke: var(--hb-action); }
+.hb-fm-line.k-back { stroke-dasharray: 5 4; }
+.hb-fm-stage.has-sel .hb-fm-line { opacity: 0.25; }
+.hb-fm-stage.has-sel .hb-fm-line.is-hot { opacity: 1; stroke: var(--hb-action); stroke-width: 2.5; }
+.hb-fm-head { fill: var(--hb-text-subtle); }
+.hb-fm-head.is-hot { fill: var(--hb-action); }
+
+.hb-fm-next { margin: var(--hb-space-2) 0 0; font-size: var(--hb-fs-sm); color: var(--hb-text-subtle); }
+/* 넓을 때 단계 제목·"다음: …" 은 스크린리더용(선이 대신 보여 준다) */
+.hb-fm-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0);
+    white-space: nowrap; border: 0; }
+.hb-fm-empty { margin: 0; padding: var(--hb-space-7); color: var(--hb-text-subtle); }
+
+/* 아래 요약 띠 */
+.hb-fm-detail { display: flex; flex-direction: column; height: var(--fm-band-h, 220px); overflow: hidden; background: var(--hb-bg-surface);
+    border: 1px solid var(--hb-border-subtle); border-radius: var(--hb-radius-lg); }
+.hb-fm-detail.is-collapsed { height: auto; }
+.hb-fm-d-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3) var(--hb-space-5); flex: 0 0 auto;
+    padding: var(--hb-space-3) var(--hb-space-5); border-bottom: 1px solid var(--hb-border-subtle); }
+.hb-fm-detail.is-collapsed .hb-fm-d-head { border-bottom: 0; }
+.hb-fm-d-head h2 { margin: 0; font-size: var(--hb-fs-lg); }
+.hb-fm-d-tools { display: inline-flex; gap: var(--hb-space-3); margin-left: auto; }
+.hb-page .hb-fm-d-head button.is-off { cursor: not-allowed; }
+/* 몸 = 칸 여러 개를 가로로(폭이 좁으면 줄바꿈), 넘치면 띠 안에서만 스크롤 */
+.hb-fm-d-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--hb-space-4) var(--hb-space-7);
+    flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--hb-space-4) var(--hb-space-5); }
+.hb-fm-d-body[hidden] { display: none; }
+.hb-fm-d-body > p { margin: 0; }
+.hb-fm-d-sec + .hb-fm-d-sec { margin-top: var(--hb-space-4); }
+.hb-fm-d-sec h3 { margin: 0 0 var(--hb-space-2); font-size: var(--hb-fs-sm); color: var(--hb-text-subtle); }
+.hb-fm-d-sec p { margin: 0; }
+.hb-fm-d-does { margin: 0; padding-left: 18px; }
+.hb-fm-d-links { display: flex; flex-wrap: wrap; gap: var(--hb-space-3); margin: 0; padding: 0; list-style: none; }
+
+/* 좁은 작업 영역 = 세로 목록 */
+@media (max-width: 899px) {
+    .hb-fm-scroll { height: auto; }
+    .hb-fm-detail { height: auto; }
+    .hb-fm-d-body { overflow: visible; }
+    .hb-fm-zoom { display: none; }
+    .hb-fm-canvas { width: auto; height: auto; padding: var(--hb-space-6); }
+    .hb-fm-stage { position: static; width: auto; height: auto; transform: none; }
+    .hb-fm-lines { display: none; }
+    .hb-fm-col + .hb-fm-col { margin-top: var(--hb-space-7); }
+    .hb-fm-col > ul { display: flex; flex-direction: column; gap: var(--hb-space-5); margin-top: var(--hb-space-4); }
+    .hb-fm-node { position: static; width: auto; }
+    .hb-page button.hb-fm-box { height: auto; min-height: var(--hb-target-min); cursor: pointer; touch-action: auto; }
+    .hb-fm-col > h3.hb-fm-sr, .hb-fm-next.hb-fm-sr { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto;
+        white-space: normal; }
+    .hb-fm-col > h3.hb-fm-sr { font-size: var(--hb-fs-sm); color: var(--hb-text-subtle); }
+    .hb-fm-next.hb-fm-sr { margin-top: var(--hb-space-2); }
+    .hb-fm-pick select { min-width: 0; }
+}

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  내 공수 (pms-worklog) — PMS 4단계 (docs/32 PM4, D9).
+  주(월~일) 띠에서 날짜를 고르고 그 날 행을 고친다. [미리 채우기] = 내가 담당인 진행 중 작업을 어제 시간대로 채움 → 고쳐서 [확정].
+  확정한 날은 [다시 열기](사유)로만 고친다. 늘 본인 공수만 — PM 은 프로젝트 요약만 본다.
+-->
+<body data-table-menu="" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/pms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">내 공수</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<div class="hb-toolbar">
+    <button type="button" id="prevBtn" class="hb-btn-secondary" th:text="#{pms.prevWeek}">◀ 이전 주</button>
+    <strong id="weekLabel"></strong>
+    <button type="button" id="nextBtn" class="hb-btn-secondary" th:text="#{pms.nextWeek}">다음 주 ▶</button>
+    <button type="button" id="thisBtn" class="hb-btn-ghost" th:text="#{pms.thisWeek}">이번 주</button>
+    <span id="maxInfo" class="hb-muted"></span>
+</div>
+<ul class="pms-week" id="week" data-help-key="pms-worklog.week"></ul>
+
+<section class="pms-day" id="dayBox" hidden>
+    <div class="pms-head">
+        <h2 id="dayTitle"></h2>
+        <span id="dayState"></span>
+        <span id="dayTotal" class="hb-muted"></span>
+    </div>
+    <div class="hb-toolbar" id="dayTools">
+        <button type="button" id="prefillBtn" class="hb-btn-secondary" th:text="#{pms.prefill}" data-help-key="pms-worklog.prefill">미리 채우기</button>
+        <button type="button" id="addRowBtn" class="hb-btn-secondary" th:text="#{pms.addRow}">행 추가</button>
+        <button type="button" id="saveDayBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+        <button type="button" id="confirmBtn" class="hb-btn-secondary" th:text="#{pms.confirmDay}" data-help-key="pms-worklog.confirm">확정</button>
+    </div>
+    <div class="hb-toolbar" id="reopenTools" hidden>
+        <input id="reopenReason" maxlength="500" th:placeholder="#{pms.reopenReason}" th:aria-label="#{pms.reopenReason}">
+        <button type="button" id="reopenBtn" class="hb-btn-secondary" th:text="#{pms.reopen}">다시 열기</button>
+    </div>
+    <div class="pms-scroll-x">
+        <table class="hb-cmp-table" id="logs">
+            <thead><tr>
+                <th th:text="#{pms.col.project}">프로젝트</th>
+                <th th:text="#{pms.col.taskNm}">작업</th>
+                <th th:text="#{pms.col.category}">분류</th>
+                <th th:text="#{pms.col.hours}">시간</th>
+                <th th:text="#{pms.col.note}">메모</th>
+                <th></th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    <p id="dayNote" class="hb-muted"></p>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/pms/pms-ui.js}"></script>
+<script th:src="@{/js/views/pms/worklog.js}"></script>
+</body>
+</html>

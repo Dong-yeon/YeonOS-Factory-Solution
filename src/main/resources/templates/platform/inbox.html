@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  내 알림 (sys-inbox) — 시스템관리 2b (docs/36 11.4). 개인 화면(self_service — 로그인한 모든 사용자, 내 것만).
+  사용성 체크(docs/11 4.3): 주 사용자 = 모든 사용자(WEB). 셸 종 버튼으로 하루 몇 번.
+  알림 = 결재 차례·결재 결과·하루 요약(누르면 읽음 + 링크 화면 탭), 공지 = 게시 중 공지·자료(열면 읽음), 설정 = 이벤트별 받기.
+  공지 본문은 글자만(textContent).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/notify.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">내 알림</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<fieldset class="hb-seg hb-inbox-tabs" id="tabs">
+    <legend th:text="#{sysInbox.view}">보기</legend>
+    <label><input type="radio" name="tab" value="notify" checked><span th:text="#{sysInbox.tab.notify}">알림</span><span id="notifyCnt" class="hb-inbox-badge" hidden></span></label>
+    <label><input type="radio" name="tab" value="notice"><span th:text="#{sysInbox.tab.notice}">공지</span><span id="noticeCnt" class="hb-inbox-badge" hidden></span></label>
+    <label><input type="radio" name="tab" value="sub"><span th:text="#{sysInbox.tab.sub}">알림 설정</span></label>
+</fieldset>
+
+<section id="notifyView" class="hb-inbox-view">
+    <div class="hb-toolbar">
+        <label class="hb-switch"><input type="checkbox" role="switch" id="unreadOnly"><span th:text="#{sysInbox.unreadOnly}">안 읽은 것만</span></label>
+        <button type="button" id="readAllBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{sysInbox.readAll}">모두 읽음</button>
+    </div>
+    <ul id="notifyList" class="hb-inbox-list"></ul>
+    <button type="button" id="moreBtn" class="hb-btn-secondary" hidden th:text="#{sysInbox.more}">더 보기</button>
+</section>
+
+<section id="noticeView" class="hb-inbox-view" hidden>
+    <div class="hb-split">
+        <section class="hb-split-main">
+            <div class="hb-toolbar">
+                <label><span th:text="#{sysNotice.col.catCd}">분류</span>
+                    <select id="noticeCat" data-hb="select" data-code="NOTICE_CAT" data-blank="all"></select></label>
+            </div>
+            <ul id="noticeList" class="hb-inbox-list"></ul>
+        </section>
+        <aside class="hb-split-side" id="detail">
+            <div class="hb-toolbar">
+                <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            </div>
+            <p id="noticeEmpty" class="hb-muted" th:text="#{sysInbox.pickNotice}">왼쪽에서 공지를 고르세요.</p>
+            <article id="noticeDoc" hidden>
+                <h2 id="noticeTitle" class="hb-notice-title"></h2>
+                <p id="noticeMeta" class="hb-muted"></p>
+                <div id="noticeBody" class="hb-notice-body"></div>
+                <section class="hb-sub" id="noticeFileBox" hidden>
+                    <h2 th:text="#{sysNotice.files}">첨부</h2>
+                    <ul id="noticeFiles" class="hb-files"></ul>
+                </section>
+            </article>
+        </aside>
+    </div>
+</section>
+
+<section id="subView" class="hb-inbox-view" hidden>
+    <p class="hb-muted" th:text="#{sysInbox.subNote}">끈 알림은 알림함에 오지 않습니다. 볼 권한이 없는 화면의 알림은 켜도 오지 않습니다.</p>
+    <div id="subList" class="hb-inbox-subs"></div>
+    <div class="hb-toolbar">
+        <button type="button" id="saveSubBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+    </div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/platform/inbox.js}"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  홈 카드 기본 세트 (home-card-mgt) — 홈화면 3단계 (docs/37 15장). 권한그룹별 홈 카드 순서·숨김(역할별 기본).
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자(WEB). 도입 때 역할마다 한 번, 카드가 늘면 가끔.
+  직접 치는 값 없음 — 보이기 체크와 위·아래 이동만. 세트는 권한을 주지 않는다(카드가 보이는지는 화면 조회 권한).
+  사용자가 자기 홈에서 카드 설정을 저장했으면 그 사용자에게는 개인 설정이 우선한다(개인 설정 "기본값으로" = 이 세트).
+-->
+<body class="hb-page hb-page-app hb-home-mgt" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/home.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">홈 카드 기본 세트</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <p class="hb-muted" th:text="#{homeCardMgt.guide}">권한그룹을 고르면 그 그룹 사용자의 기본 홈 카드 순서·숨김을 정합니다.</p>
+        <h2 id="groupsTitle" class="hb-home-mgt-title" th:text="#{homeCardMgt.groups}">권한그룹</h2>
+        <ul id="groups" class="hb-home-grp-list" aria-labelledby="groupsTitle"></ul>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <!-- 세트 지우기 = 되돌릴 수 없는 동작: 위험 외곽선 + 저장과 떨어진 자리(docs/40 7장 P1 ④) -->
+            <button type="button" id="resetBtn" class="hb-btn-danger-outline hb-home-danger" th:if="${actions.contains('SAVE')}" th:text="#{homeCardMgt.reset}">세트 지우기</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <h2 id="detailTitle" class="hb-home-mgt-title" th:text="#{homeCardMgt.selectGroup}">왼쪽에서 권한그룹을 고르세요.</h2>
+        <p id="setState" class="hb-muted"></p>
+        <ul id="cardList" class="hb-home-set-list" aria-labelledby="detailTitle" data-help-key="home-card-mgt.cards"></ul>
+        <p class="hb-muted" th:text="#{homeCardMgt.note}">세트는 권한을 주지 않습니다 — 화면 조회 권한이 없는 카드는 넣어 두어도 보이지 않습니다.</p>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/home/home-card-mgt.js}"></script>
+</body>
+</html>

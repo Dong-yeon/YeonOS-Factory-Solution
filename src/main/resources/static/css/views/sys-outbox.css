@@ -1,0 +1,12 @@
+/*
+ * 연계 현황(sys-outbox, docs/36 19장) 전용 — 공통 page.css 를 고치지 않는다(docs/29 6장).
+ * 요청 내용·오류는 줄바꿈을 살린 글자(서버 값은 textContent 로만), 긴 줄은 접는다
+ */
+.hb-ob-pre { margin: 0 0 var(--hb-space-4); padding: var(--hb-space-3); max-height: 320px; overflow: auto;
+    background: var(--hb-bg-subtle); border: 1px solid var(--hb-border); border-radius: var(--hb-radius-sm);
+    white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--hb-font-mono, monospace); font-size: var(--hb-fs-sm); }
+.hb-ob-close { margin-top: var(--hb-space-5); padding-top: var(--hb-space-4); border-top: 1px solid var(--hb-border); }
+.hb-ob-close textarea { width: 100%; }
+.hb-ob-lines { display: flex; flex-wrap: wrap; gap: var(--hb-space-3); align-items: end; margin: var(--hb-space-3) 0; }
+/* display 를 준 요소는 hidden 속성이 지지 않는다 — 결재 정책이 꺼진 회사에 결재선 칸이 보이지 않게 */
+.hb-ob-lines[hidden], .hb-ob-close[hidden] { display: none; }

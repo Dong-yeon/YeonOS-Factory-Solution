@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  정위치 점검 (docs/55). 회사 범위는 RLS. 잠금 순서 = 점검 머리(FOR UPDATE) → 재고 읽기(잠그지 않음), 보정 = 점검 줄(FOR UPDATE) → 재고 칸
+  (InventoryService). 판정은 위치만 — 수량 > 0 인 칸이 어디냐.
+-->
+<mapper namespace="io.smarthappy.module.wms.loccheck.LocCheckMapper">
+
+    <!-- 이 공장의 재고를 둘 수 있는 창고·로케이션인가(머리 트리거와 같은 조건) -->
+    <select id="isStockNode" resultType="boolean">
+        select exists (select 1 from mst_equip_hier h left join wms_loc_attr a on a.node_id = h.node_id
+                        where h.node_id = #{nodeId} and h.plant_cd = #{plantCd} and h.use_yn = 'Y'
+                          and h.node_type in ('WH', 'LOC') and coalesce(a.stock_yn, 'Y') = 'Y')
+    </select>
+
+    <!-- 칸 × 날짜 머리 — 없으면 만들고(경합은 무시), 있으면 그대로 -->
+    <insert id="insertHead">
+        insert into wms_loc_check (comp_cd, plant_cd, node_id, check_date, worker_id, created_by, updated_by)
+        values (hb_current_comp(), #{plantCd}, #{nodeId}, #{checkDate}, #{workerId}, #{by}, #{by})
+        on conflict (comp_cd, node_id, check_date) do nothing
+    </insert>
+
+    <sql id="headCols">
+        c.check_id, c.plant_cd, c.node_id, n.node_cd, wms_node_path(c.node_id) as path, c.check_date, c.status, c.worker_id,
+        c.ok_cnt, c.misplaced_cnt, c.missing_cnt, c.unknown_cnt, c.accurate_yn, c.done_at, c.done_by, c.created_at, c.created_by,
+        (select count(*) from wms_loc_check_line l where l.check_id = c.check_id) as line_cnt,
+        (select count(*) from wms_loc_check_line l where l.check_id = c.check_id and l.result &lt;&gt; 'OK' and l.review_action is null) as open_cnt
+    </sql>
+
+    <select id="lockHeadByDay" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$Head">
+        select <include refid="headCols"/>
+          from wms_loc_check c join mst_equip_hier n on n.node_id = c.node_id
+         where c.node_id = #{nodeId} and c.check_date = #{checkDate}
+           for update of c
+    </select>
+
+    <select id="lockHead" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$Head">
+        select <include refid="headCols"/>
+          from wms_loc_check c join mst_equip_hier n on n.node_id = c.node_id
+         where c.check_id = #{id}
+           for update of c
+    </select>
+
+    <select id="findHead" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$Head">
+        select <include refid="headCols"/>
+          from wms_loc_check c join mst_equip_hier n on n.node_id = c.node_id
+         where c.check_id = #{id}
+    </select>
+
+    <sql id="lineCols">
+        l.line_id, l.check_id, l.scan_code, l.scan_type, l.item_id, i.item_cd, i.item_nm, i.unit_cd, l.lot_id, m.lot_no, l.result, l.reason_cd,
+        <!-- 판정 때 장부 스냅숏에 칸의 지금 용도(usage)를 붙여 읽는다 — 출하 대기 칸이면 화면이 [보정 이동]을 숨김. 저장된 스냅숏은 그대로 -->
+        (select coalesce(jsonb_agg(b.e || jsonb_build_object('usage', a.loc_usage) order by b.ord), '[]'::jsonb)::text
+           from jsonb_array_elements(l.book) with ordinality b(e, ord)
+           left join wms_loc_attr a on a.node_id = (b.e->>'nodeId')::bigint) as book_json,
+        l.scanned_at, l.worker_id, l.client_req_id, l.recorded_at, l.recorded_by,
+        l.review_action, l.review_reason, l.reviewed_at, l.reviewed_by, l.move_grp_id
+    </sql>
+
+    <select id="findLines" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$Line">
+        select <include refid="lineCols"/>
+          from wms_loc_check_line l
+          left join mst_item i on i.item_id = l.item_id
+          left join lot_master m on m.lot_id = l.lot_id
+         where l.check_id = #{checkId}
+         order by l.line_id
+    </select>
+
+    <select id="findLine" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$Line">
+        select <include refid="lineCols"/>
+          from wms_loc_check_line l
+          left join mst_item i on i.item_id = l.item_id
+          left join lot_master m on m.lot_id = l.lot_id
+         where l.line_id = #{lineId}
+    </select>
+
+    <select id="lockLine" resultType="long">
+        select line_id from wms_loc_check_line where line_id = #{lineId} for update
+    </select>
+
+    <select id="lineByReq" resultType="long">
+        select line_id from wms_loc_check_line where client_req_id = #{req}
+    </select>
+
+    <!-- 같은 점검에서 같은 LOT(비관리 품목은 같은 품목) 스캔 줄 -->
+    <select id="sameScan" resultType="long">
+        select line_id from wms_loc_check_line
+         where check_id = #{checkId} and result &lt;&gt; 'MISSING' and item_id = #{itemId} and lot_id is not distinct from #{lotId}::bigint
+         order by line_id limit 1
+    </select>
+
+    <select id="itemLotCtrl" resultType="string">
+        select lot_ctrl_yn from mst_item where item_id = #{itemId}
+    </select>
+
+    <!-- 장부: 그 LOT(또는 LOT 없는 품목)의 공장 안 수량 &gt; 0 칸 — 상태별, 최대 50 -->
+    <select id="bookOf" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$Book">
+        select s.node_id, wms_node_path(s.node_id) as path, s.stock_status as status, s.qty
+          from inv_stock s
+         where s.plant_cd = #{plantCd} and s.item_id = #{itemId} and s.lot_id is not distinct from #{lotId}::bigint and s.qty &gt; 0
+         order by s.qty desc, s.node_id, s.stock_status
+         limit 50
+    </select>
+
+    <!-- 완료: 그 칸 장부(수량 &gt; 0, 상태 무관)에 있는데 이 점검에서 스캔되지 않은 품목 × LOT — 칸 스냅숏 -->
+    <select id="missingOf" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$Missing">
+        select s.item_id, s.lot_id,
+               jsonb_agg(jsonb_build_object('nodeId', s.node_id, 'path', wms_node_path(s.node_id), 'status', s.stock_status,
+                                             'qty', trim_scale(s.qty)::text) order by s.stock_status)::text as book_json
+          from inv_stock s
+         where s.node_id = #{nodeId} and s.qty &gt; 0
+           and not exists (select 1 from wms_loc_check_line l
+                            where l.check_id = #{checkId} and l.result &lt;&gt; 'MISSING'
+                              and l.item_id = s.item_id and l.lot_id is not distinct from s.lot_id)
+         group by s.item_id, s.lot_id
+         order by s.item_id, s.lot_id nulls first
+    </select>
+
+    <insert id="insertLine" useGeneratedKeys="true" keyProperty="r.lineId" keyColumn="line_id">
+        insert into wms_loc_check_line (comp_cd, check_id, scan_code, scan_type, item_id, lot_id, result, reason_cd, book, scanned_at,
+                                        worker_id, client_req_id, recorded_by)
+        values (hb_current_comp(), #{r.checkId}, #{r.scanCode}, #{r.scanType}, #{r.itemId}, #{r.lotId}, #{r.result}, #{r.reasonCd},
+                #{r.bookJson}::jsonb, #{r.scannedAt}, #{r.workerId}, #{r.clientReqId}, #{r.by})
+    </insert>
+
+    <update id="done">
+        update wms_loc_check c
+           set status = 'DONE', done_at = now(), done_by = #{by}, updated_at = now(), updated_by = #{by}, row_ver = c.row_ver + 1,
+               ok_cnt = x.ok, misplaced_cnt = x.mis, missing_cnt = x.miss, unknown_cnt = x.unk,
+               accurate_yn = case when x.mis + x.miss + x.unk = 0 then 'Y' else 'N' end
+          from (select count(*) filter (where result = 'OK') as ok, count(*) filter (where result = 'MISPLACED') as mis,
+                       count(*) filter (where result = 'MISSING') as miss, count(*) filter (where result = 'UNKNOWN') as unk
+                  from wms_loc_check_line where check_id = #{id}) x
+         where c.check_id = #{id} and c.status = 'OPEN'
+    </update>
+
+    <update id="review">
+        update wms_loc_check_line
+           set review_action = #{action}, review_reason = #{reason}, reviewed_at = now(), reviewed_by = #{by}, move_grp_id = #{grp}::uuid
+         where line_id = #{lineId} and review_action is null
+    </update>
+
+    <!-- 사무 목록 — 공장 필수, 점검 날짜 범위, 상태, "처리 안 된 불일치가 있는 것만" -->
+    <sql id="gridWhere">
+          from wms_loc_check c join mst_equip_hier n on n.node_id = c.node_id
+         where c.plant_cd = #{plantCd} and c.check_date between #{from} and #{to}
+           <if test="status != null">and c.status = #{status}</if>
+           <if test="openOnly">and exists (select 1 from wms_loc_check_line l
+                                          where l.check_id = c.check_id and l.result &lt;&gt; 'OK' and l.review_action is null)</if>
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$Head">
+        select * from (select <include refid="headCols"/> <include refid="gridWhere"/>) x
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'PATH'">x.path</when>
+                <when test="o.key == 'STATUS'">x.status</when>
+                <when test="o.key == 'OPEN_CNT'">x.open_cnt</when>
+                <otherwise>x.check_date</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        x.check_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="count" resultType="long">select count(*) <include refid="gridWhere"/></select>
+
+    <!-- 홈 카드 — 기간 안 DONE 점검 수·일치 수, 처리 안 된 불일치 줄 수(기간 무관), 오래된 순 -->
+    <select id="cardSummary" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$CardSummary">
+        select (select count(*) from wms_loc_check c where c.status = 'DONE' and c.check_date between #{from} and #{to}
+                   <if test="plantCd != null">and c.plant_cd = #{plantCd}</if>) as done_cnt,
+               (select count(*) from wms_loc_check c where c.status = 'DONE' and c.accurate_yn = 'Y' and c.check_date between #{from} and #{to}
+                   <if test="plantCd != null">and c.plant_cd = #{plantCd}</if>) as accurate_cnt,
+               (select count(*) from wms_loc_check_line l join wms_loc_check c on c.check_id = l.check_id
+                 where l.result &lt;&gt; 'OK' and l.review_action is null <if test="plantCd != null">and c.plant_cd = #{plantCd}</if>) as open_cnt
+    </select>
+
+    <select id="cardOpen" resultType="io.smarthappy.module.wms.loccheck.LocCheckDtos$CardRow">
+        select c.check_id, c.plant_cd, c.check_date, wms_node_path(c.node_id) as path, l.result, i.item_cd, m.lot_no
+          from wms_loc_check_line l
+          join wms_loc_check c on c.check_id = l.check_id
+          left join mst_item i on i.item_id = l.item_id
+          left join lot_master m on m.lot_id = l.lot_id
+         where l.result &lt;&gt; 'OK' and l.review_action is null <if test="plantCd != null">and c.plant_cd = #{plantCd}</if>
+         order by c.check_date, l.line_id
+         limit #{limit}
+    </select>
+
+    <!-- 칸 용도(속성 없으면 STORAGE) — 보정 이동 출발·도착 STAGING 막기 -->
+    <select id="nodeUsage" resultType="string">
+        select coalesce(a.loc_usage, 'STORAGE') from mst_equip_hier n left join wms_loc_attr a on a.node_id = n.node_id
+         where n.node_id = #{nodeId} and n.plant_cd = #{plantCd}
+    </select>
+</mapper>

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<!--
+  껍데기 안의 화면 두 개뿐 (docs/50 S2): ① 첫 실행 서버 주소 입력 ② 업데이트 필요 / 연결 안 됨.
+  그 밖의 화면은 전부 서버 웹(/pop)이다. 인라인 스크립트·스타일 없음(서버 CSP 규칙과 같게).
+-->
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self'">
+    <title>YeonOS 현장</title>
+    <link rel="stylesheet" href="shell.css">
+</head>
+<body>
+<main>
+    <h1>YeonOS 현장</h1>
+    <p id="msg" role="status">시작하는 중…</p>
+
+    <form id="setup" hidden autocomplete="off">
+        <label for="url">서버 주소</label>
+        <input id="url" type="url" inputmode="url" placeholder="https://mes.example.com" required spellcheck="false">
+        <p class="note">https 로 시작하는 주소만 됩니다. 저장한 뒤에는 앱을 다시 설치해야 바꿀 수 있습니다.</p>
+        <button type="submit">확인</button>
+    </form>
+
+    <section id="update" hidden>
+        <p>이 앱은 더 이상 쓸 수 없는 버전입니다.</p>
+        <p>현재 <b id="cur"></b> · 필요 <b id="min"></b></p>
+        <p>관리자에게 새 앱 설치를 요청하세요(시스템 → 현장 단말 앱).</p>
+    </section>
+
+    <section id="offline" hidden>
+        <p>서버에 연결할 수 없습니다. 네트워크를 확인하세요.</p>
+        <button type="button" id="retry">다시 연결</button>
+    </section>
+</main>
+<script src="shell.js"></script>
+</body>
+</html>

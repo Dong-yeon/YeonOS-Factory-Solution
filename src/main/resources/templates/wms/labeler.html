@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  오토라벨러 (wms-labeler) — 장비 연동 E3 (docs/65 21장). 보기 2개: 박스(사전 등록·진행·원장) / 라벨러(마스터).
+  사용성 체크(docs/11 4.3): 주 사용자 = 물류·전산 담당(WEB). 박스는 출하 준비 때 등록(엑셀·연계는 후속), 라벨러는 설치 때 한 번.
+  직접 치는 값 = 박스 코드(앞단 스캐너가 읽는 값)·품번·수량·LOT·참조, 라벨러 코드·응답 기한. 판정(SSCC·리젝트·검증)은 서버와 장비가.
+  예외 = 미등록 박스(라벨러가 리젝트), 진행 중 박스 수정(409), 다른 회사 장치·템플릿(칸 오류).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/wms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">오토라벨러</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <fieldset class="hb-seg">
+        <legend th:text="#{wmsLabeler.view}">보기</legend>
+        <label><input type="radio" name="tab" value="BOX" checked><span th:text="#{wmsLabeler.tabBox}">박스</span></label>
+        <label><input type="radio" name="tab" value="LBL"><span th:text="#{wmsLabeler.tabLabeler}">라벨러</span></label>
+    </fieldset>
+    <div id="period" data-hb="dateRange" th:data-label="#{wmsLabeler.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,yesterday,last7,thisMonth" data-default="last7" data-max="today" data-max-days="92"></div>
+    <label><span th:text="#{wmsLabeler.plant}">공장</span><select name="plantCd" id="plantSel"></select></label>
+    <label><span th:text="#{wmsLabeler.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="WMS_LABELER_BOX_STATUS" data-blank="all"></select></label>
+    <label><span th:text="#{wmsLabeler.find}">박스·SSCC·참조</span><input name="boxCd" maxlength="60"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="boxWrap" class="wms-grid-wrap"><div id="boxGrid" class="hb-grid-host"></div></div>
+        <div id="lblWrap" class="hb-replace-host" hidden>
+            <table class="hb-cmp-table">
+                <thead><tr>
+                    <th th:text="#{wmsLabeler.plant}">공장</th>
+                    <th th:text="#{wmsLabeler.labelerCd}">코드</th>
+                    <th th:text="#{wmsLabeler.labelerNm}">이름</th>
+                    <th th:text="#{wmsLabeler.connMode}">연결</th>
+                    <th th:text="#{wmsLabeler.device}">장치</th>
+                    <th th:text="#{wmsLabeler.tpl}">템플릿</th>
+                    <th class="hb-num" th:text="#{wmsLabeler.deadlineMs}">응답 기한(ms)</th>
+                    <th th:text="#{wmsLabeler.useYn}">사용</th>
+                </tr></thead>
+                <tbody id="lblRows"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <!-- 박스 -->
+        <div id="boxPane">
+            <div class="hb-toolbar">
+                <button type="button" id="boxSaveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+                <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            </div>
+            <p id="boxMode" class="hb-muted"></p>
+            <dl id="boxInfo" class="hb-form"></dl>
+            <form id="boxForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{wmsLabeler.plant}">공장</span><select data-field="plantCd"></select></label>
+                <label><span th:text="#{wmsLabeler.col.boxCd}">박스 코드</span>
+                    <input data-field="boxCd" maxlength="60" required data-help-key="wms-labeler.boxCd"></label>
+                <label><span th:text="#{wmsLabeler.col.itemCd}">품번</span><input data-field="itemCd" maxlength="40" required></label>
+                <label><span th:text="#{wmsLabeler.col.qty}">수량</span>
+                    <input data-field="qty" data-hb="number" data-scale="6" data-min="0" data-pad="false"></label>
+                <label><span th:text="#{wmsLabeler.lotNo}">LOT</span><input data-field="lotNo" maxlength="60"></label>
+                <label><span th:text="#{wmsLabeler.col.refNo}">참조</span><input data-field="refNo" maxlength="60"></label>
+                <label><span th:text="#{wmsLabeler.col.labelSkipYn}">라벨 생략</span>
+                    <select data-field="labelSkipYn" data-help-key="wms-labeler.labelSkipYn">
+                        <option value="N" th:text="#{wmsLabel.no}">아니오</option>
+                        <option value="Y" th:text="#{wmsLabel.yes}">예</option>
+                    </select></label>
+            </form>
+            <details id="eventBox">
+                <summary th:text="#{wmsLabeler.events}">박스 원장</summary>
+                <div class="hb-replace-host">
+                    <table class="hb-cmp-table">
+                        <thead><tr>
+                            <th th:text="#{wmsJob.ev.at}">시각</th>
+                            <th th:text="#{wmsJob.ev.event}">사건</th>
+                            <th th:text="#{wmsLabeler.ev.answer}">답·사유</th>
+                            <th th:text="#{wmsLabeler.ev.scan}">스캔</th>
+                            <th class="hb-num" th:text="#{wmsLabeler.ev.ms}">ms</th>
+                        </tr></thead>
+                        <tbody id="eventRows"></tbody>
+                    </table>
+                </div>
+            </details>
+        </div>
+
+        <!-- 라벨러 -->
+        <div id="lblPane" hidden>
+            <div class="hb-toolbar">
+                <button type="button" id="lblSaveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+                <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            </div>
+            <p id="lblMode" class="hb-muted"></p>
+            <form id="lblForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{wmsLabeler.plant}">공장</span><select data-field="plantCd"></select></label>
+                <label><span th:text="#{wmsLabeler.labelerCd}">코드</span><input data-field="labelerCd" maxlength="20" required></label>
+                <label class="hb-wide"><span th:text="#{wmsLabeler.labelerNm}">이름</span><input data-field="labelerNm" maxlength="100" required></label>
+                <label><span th:text="#{wmsLabeler.device}">장치</span>
+                    <select data-field="terminalId" data-help-key="wms-labeler.terminalId"></select></label>
+                <label><span th:text="#{wmsLabeler.connMode}">연결</span>
+                    <select data-field="connMode" data-help-key="wms-labeler.connMode">
+                        <option value="DIRECT" th:text="#{code.EQUIP_CONN_MODE.DIRECT}">직접(설치형)</option>
+                        <option value="EDGE" th:text="#{code.EQUIP_CONN_MODE.EDGE}">엣지(SaaS)</option>
+                    </select></label>
+                <label><span th:text="#{wmsLabeler.tpl}">템플릿</span><select data-field="tplId"></select></label>
+                <label><span th:text="#{wmsLabeler.deadlineMs}">응답 기한(ms)</span>
+                    <input data-field="deadlineMs" inputmode="numeric" maxlength="5" data-help-key="wms-labeler.deadlineMs"></label>
+                <label><span th:text="#{wmsLabeler.useYn}">사용</span>
+                    <select data-field="useYn">
+                        <option value="Y" th:text="#{yn.Y}">사용</option>
+                        <option value="N" th:text="#{yn.N}">미사용</option>
+                    </select></label>
+                <label class="hb-wide"><span th:text="#{wmsLabel.remark}">비고</span>
+                    <textarea data-field="remark" maxlength="500" rows="2"></textarea></label>
+            </form>
+            <details id="devBox">
+                <summary th:text="#{wmsLabeler.devLog}">장비 원장</summary>
+                <div class="hb-replace-host">
+                    <table class="hb-cmp-table">
+                        <thead><tr>
+                            <th th:text="#{wmsJob.ev.at}">시각</th>
+                            <th th:text="#{wmsJob.ev.event}">사건</th>
+                            <th th:text="#{wmsLabeler.ev.code}">코드</th>
+                            <th th:text="#{wmsLabeler.ev.reply}">지시</th>
+                        </tr></thead>
+                        <tbody id="devRows"></tbody>
+                    </table>
+                </div>
+            </details>
+        </div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/views/wms/labeler.js}"></script>
+</body>
+</html>

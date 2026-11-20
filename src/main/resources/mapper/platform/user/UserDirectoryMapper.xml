@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  공통 사용자 고르기 (docs/42 15장). 모든 문장 = 회사 사용자(user_type = 'INTERNAL')만. 회사는 RLS 가 거른다.
+  active = use_yn = 'Y' and not 관리자 잠금(lock_yn = 'Y' and locked_until is null) — 결재선·위임(ApprovalService)과 같은 규칙.
+-->
+<mapper namespace="io.smarthappy.platform.user.UserDirectoryMapper">
+
+    <sql id="active">u.use_yn = 'Y' and not (u.lock_yn = 'Y' and u.locked_until is null)</sql>
+
+    <select id="activeUsers" resultType="io.smarthappy.platform.user.UserOption">
+        select u.user_id, u.login_id, u.user_nm
+          from sys_user u
+         where u.user_type = 'INTERNAL' and <include refid="active"/>
+         order by u.user_nm, u.login_id
+         limit 2000
+    </select>
+
+    <select id="byLogin" resultType="io.smarthappy.platform.user.UserRef">
+        select u.user_id, u.login_id, u.user_nm, (<include refid="active"/>) as active
+          from sys_user u
+         where u.user_type = 'INTERNAL' and lower(u.login_id) = lower(#{loginId})
+    </select>
+
+    <select id="byId" resultType="io.smarthappy.platform.user.UserRef">
+        select u.user_id, u.login_id, u.user_nm, (<include refid="active"/>) as active
+          from sys_user u
+         where u.user_type = 'INTERNAL' and u.user_id = #{userId}
+    </select>
+
+    <!--
+      결재선 기본값 = 그 사람 부서의 장 (docs/36 9.7 D-1). 소속 부서부터 위로 올라가며 처음 만나는 "쓸 수 있는 장":
+      사용 중 부서의 장 + 장이 사용 중 회사 사용자 + 본인이 아님(본인이 장이면 상위 부서의 장 — 자기 결재 방지).
+      트리는 트리거가 순환·10단을 막지만 조회도 지나온 경로·깊이 10 으로 멈춘다(방어). 소속 없음·끝까지 없음 = 0행
+    -->
+    <select id="deptHeadOf" resultType="io.smarthappy.platform.user.UserOption">
+        with recursive up (dept_id, parent_id, head_user_id, use_yn, depth, path) as (
+            select d.dept_id, d.parent_id, d.head_user_id, d.use_yn, 1, array[d.dept_id]
+              from sys_user me
+              join sys_dept d on d.dept_id = me.dept_id
+             where me.user_id = #{userId} and me.user_type = 'INTERNAL'
+            union all
+            select p.dept_id, p.parent_id, p.head_user_id, p.use_yn, up.depth + 1, up.path || p.dept_id
+              from up
+              join sys_dept p on p.dept_id = up.parent_id
+             where up.depth &lt; 10 and not p.dept_id = any (up.path)
+        )
+        select u.user_id, u.login_id, u.user_nm
+          from up
+          join sys_user u on u.user_id = up.head_user_id
+         where up.use_yn = 'Y' and u.user_id &lt;&gt; #{userId}
+           and u.user_type = 'INTERNAL' and <include refid="active"/>
+         order by up.depth
+         limit 1
+    </select>
+
+    <select id="groupActionHolders" resultType="io.smarthappy.platform.user.UserOption">
+        select distinct u.user_id, u.login_id, u.user_nm
+          from sys_user u
+          join sys_user_auth ua on ua.user_id = u.user_id
+          join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd and g.use_yn = 'Y'
+          join sys_auth_prog ap on ap.comp_cd = ua.comp_cd and ap.auth_grp_cd = ua.auth_grp_cd
+         where u.user_type = 'INTERNAL' and <include refid="active"/>
+           and ap.prog_cd = #{progCd} and ap.action_cd = #{actionCd}
+         order by u.login_id
+    </select>
+</mapper>

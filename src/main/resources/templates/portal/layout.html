@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<!--
+  협력사 포털 공통 조각 (docs/42 7장 2). 포털 화면 템플릿은
+    <head th:replace="~{portal/layout :: head(#{portal.menu.home})}"></head>
+    <body class="pt-page"> <header th:replace="~{portal/layout :: header}"></header>
+      <div class="pt-body"> <nav th:replace="~{portal/layout :: nav}"></nav> <main class="pt-main"> … </main> </div>
+      <th:block th:replace="~{portal/layout :: scripts}"></th:block> (화면 JS 는 그 뒤)
+  모델 값(PortalPageController.addShell): portalUser · supplier · menus · activeMenu.
+  회사 셸(/main)과 달리 탭·iframe 이 없다 — 협력사 PC(외부)에서 화면 몇 개를 오간다.
+-->
+<head th:fragment="head(title)">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="|${title} - #{portal.title}|">협력사 포털</title>
+    <link rel="icon" type="image/svg+xml" th:href="@{/images/yeonos-mark.svg}">
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/portal.css}">
+    <link rel="stylesheet" th:href="@{/css/tip.css}">
+</head>
+<body>
+<header th:fragment="header" class="pt-header">
+    <a class="pt-brand" th:href="@{/portal}"><img th:src="@{/images/yeonos-mark.svg}" alt="" width="20" height="20"><span th:text="#{portal.title}">협력사 포털</span></a>
+    <span class="pt-who">
+        <span class="pt-supplier" th:text="${supplier.custNm}">협력상사</span><span class="pt-user"> · <span th:text="${portalUser.loginId}">sup1</span></span>
+    </span>
+    <form th:action="@{/logout}" method="post" class="pt-logout">
+        <button type="submit" th:text="#{main.logout}">로그아웃</button>
+    </form>
+</header>
+<nav th:fragment="nav" class="pt-nav" th:attr="aria-label=#{portal.menu}">
+    <ul>
+        <li th:each="m : ${menus}">
+            <a th:href="@{${m.path}}" th:text="#{${m.labelKey}}" th:attr="aria-current=${m.code == activeMenu ? 'page' : null}">메뉴</a>
+        </li>
+    </ul>
+</nav>
+<th:block th:fragment="scripts">
+    <script th:src="@{/js/common/hb.js}"></script>
+    <script th:src="@{/js/common/hb.tip.js}"></script>
+
+    <script th:src="@{/js/common/hb.menu.js}"></script>
+</th:block>
+</body>
+</html>

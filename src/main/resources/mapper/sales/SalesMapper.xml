@@ -1,0 +1,298 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 수주·내시 (P2 2단계, docs/25 4.3). 회사 조건은 RLS — 여기 쿼리는 comp_cd 를 적지 않는다 -->
+<mapper namespace="io.smarthappy.module.sales.SalesMapper">
+
+    <!-- ================================================================ 선택지 -->
+
+    <select id="findSalesCusts" resultType="io.smarthappy.module.sales.SalesDtos$CustOption">
+        select c.cust_id, c.cust_cd, c.cust_nm from mst_cust c
+         where c.cust_type in ('SALES', 'BOTH') <if test="activeOnly">and c.use_yn = 'Y'</if>
+         order by c.cust_cd
+    </select>
+
+    <select id="findCust" resultType="io.smarthappy.module.sales.SalesDtos$CustRef">
+        select c.cust_id, c.cust_cd, c.cust_type, c.use_yn from mst_cust c where c.cust_cd = #{custCd}
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.sales.SalesDtos$ItemOption">
+        select i.item_id, i.item_cd, i.item_nm, i.unit_cd, i.use_yn from mst_item i where i.item_cd = #{itemCd}
+    </select>
+
+    <!-- 품목 찾기(행 입력 보조): 코드 앞부분 또는 이름 포함, 사용 중만 -->
+    <select id="searchItems" resultType="io.smarthappy.module.sales.SalesDtos$ItemOption">
+        select i.item_id, i.item_cd, i.item_nm, i.unit_cd, i.use_yn from mst_item i
+         where i.use_yn = 'Y'
+           and (i.item_cd like upper(#{q}) || '%' escape '\' or i.item_nm ilike '%' || #{q} || '%' escape '\')
+         order by i.item_cd
+         limit #{limit}
+    </select>
+
+    <!-- ================================================================ 수주 -->
+
+    <sql id="orderCols">
+        o.order_id, o.order_no, o.cust_id, c.cust_cd, c.cust_nm, o.cust_po_no, o.order_date, o.status, o.remark,
+        (select count(*) from sal_order_line l where l.order_id = o.order_id) as line_cnt,
+        (select count(*) from sal_order_line l where l.order_id = o.order_id and l.status = 'OPEN') as open_cnt,
+        (select min(l.due_date) from sal_order_line l where l.order_id = o.order_id and l.status = 'OPEN') as next_due,
+        o.row_ver, o.updated_at, o.updated_by
+    </sql>
+
+    <!-- 목록·납기 행 수 공용 조건. 기간은 열린 기간(한쪽이 없으면 그 끝 없음, docs/25 4.13) -->
+    <sql id="orderWhere">
+         where true
+           <if test="q.from != null">and o.order_date &gt;= #{q.from}</if>
+           <if test="q.to != null">and o.order_date &lt;= #{q.to}</if>
+           <if test="q.custId != null">and o.cust_id = #{q.custId}</if>
+           <if test="q.status != null">and o.status = #{q.status}</if>
+           <if test="q.keyword != null">
+           and (o.order_no like '%' || #{q.keyword} || '%' escape '\' or o.cust_po_no ilike '%' || #{q.keyword} || '%' escape '\')
+           </if>
+           <if test="q.itemId != null">
+           and exists (select 1 from sal_order_line l where l.order_id = o.order_id and l.item_id = #{q.itemId})
+           </if>
+           <if test="q.dueFrom != null or q.dueTo != null">
+           and exists (select 1 from sal_order_line l where l.order_id = o.order_id <include refid="dueLine"/>)
+           </if>
+    </sql>
+
+    <!-- 납기 조건 = 열린 행의 납기(홈 카드 dueSummary 와 같은 조건, 부분 인덱스 ix_sal_order_line_due) -->
+    <sql id="dueLine">
+           and l.status = 'OPEN'
+           <if test="q.dueFrom != null">and l.due_date &gt;= #{q.dueFrom}</if>
+           <if test="q.dueTo != null">and l.due_date &lt;= #{q.dueTo}</if>
+    </sql>
+
+    <select id="findOrders" resultType="io.smarthappy.module.sales.SalesDtos$OrderRow">
+        select <include refid="orderCols"/>
+          from sal_order o join mst_cust c on c.cust_id = o.cust_id
+        <include refid="orderWhere"/>
+         order by o.order_date desc, o.order_id desc
+         limit #{limit}
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): 목록과 같은 조건 조각. 정렬 허용 열은 OrderSort, 끝 키 order_id 내림(기존 목록과 같게) -->
+    <select id="findOrderPage" resultType="io.smarthappy.module.sales.SalesDtos$OrderRow">
+        select <include refid="orderCols"/>
+          from sal_order o join mst_cust c on c.cust_id = o.cust_id
+        <include refid="orderWhere"/>
+         order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ORDER_NO'">o.order_no<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'CUST'">c.cust_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'NEXT_DUE'">next_due<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'STATUS'">o.status<if test="s.desc"> desc</if></when>
+                <otherwise>o.order_date<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+        </foreach>
+        o.order_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countOrders" resultType="long">
+        select count(*) from sal_order o <include refid="orderWhere"/>
+    </select>
+
+    <select id="countDueLines" resultType="long">
+        select count(*)
+          from sal_order o
+          join sal_order_line l on l.order_id = o.order_id
+        <include refid="orderWhere"/>
+        <include refid="dueLine"/>
+    </select>
+
+    <select id="findOrder" resultType="io.smarthappy.module.sales.SalesDtos$OrderRow">
+        select <include refid="orderCols"/>
+          from sal_order o join mst_cust c on c.cust_id = o.cust_id
+         where o.order_id = #{id}
+    </select>
+
+    <select id="lockOrder" resultType="string" flushCache="true" useCache="false">
+        select status from sal_order where order_id = #{id} for update
+    </select>
+
+    <select id="findOrderIdByPo" resultType="long">
+        select order_id from sal_order where cust_id = #{custId} and cust_po_no = #{custPoNo}
+    </select>
+
+    <select id="insertOrder" resultType="long" flushCache="true">
+        insert into sal_order (comp_cd, order_no, cust_id, cust_po_no, order_date, remark, created_by, updated_by)
+        values (hb_current_comp(), #{orderNo}, #{f.custId}, #{f.custPoNo}, #{f.orderDate}, #{f.remark}, #{by}, #{by})
+        returning order_id
+    </select>
+
+    <!-- 거래처·번호는 바꾸지 않는다(트리거도 막음) -->
+    <update id="updateOrder">
+        update sal_order
+           set cust_po_no = #{f.custPoNo}, order_date = #{f.orderDate}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where order_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="refreshOrderStatus">
+        update sal_order o
+           set status = s.next_status, row_ver = o.row_ver + 1, updated_at = now(), updated_by = #{by}
+          from (select case when bool_or(l.status = 'OPEN') then 'OPEN'
+                            when bool_and(l.status = 'CANCELLED') then 'CANCELLED'
+                            else 'CLOSED' end as next_status
+                  from sal_order_line l where l.order_id = #{id}) s
+         where o.order_id = #{id} and o.status = 'OPEN' and s.next_status is not null and s.next_status &lt;&gt; o.status
+    </update>
+
+    <sql id="lineCols">
+        l.line_id, l.order_id, l.line_no, l.item_id, i.item_cd, i.item_nm, i.unit_cd, trim_scale(l.qty)::text as qty, l.due_date, l.status,
+        l.cancel_reason, l.remark, trim_scale(l.shipped_qty)::text as shipped_qty, l.done_by_ship_yn, l.row_ver, l.updated_at, l.updated_by
+    </sql>
+
+    <select id="findLines" resultType="io.smarthappy.module.sales.SalesDtos$LineRow">
+        select <include refid="lineCols"/>
+          from sal_order_line l join mst_item i on i.item_id = l.item_id
+         where l.order_id = #{orderId}
+         order by l.line_no
+    </select>
+
+    <select id="findLine" resultType="io.smarthappy.module.sales.SalesDtos$LineRow">
+        select <include refid="lineCols"/>
+          from sal_order_line l join mst_item i on i.item_id = l.item_id
+         where l.line_id = #{id}
+    </select>
+
+    <select id="findLineByNo" resultType="io.smarthappy.module.sales.SalesDtos$LineRow">
+        select <include refid="lineCols"/>
+          from sal_order_line l join mst_item i on i.item_id = l.item_id
+         where l.order_id = #{orderId} and l.line_no = #{lineNo}
+    </select>
+
+    <!-- 다음 행 번호 = 10 단위(머리 잠금 뒤에 부른다) -->
+    <select id="nextLineNo" resultType="int" flushCache="true" useCache="false">
+        select coalesce((max(line_no) / 10 + 1) * 10, 10) from sal_order_line where order_id = #{orderId}
+    </select>
+
+    <select id="insertLine" resultType="long" flushCache="true">
+        insert into sal_order_line (comp_cd, order_id, line_no, item_id, qty, due_date, remark, created_by, updated_by)
+        values (hb_current_comp(), #{orderId}, #{f.lineNo}, #{f.itemId}, #{f.qty}, #{f.dueDate}, #{f.remark}, #{by}, #{by})
+        returning line_id
+    </select>
+
+    <!-- 품목·행 번호는 바꾸지 않는다. 열린 행만 -->
+    <update id="updateLine">
+        update sal_order_line
+           set qty = #{f.qty}, due_date = #{f.dueDate}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where line_id = #{id} and row_ver = #{rowVer} and status = 'OPEN'
+    </update>
+
+    <update id="closeLine">
+        update sal_order_line
+           set status = #{status}, cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where line_id = #{id} and status = 'OPEN' <if test="rowVer != null">and row_ver = #{rowVer}</if>
+    </update>
+
+    <select id="countShippedOpenLines" resultType="long" flushCache="true" useCache="false">
+        select count(*) from sal_order_line where order_id = #{orderId} and status = 'OPEN' and shipped_qty &gt; 0
+    </select>
+
+    <update id="cancelOpenLines">
+        update sal_order_line
+           set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where order_id = #{orderId} and status = 'OPEN'
+    </update>
+
+    <select id="countLines" resultType="long" flushCache="true" useCache="false">
+        select count(*) from sal_order_line
+    </select>
+
+    <!-- ================================================================ 내시 -->
+
+    <sql id="revCols">
+        r.rev_id, r.cust_id, c.cust_cd, c.cust_nm, r.rev_no, r.received_at, r.source, r.import_job_id, j.file_nm, r.remark,
+        r.created_by,
+        (select count(*) from sal_forecast_line f where f.rev_id = r.rev_id) as line_cnt,
+        (select min(f.bucket_start) from sal_forecast_line f where f.rev_id = r.rev_id) as first_bucket,
+        (select max(f.bucket_start) from sal_forecast_line f where f.rev_id = r.rev_id) as last_bucket
+    </sql>
+
+    <select id="findRevs" resultType="io.smarthappy.module.sales.SalesDtos$RevRow">
+        select <include refid="revCols"/>
+          from sal_forecast_rev r join mst_cust c on c.cust_id = r.cust_id
+          left join sys_import_job j on j.job_id = r.import_job_id
+         where r.cust_id = #{custId}
+         order by r.rev_no desc
+    </select>
+
+    <!-- 버전 그리드(UI 단계 3 ①): 기존 목록과 같은 조건(거래처), 정렬 허용 열은 RevSort, 끝 키 rev_id 내림 -->
+    <select id="findRevPage" resultType="io.smarthappy.module.sales.SalesDtos$RevRow">
+        select <include refid="revCols"/>
+          from sal_forecast_rev r join mst_cust c on c.cust_id = r.cust_id
+          left join sys_import_job j on j.job_id = r.import_job_id
+         where r.cust_id = #{custId}
+         order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'RECEIVED_AT'">r.received_at</when>
+                <otherwise>r.rev_no</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        r.rev_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countRevs" resultType="long">
+        select count(*) from sal_forecast_rev r where r.cust_id = #{custId}
+    </select>
+
+    <select id="findRev" resultType="io.smarthappy.module.sales.SalesDtos$RevRow">
+        select <include refid="revCols"/>
+          from sal_forecast_rev r join mst_cust c on c.cust_id = r.cust_id
+          left join sys_import_job j on j.job_id = r.import_job_id
+         where r.rev_id = #{id}
+    </select>
+
+    <!-- 같은 거래처 수신을 트랜잭션 끝까지 줄 세운다(번호 충돌 방지) -->
+    <select id="lockCustRev" resultType="string" flushCache="true" useCache="false">
+        select pg_advisory_xact_lock(hashtext('sal_forecast_rev'), hashtext(#{custId}::text))::text
+    </select>
+
+    <select id="nextRevNo" resultType="int" flushCache="true" useCache="false">
+        select coalesce(max(rev_no), 0) + 1 from sal_forecast_rev where cust_id = #{custId}
+    </select>
+
+    <select id="insertRev" resultType="long" flushCache="true">
+        insert into sal_forecast_rev (comp_cd, cust_id, rev_no, source, import_job_id, remark, created_by)
+        values (hb_current_comp(), #{custId}, #{revNo}, #{source}, #{jobId}, #{remark}, #{by})
+        returning rev_id
+    </select>
+
+    <insert id="insertFcstLines">
+        insert into sal_forecast_line (comp_cd, rev_id, item_id, bucket_type, bucket_start, qty, firm_yn)
+        values
+        <foreach collection="lines" item="l" separator=",">
+            (hb_current_comp(), #{revId}, #{l.itemId}, #{l.bucketType}, #{l.bucketStart}, #{l.qty}, #{l.firmYn})
+        </foreach>
+    </insert>
+
+    <select id="findFcstLines" resultType="io.smarthappy.module.sales.SalesDtos$FcstLineRow">
+        select f.item_id, i.item_cd, i.item_nm, i.unit_cd, f.bucket_type, f.bucket_start, trim_scale(f.qty)::text as qty, f.firm_yn
+          from sal_forecast_line f join mst_item i on i.item_id = f.item_id
+         where f.rev_id = #{revId}
+         order by i.item_cd, f.bucket_type, f.bucket_start
+    </select>
+
+    <!-- 두 버전 비교: (품목·유형·시작) 전체 외부 결합 — 한쪽에만 있는 행도 -->
+    <select id="compare" resultType="io.smarthappy.module.sales.SalesDtos$CompareRow">
+        select coalesce(a.item_id, b.item_id) as item_id, i.item_cd, i.item_nm, i.unit_cd,
+               coalesce(a.bucket_type, b.bucket_type) as bucket_type, coalesce(a.bucket_start, b.bucket_start) as bucket_start,
+               trim_scale(a.qty)::text as from_qty, trim_scale(b.qty)::text as to_qty, a.firm_yn as from_firm, b.firm_yn as to_firm
+          from (select * from sal_forecast_line where rev_id = #{fromRevId}) a
+          full join (select * from sal_forecast_line where rev_id = #{toRevId}) b
+            on b.item_id = a.item_id and b.bucket_type = a.bucket_type and b.bucket_start = a.bucket_start
+          join mst_item i on i.item_id = coalesce(a.item_id, b.item_id)
+         order by i.item_cd, 5, 6
+    </select>
+
+    <select id="countFcstLines" resultType="long" flushCache="true" useCache="false">
+        select count(*) from sal_forecast_line
+    </select>
+</mapper>

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  시정조치 8D (qms-capa) — P3 QMS Q4 (docs/29 D7·D8). 고객 클레임·내부·협력사·심사 지적 → D1~D8 → 종결(결재 또는 승인 권한).
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 담당(WEB). 한 달 수 건~수십 건, 한 건이 몇 주~두 달 열려 있다.
+  직접 치는 값 = 출처·발생일·제목·고객·품목·담당·D1~D8 서술·수평전개(품목·공정·고객 + 상태), 파일(첨부).
+  서버가 채우는 값 = 번호(채번), 봉쇄·종결 기한(발생일 + 정책 일수, 고객 클레임은 그 고객 CSR override 가 이김 — 만들 때 고정),
+  단계(다음 단계 버튼 — 그 단계 D 구역이 비면 칸 오류), 기한 판정, 종결 일시.
+  예외 = 수평전개에 진행 중이 남으면 효과 확인(VERIFIED) 불가, 효과 확인부터 수평전개 고정, 종결 결재 중·종결·취소는 읽기 전용(첨부 잠금), 반려·회수되면 대책 완료로.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">시정조치(8D)</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.capa.keyword}">번호·제목·고객·품목</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{qms.capa.col.status}">단계</span>
+        <select name="status" data-hb="select" data-code="CAPA_STATUS" data-blank="all"></select></label>
+    <label><span th:text="#{qms.capa.col.source}">출처</span>
+        <select name="source" data-hb="select" data-code="CAPA_SOURCE" data-blank="all"></select></label>
+    <label><span th:text="#{qms.capa.col.dueState}">기한</span>
+        <select name="dueState" data-hb="select" data-code="CAPA_DUE_STATE" data-blank="all"></select></label>
+    <label class="hb-check"><input type="checkbox" name="withClosed" value="true"><span th:text="#{qms.capa.withClosed}">종결·취소 포함</span></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="capaGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="advanceBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{qms.capa.advance}">다음 단계</button>
+            <button type="button" id="closeBtn" class="hb-btn-secondary" th:if="${actions.contains('APPROVE')}" th:text="#{qms.capa.close}">바로 종결</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            <!-- 되돌릴 수 없는 동작은 저장과 떨어진 오른쪽 끝(docs/40 P1 ④) -->
+            <div class="hb-qms-danger-zone">
+                <button type="button" id="cancelBtn" class="hb-btn-danger-outline" th:if="${actions.contains('SAVE')}" th:text="#{qms.capa.cancel}">취소</button>
+            </div>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.capa.select}">왼쪽에서 시정조치를 고르거나 신규를 누르세요.</p>
+        <p id="statusLine" class="hb-qms-status" role="status" hidden></p>
+
+        <form id="capaForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{qms.capa.col.capaNo}">번호</span><input data-field="capaNo" readonly data-help-key="qms-capa.capaNo"></label>
+            <label><span th:text="#{qms.capa.col.source}">출처</span>
+                <select data-field="source" data-hb="select" data-code="CAPA_SOURCE" data-blank="select" required></select></label>
+            <label><span th:text="#{qms.capa.col.occurredOn}">발생일</span><input data-field="occurredOn" type="date" data-help-key="qms-capa.occurredOn"></label>
+            <label><span th:text="#{qms.capa.col.ownerNm}">담당</span><select data-field="ownerUserId" id="ownerSel"></select></label>
+            <label class="hb-wide"><span th:text="#{qms.capa.col.title}">제목</span><input data-field="title" maxlength="200" required></label>
+            <label><span th:text="#{qms.capa.col.custCd}">고객</span><input data-field="custCd" maxlength="30" data-help-key="qms-capa.custCd"></label>
+            <label><span th:text="#{qms.capa.col.itemCd}">품목</span><input data-field="itemCd" maxlength="40"></label>
+            <label><span th:text="#{qms.capa.ncrNo}">부적합(NCR) 번호</span><input data-field="ncrNo" maxlength="30" th:placeholder="#{qms.capa.ncrHint}"></label>
+            <p class="hb-wide" id="ncrLine" hidden><a id="ncrLink" th:text="#{qms.capa.ncrOpen}">부적합 열기</a> <span id="ncrState" class="hb-muted"></span>
+                <a id="capaTraceBack" class="hb-btn-secondary hb-link-btn" hidden th:text="#{qms.lotTrace.goBackward}">역추적</a>
+                <a id="capaTraceFwd" class="hb-btn-secondary hb-link-btn" hidden th:text="#{qms.lotTrace.goForward}">출하 추적</a></p>
+        </form>
+
+        <section class="hb-sub" id="dSection">
+            <h2 data-help-key="qms-capa.steps" th:text="#{qms.capa.steps}">8D</h2>
+            <form id="dForm" class="hb-form" autocomplete="off">
+                <label class="hb-wide"><span th:text="#{qms.capa.d1}">D1 팀</span><textarea data-field="d1Team" maxlength="2000" rows="2"></textarea></label>
+                <label class="hb-wide"><span th:text="#{qms.capa.d2}">D2 문제 기술</span><textarea data-field="d2Problem" maxlength="4000" rows="3"></textarea></label>
+                <label class="hb-wide"><span th:text="#{qms.capa.d3}">D3 봉쇄 조치</span><textarea data-field="d3Contain" maxlength="4000" rows="3"></textarea></label>
+                <label class="hb-wide"><span th:text="#{qms.capa.d4}">D4 근본 원인</span><textarea data-field="d4Cause" maxlength="4000" rows="3"></textarea></label>
+                <label class="hb-wide"><span th:text="#{qms.capa.d5}">D5 영구 대책</span><textarea data-field="d5Action" maxlength="4000" rows="3"></textarea></label>
+                <label class="hb-wide"><span th:text="#{qms.capa.d6}">D6 실행·검증</span><textarea data-field="d6Verify" maxlength="4000" rows="3"></textarea></label>
+                <label class="hb-wide"><span th:text="#{qms.capa.d7}">D7 재발 방지</span><textarea data-field="d7Prevent" maxlength="4000" rows="3"></textarea></label>
+                <label class="hb-wide"><span th:text="#{qms.capa.d8}">D8 종결·팀 인정</span><textarea data-field="d8Close" maxlength="2000" rows="2"></textarea></label>
+            </form>
+        </section>
+
+        <section class="hb-sub">
+            <h2 data-help-key="qms-capa.spreads" th:text="#{qms.capa.spreads}">수평전개</h2>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="spreadTable"><tbody></tbody></table>
+            </div>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="addSpreadBtn" class="hb-btn-secondary" th:text="#{qms.capa.addSpread}">수평전개 추가</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="rtnBox" hidden>
+            <h2 th:text="#{qms.capa.custReturns}">고객 반품</h2>
+            <p class="hb-muted" th:text="#{qms.capa.custReturnsHint}">이 8D 번호를 적은 반품과 이어진 부적합(NCR)이 만든 반품 — 취소는 고객 반품 화면에서</p>
+            <p class="hb-muted" id="rtnNotice" role="status" hidden></p>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="rtnTable">
+                    <thead><tr>
+                        <th th:text="#{qms.capa.rtn.rtnNo}">반품 번호</th><th th:text="#{qms.capa.rtn.status}">상태</th>
+                        <th th:text="#{qms.capa.rtn.cust}">고객</th><th th:text="#{qms.capa.rtn.item}">품목</th>
+                        <th th:text="#{qms.capa.rtn.lotNo}">LOT</th><th th:text="#{qms.capa.rtn.qty}">수량</th>
+                        <th th:text="#{qms.capa.rtn.reason}">사유</th><th th:text="#{qms.capa.rtn.ncrNo}">NCR</th>
+                        <th th:text="#{qms.capa.rtn.receivedAt}">받은 시각</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="approvalBox" hidden>
+            <h2 th:text="#{qms.doc.approval}">결재</h2>
+            <div class="hb-qms-inline" id="lineTools" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{qms.doc.lineUser}">결재자</span><select id="lineUser"></select></label>
+                <label><span th:text="#{qms.doc.lineType}">종류</span>
+                    <select id="lineType">
+                        <option value="APPROVE" th:text="#{js.qms.doc.line.APPROVE}">결재</option>
+                        <option value="AGREE" th:text="#{js.qms.doc.line.AGREE}">합의</option>
+                        <option value="REF" th:text="#{js.qms.doc.line.REF}">참조</option>
+                    </select></label>
+                <button type="button" id="addLineBtn" class="hb-btn-secondary" th:text="#{qms.doc.addLine}">결재선 추가</button>
+                <button type="button" id="submitBtn" th:text="#{qms.capa.submit}">종결 결재 올리기</button>
+            </div>
+            <table class="hb-cmp-table" id="lineTable"><tbody></tbody></table>
+            <div class="hb-qms-inline" id="actTools" hidden>
+                <label class="hb-qms-grow"><span th:text="#{qms.doc.aprComment}">의견</span><input id="aprComment" maxlength="500"></label>
+                <button type="button" id="approveBtn" th:text="#{qms.doc.approve}">승인</button>
+                <button type="button" id="rejectBtn" class="hb-btn-danger-outline" th:text="#{qms.doc.reject}">반려</button>
+                <button type="button" id="withdrawBtn" class="hb-btn-secondary" th:text="#{qms.doc.withdraw}">회수</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="fileBox" hidden>
+            <h2 th:text="#{qms.doc.files}">첨부</h2>
+            <ul id="files" class="hb-files"></ul>
+            <label id="uploadBox" th:if="${actions.contains('SAVE')}"><span th:text="#{qms.doc.attach}">파일 올리기</span>
+                <input type="file" id="fileInput"></label>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/capa-mgt.js}"></script>
+</body>
+</html>

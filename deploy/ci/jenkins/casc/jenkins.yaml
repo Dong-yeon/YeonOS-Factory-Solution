@@ -1,0 +1,85 @@
+# YeonOS Jenkins 설정(Configuration as Code, docs/71). 화면에서 바꾼 설정은 재시작하면 이 파일 값으로 돌아간다 —
+# 바꿀 것은 여기서 바꾸고 커밋한다. 비밀값은 이 파일에 쓰지 않는다: ${...} 는 compose 의 .env(커밋 금지)에서 온다.
+# GitHub 자격증명은 이 파일에도 .env 에도 없다 — Jenkins 화면의 자격증명 저장소에만 등록한다(README 3장).
+jenkins:
+  systemMessage: "YeonOS CI — 127.0.0.1 전용. 설정은 deploy/ci/jenkins/casc/jenkins.yaml(화면에서 바꾸면 재시작 때 되돌아감)"
+  # 실행기 1 = 시험 DB(Testcontainers)를 쓰는 check 가 이 Jenkins 안에서 한 번에 하나만 돈다(docs/71 3장)
+  numExecutors: 1
+  mode: NORMAL
+  # 인바운드 에이전트 포트 닫음(에이전트 없음)
+  slaveAgentPort: -1
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID:-admin}"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  # 로그인한 사람만(관리자 1명). 익명 읽기 없음 — matrix-auth 플러그인을 들이지 않으려고 이 방식
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  # CSRF 토큰(crumb)은 기본 켜짐 — 이 판에서는 설정 칸이 없다
+  crumbIssuer: standard
+  disableRememberMe: true
+  markupFormatter: plainText
+
+unclassified:
+  location:
+    url: "http://127.0.0.1:${JENKINS_PORT:-8095}/"
+
+security:
+  # 잡 DSL 스크립트는 이 파일에서만 온다 — 화면에서 DSL 을 실행하지 않는다
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: true
+
+jobs:
+  # Multibranch: main·claude/* 만. 5분마다 원격 가지 목록을 훑어 새 커밋이 있으면 빌드(폴링 — webhook 없음, docs/71 2장).
+  # 첫 훑기 때 옛 claude/* 30여 개가 한꺼번에 줄 서는 것은 Jenkinsfile 이 막는다(가지 훑기 + 마지막 커밋 3일 넘음 → 바로 NOT_BUILT).
+  # basic-branch-build-strategies 의 skipInitialBuildOnFirstBranchIndexing 은 새 가지의 첫 push 까지 건너뛰어 쓰지 않았다(docs/71 4.3 시험).
+  - script: |
+      multibranchPipelineJob('yeonos') {
+        displayName('YeonOS')
+        description('main·claude/* 를 5분마다 폴링해 ./gradlew check 를 한 번에 하나씩 돌린다(docs/71)')
+        branchSources {
+          branchSource {
+            source {
+              git {
+                id('yeonos-origin')
+                remote('${YEONOS_GIT_URL:-https://github.com/Dong-yeon/YeonOS.git}')
+                credentialsId('github-yeonos')
+                traits {
+                  gitBranchDiscovery()
+                  headWildcardFilter {
+                    includes('main claude/*')
+                    excludes('')
+                  }
+                  cloneOptionTrait {
+                    extension {
+                      shallow(false)
+                      noTags(true)
+                      reference('')
+                      timeout(20)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        triggers {
+          periodicFolderTrigger {
+            interval('5m')
+          }
+        }
+        orphanedItemStrategy {
+          discardOldItems {
+            daysToKeep(14)
+            numToKeep(30)
+          }
+        }
+        factory {
+          workflowBranchProjectFactory {
+            scriptPath('Jenkinsfile')
+          }
+        }
+      }

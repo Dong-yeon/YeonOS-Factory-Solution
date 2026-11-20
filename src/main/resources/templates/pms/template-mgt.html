@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  프로젝트 템플릿 (pms-template) — PMS 1단계 (docs/32 PM1·4.1·4.2, D7).
+  작업 일정은 기준일(시작일 또는 SOP) 대비 일수로 적는다(SOP 기준이면 SOP 전은 음수). 간트는 "미리보기 기준일" 로 펼쳐 본 모습.
+  템플릿을 고쳐도 이미 만든 프로젝트는 바뀌지 않는다(만들 때 복사).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/pms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">프로젝트 템플릿</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{pms.tmplKeyword}">코드·템플릿명</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{pms.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y"><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newTmplBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{pms.newTemplate}">신규 템플릿</button>
+            <button type="button" id="apqpBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{pms.defaultApqp}"
+                    data-help-key="pms-template.apqp">기본 APQP 템플릿 만들기</button>
+        </div>
+        <div id="tmplGrid" class="hb-grid-host pms-tmpl-grid"></div>
+        <div class="hb-toolbar" id="wbsTools" hidden>
+            <button type="button" id="addChildBtn" class="hb-btn-secondary" th:text="#{pms.addChild}">하위 작업 추가</button>
+            <button type="button" id="addSiblingBtn" class="hb-btn-secondary" th:text="#{pms.addSibling}">아래에 추가</button>
+            <button type="button" class="hb-btn-secondary" data-move="UP" th:text="#{pms.moveUp}">위로</button>
+            <button type="button" class="hb-btn-secondary" data-move="DOWN" th:text="#{pms.moveDown}">아래로</button>
+            <button type="button" class="hb-btn-secondary" data-move="INDENT" th:text="#{pms.indent}">들여쓰기</button>
+            <button type="button" class="hb-btn-secondary" data-move="OUTDENT" th:text="#{pms.outdent}">내어쓰기</button>
+            <label class="hb-check"><span th:text="#{pms.previewBase}">미리보기 기준일</span>
+                <input type="date" id="previewBase" data-help-key="pms-template.previewBase"></label>
+            <fieldset class="hb-seg" id="scaleSeg">
+                <legend th:text="#{pms.scale}">눈금</legend>
+                <label><input type="radio" name="scale" value="day"><span th:text="#{pms.scale.day}">일</span></label>
+                <label><input type="radio" name="scale" value="week" checked><span th:text="#{pms.scale.week}">주</span></label>
+                <label><input type="radio" name="scale" value="month"><span th:text="#{pms.scale.month}">월</span></label>
+            </fieldset>
+            <!-- 되돌릴 수 없는 동작은 편집 단추와 떨어진 끝자리(docs/40 P1 ④) -->
+            <button type="button" id="deleteTaskBtn" class="hb-btn-danger-outline" th:text="#{pms.deleteTask}">삭제</button>
+        </div>
+        <div id="gantt" class="pms-gantt-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveTmplBtn" th:if="${actions.contains('SAVE')}" th:text="#{pms.saveTemplate}">템플릿 저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="tmplMode" class="hb-muted" th:text="#{pms.selectTemplate}">왼쪽에서 템플릿을 고르거나 신규를 누르세요.</p>
+        <form id="tmplForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{pms.col.tmplCd}">코드</span><input data-field="tmplCd" maxlength="20" required></label>
+            <label class="hb-wide"><span th:text="#{pms.col.tmplNm}">템플릿명</span><input data-field="tmplNm" maxlength="100" required></label>
+            <label><span th:text="#{pms.col.projType}">유형</span><select data-field="projType" id="typeSel"></select></label>
+            <label><span th:text="#{pms.col.anchor}">기준일</span>
+                <select data-field="anchor" data-help-key="pms-template.anchor">
+                    <option value="START" th:text="#{pms.anchor.START}">시작일</option>
+                    <option value="SOP" th:text="#{pms.anchor.SOP}">SOP(양산 시작)</option>
+                </select></label>
+            <label><span th:text="#{pms.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{pms.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+
+        <section class="hb-sub" id="taskBox" hidden>
+            <h2 th:text="#{pms.taskTitle}">작업</h2>
+            <p id="taskMode" class="hb-muted"></p>
+            <form id="taskForm" class="hb-form" autocomplete="off">
+                <label class="hb-wide"><span th:text="#{pms.col.taskNm}">작업명</span><input data-field="taskNm" maxlength="200" required></label>
+                <label><span th:text="#{pms.col.taskType}">종류</span>
+                    <select data-field="taskType">
+                        <option value="TASK" th:text="#{pms.type.TASK}">작업</option>
+                        <option value="MILESTONE" th:text="#{pms.type.MILESTONE}">마일스톤</option>
+                        <option value="GATE" th:text="#{pms.type.GATE}">게이트</option>
+                    </select></label>
+                <label><span th:text="#{pms.col.offsetDays}">기준일 대비 시작(일)</span>
+                    <input type="number" min="-3650" max="3650" step="1" data-field="offsetDays" inputmode="numeric"
+                           data-help-key="pms-template.offsetDays"></label>
+                <label><span th:text="#{pms.col.durationDays}">기간(일)</span>
+                    <input type="number" min="1" max="3650" step="1" data-field="durationDays" inputmode="numeric"></label>
+                <label><span th:text="#{pms.col.stdHoursIn}">표준 공수(시간)</span>
+                    <input type="number" min="0" max="99999" step="0.5" data-field="stdHours" inputmode="decimal"></label>
+                <label class="hb-wide"><span th:text="#{pms.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+            </form>
+            <p id="taskNote" class="hb-muted"></p>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="saveTaskBtn" th:text="#{pms.saveTask}">작업 저장</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="itemBox" hidden>
+            <h2 th:text="#{pms.tmplItems}">산출물 칸·점검 문구</h2>
+            <ul class="pms-deps" id="itemList"></ul>
+            <form id="itemForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{pms.col.itemKind}">종류</span>
+                    <select data-field="kind" data-help-key="pms-template.itemKind">
+                        <option value="DELIV" th:text="#{pms.itemKind.DELIV}">산출물 칸</option>
+                        <option value="CHECK" th:text="#{pms.itemKind.CHECK}">게이트 점검 문구</option>
+                    </select></label>
+                <label><span th:text="#{pms.col.required}">필수</span>
+                    <select data-field="requiredYn">
+                        <option value="Y" th:text="#{pms.required.Y}">필수</option>
+                        <option value="N" th:text="#{pms.required.N}">선택</option>
+                    </select></label>
+                <label class="hb-wide"><span th:text="#{pms.col.itemNm}">이름</span><input data-field="itemNm" maxlength="200"></label>
+                <label><span th:text="#{pms.col.formDocNo}">빈 서식(QMS 문서 번호)</span><input data-field="formDocNo" maxlength="30"
+                        data-help-key="pms-template.formDocNo"></label>
+                <div class="hb-toolbar"><button type="button" id="addItemBtn" class="hb-btn-secondary" th:text="#{pms.addItem}">추가</button></div>
+            </form>
+        </section>
+        <!-- 템플릿 선후행(docs/32 4.18) — 잎 작업끼리, 템플릿 → 프로젝트 복사 때 따라간다 -->
+        <section class="hb-sub" id="tmplDepBox" hidden>
+            <h2 th:text="#{pms.preds}">선행 작업</h2>
+            <ul class="pms-deps" id="tmplPredList"></ul>
+            <form id="tmplDepForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label class="hb-wide"><span th:text="#{pms.col.pred}">선행 작업</span><select data-field="predTtId" id="tmplPredSel"></select></label>
+                <label><span th:text="#{pms.col.depType}">관계</span>
+                    <select data-field="depType" data-help-key="pms-project.depType">
+                        <option value="FS" th:text="#{pms.depType.FS}">FS 끝나면 시작</option>
+                        <option value="SS" th:text="#{pms.depType.SS}">SS 시작하면 시작</option>
+                        <option value="FF" th:text="#{pms.depType.FF}">FF 끝나면 끝</option>
+                    </select></label>
+                <label><span th:text="#{pms.col.lagDays}">지연(일)</span>
+                    <input type="number" min="-365" max="365" step="1" value="0" data-field="lagDays" inputmode="numeric"
+                           data-help-key="pms-project.lagDays"></label>
+                <div class="hb-toolbar"><button type="button" id="addTmplDepBtn" class="hb-btn-secondary" th:text="#{pms.addPred}">선행 추가</button></div>
+            </form>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/pms/pms-ui.js}"></script>
+<script th:src="@{/js/views/pms/pms-gantt.js}"></script>
+<script th:src="@{/js/views/pms/template-mgt.js}"></script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  검수 미결 (qms-preship-punch) — docs/78. 출하 전 검수의 NG 항목 목록(punch list).
+  닫기 = 조치 내용 + 재확인 OK(사진 필수 항목은 사진), 조건부 출하 허용 = 승인자 사유, NCR 은 번호로 이어 두기만.
+  닫힌 미결은 이력으로 남는다(같은 항목이 다시 NG 면 새 미결).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">검수 미결</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.preship.punchKeyword}">출하·검수 번호·품목·내용</span>
+        <input name="keyword" maxlength="100" data-help-key="qms-preship-punch.keyword"></label>
+    <label><span th:text="#{qms.preship.col.punchStatus}">상태</span>
+        <select name="status" data-hb="select" data-code="QMS_PUNCH_STATUS" data-blank="all"></select></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div id="punchGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="punchInfo" class="hb-muted" th:text="#{qms.preship.selectPunch}">왼쪽에서 미결을 고르세요.</p>
+        <dl id="punchView" class="hb-form" hidden>
+            <dt th:text="#{qms.preship.col.checkText}">확인 내용</dt><dd data-view="checkText"></dd>
+            <dt th:text="#{qms.preship.col.issueText}">NG 내용</dt><dd data-view="issueText"></dd>
+            <dt th:text="#{qms.preship.col.shipAllowYn}">조건부 출하</dt><dd data-view="allow"></dd>
+            <dt th:text="#{qms.preship.col.actionText}">조치 내용</dt><dd data-view="action"></dd>
+        </dl>
+        <div id="photoBox" class="hb-qms-preship-photos"></div>
+        <form id="closeForm" class="hb-form" autocomplete="off" hidden>
+            <label class="hb-wide"><span th:text="#{qms.preship.col.actionText}">조치 내용</span>
+                <input data-field="actionText" maxlength="500" data-help-key="qms-preship-punch.actionText"></label>
+            <div class="hb-toolbar hb-wide">
+                <button type="button" id="closeBtn" th:if="${actions.contains('SAVE')}" th:text="#{qms.preship.closePunch}">조치·재확인 닫기</button>
+            </div>
+        </form>
+        <form id="allowForm" class="hb-form" autocomplete="off" hidden>
+            <label class="hb-wide"><span th:text="#{qms.preship.allowReason}">조건부 출하 사유</span>
+                <input data-field="reason" maxlength="500" data-help-key="qms-preship-punch.reason"></label>
+            <div class="hb-toolbar hb-wide">
+                <button type="button" id="allowBtn" class="hb-btn-secondary" th:if="${actions.contains('APPROVE')}" th:text="#{qms.preship.allow}">조건부 출하 허용</button>
+            </div>
+        </form>
+        <form id="ncrForm" class="hb-form" autocomplete="off" hidden>
+            <label><span th:text="#{qms.preship.col.ncrNo}">NCR 번호</span>
+                <input data-field="ncrNo" maxlength="30" spellcheck="false" data-help-key="qms-preship-punch.ncrNo"></label>
+            <div class="hb-toolbar">
+                <button type="button" id="ncrBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{qms.preship.linkNcr}">NCR 연결</button>
+            </div>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/preship-punch.js}"></script>
+</body>
+</html>

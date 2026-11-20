@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  사전 납품 통지 (srm-asn) — SRM 2부 R3a (docs/31 4.11). 협력사·공장 → 그 협력사 열린 발주 행 고르기 → 행마다 수량·공급사 LOT·유통기한 →
+  저장(작성 중) → 확정(한도 R3-4). 입고는 WMS 입고 화면이 ASN 을 골라 한다(받은 양·상태는 여기서 보기만). 납품서 인쇄 = srm-asn-print.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">사전 납품 통지</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{srm.asn.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,thisWeek,last7,last30,thisMonth,lastMonth" data-default="thisMonth" data-max-days="366"></div>
+    <label><span th:text="#{srm.asn.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="ASN_STATUS" data-blank="all"></select></label>
+    <label class="hb-check"><input type="checkbox" name="late" value="true"><span th:text="#{srm.asn.lateOnly}">늦은 ASN 만</span></label>
+    <label><span th:text="#{srm.asn.keyword}">번호·납품서·협력사</span><input name="keyword" maxlength="100"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{srm.asn.import}">엑셀 올리기</button>
+        </div>
+        <div id="asnGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="printBtn" class="hb-btn-secondary" hidden th:text="#{srm.asn.print}">납품서 인쇄</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{srm.asn.selectOrNew}">왼쪽에서 ASN 을 고르거나 신규를 누르세요.</p>
+        <p id="stateLine" class="hb-wide" role="status"></p>
+        <div class="hb-toolbar" id="actionBar">
+            <button type="button" class="hb-btn-secondary" data-act="send" hidden th:text="#{srm.asn.act.send}">확정</button>
+            <button type="button" class="hb-btn-secondary" data-act="close" hidden th:text="#{srm.asn.act.close}">마감</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 저장·진행 줄과 떨어진 자리(docs/40 P1 ④). 사유는 누를 때 대화상자로 받는다 -->
+        <div class="hb-toolbar" id="dangerBar">
+            <button type="button" class="hb-btn-danger-outline" data-act="cancel" data-reason="true" hidden th:text="#{srm.asn.act.cancel}">취소</button>
+        </div>
+        <form id="asnForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{srm.asn.col.supplier}">협력사</span>
+                <select data-field="custCd" id="custSel"></select></label>
+            <label><span th:text="#{srm.asn.col.plant}">공장</span>
+                <select data-field="plantCd" id="plantSel"></select></label>
+            <label><span th:text="#{srm.asn.col.shipDate}">출하일</span><input type="date" data-field="shipDate"></label>
+            <label><span th:text="#{srm.asn.col.etaDate}">도착 예정일</span><input type="date" data-field="etaDate"></label>
+            <label><span th:text="#{srm.asn.col.supplierRef}">협력사 납품서 번호</span>
+                <input data-field="supplierRef" maxlength="60" data-help-key="srm-asn.supplierRef"></label>
+            <label><span th:text="#{srm.asn.col.carrierMemo}">운송 메모</span><input data-field="carrierMemo" maxlength="200"></label>
+            <label class="hb-wide"><span th:text="#{srm.asn.col.remark}">비고</span><input data-field="remark" maxlength="1000"></label>
+        </form>
+
+        <section class="hb-sub">
+            <h2 th:text="#{srm.asn.lines}">납품 행</h2>
+            <div id="linesErrorBox" hidden><p id="linesError" class="hb-field-error"></p></div>
+            <div id="lines"></div>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="pickBtn" class="hb-btn-secondary" th:text="#{srm.asn.pick}">발주 행 가져오기</button>
+            </div>
+            <div id="pickBox" hidden>
+                <p class="hb-muted" th:text="#{srm.asn.pickHint}">통지할 발주 행을 고르세요. 수량은 통지 가능 양으로 채워집니다.</p>
+                <div id="pickList"></div>
+                <div class="hb-toolbar">
+                    <button type="button" id="pickAddBtn" class="hb-btn-secondary" th:text="#{srm.asn.pickAdd}">고른 행 추가</button>
+                </div>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/srm/srm-ui.js}"></script>
+<script th:src="@{/js/views/srm/asn-mgt.js}"></script>
+</body>
+</html>

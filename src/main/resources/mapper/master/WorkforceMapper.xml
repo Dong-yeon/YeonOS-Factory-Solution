@@ -1,0 +1,319 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 근무조·작업자·자격 (P2 1단계, docs/25 4.2) -->
+<mapper namespace="io.smarthappy.module.master.workforce.WorkforceMapper">
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <!-- 사용 중 공장(선택지) -->
+    <select id="findPlants" resultType="io.smarthappy.module.master.equip.EquipDtos$PlantRow">
+        select p.plant_cd, p.plant_nm, p.time_zone, p.sort_no, p.use_yn, p.row_ver from sys_plant p
+         where p.use_yn = 'Y' order by p.sort_no, p.plant_cd
+    </select>
+
+    <!-- ================================================================ 근무조 -->
+
+    <sql id="shiftCols">
+        s.shift_id, s.plant_cd, s.shift_cd, s.shift_nm, s.start_time, s.end_time, s.day_offset, s.break_min, s.sort_no,
+        s.use_yn, s.remark, s.row_ver, s.updated_at, s.updated_by
+    </sql>
+
+    <select id="findShifts" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$ShiftRow">
+        select <include refid="shiftCols"/> from mst_shift s
+         where s.plant_cd = #{plantCd} <if test="activeOnly">and s.use_yn = 'Y'</if>
+         order by s.sort_no, s.start_time, s.shift_cd
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): 기존 목록과 같은 조건(공장), 정렬 허용 열은 ShiftSort, 끝 키 shift_id -->
+    <select id="findShiftPage" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$ShiftRow">
+        select <include refid="shiftCols"/> from mst_shift s
+         where s.plant_cd = #{plantCd}
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'SHIFT_CD'">s.shift_cd</when>
+                <when test="o.key == 'SHIFT_NM'">s.shift_nm</when>
+                <when test="o.key == 'START_TIME'">s.start_time</when>
+                <otherwise>s.sort_no</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        s.shift_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countShifts" resultType="long">
+        select count(*) from mst_shift s where s.plant_cd = #{plantCd}
+    </select>
+
+    <select id="findShift" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$ShiftRow">
+        select <include refid="shiftCols"/> from mst_shift s where s.shift_id = #{id}
+    </select>
+
+    <select id="insertShift" resultType="long" flushCache="true">
+        insert into mst_shift (comp_cd, plant_cd, shift_cd, shift_nm, start_time, end_time, day_offset, break_min, sort_no,
+                               use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.plantCd}, #{f.shiftCd}, #{f.shiftNm}, #{f.startTime}, #{f.endTime}, #{f.dayOffset},
+                #{f.breakMin}, #{f.sortNo}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning shift_id
+    </select>
+
+    <!-- 공장·코드는 바꾸지 않는다 -->
+    <update id="updateShift">
+        update mst_shift
+           set shift_nm = #{f.shiftNm}, start_time = #{f.startTime}, end_time = #{f.endTime}, day_offset = #{f.dayOffset},
+               break_min = #{f.breakMin}, sort_no = #{f.sortNo}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where shift_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 자격 -->
+
+    <!-- 지금 유효 = 취득 ≤ 오늘 ≤ 만료(없으면 무기한), 취소 안 됨(또는 오늘보다 뒤 취소) -->
+    <sql id="validHeld">
+        h.acquired_on &lt;= #{today} and (h.expires_on is null or h.expires_on &gt;= #{today})
+        and (h.revoked_on is null or h.revoked_on &gt; #{today})
+    </sql>
+
+    <select id="findQuals" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$QualRow">
+        select q.qual_id, q.qual_cd, q.qual_nm, q.valid_months, q.sort_no, q.use_yn, q.remark, q.row_ver, q.updated_at,
+               q.updated_by,
+               (select count(distinct h.worker_id) from mst_worker_qual h join mst_worker w on w.worker_id = h.worker_id
+                 where h.qual_id = q.qual_id and w.use_yn = 'Y' and <include refid="validHeld"/>) as holder_cnt,
+               (select count(*) from mst_proc_qual_req r where r.qual_id = q.qual_id and r.use_yn = 'Y') as proc_cnt
+          from mst_qual q
+        <where><if test="useYn != null">q.use_yn = #{useYn}</if></where>
+         order by q.sort_no, q.qual_cd
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): 기존 목록과 같은 칸·조건, 정렬 허용 열은 QualSort(유효 개월 없음 = 끝), 끝 키 qual_id -->
+    <select id="findQualPage" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$QualRow">
+        select q.qual_id, q.qual_cd, q.qual_nm, q.valid_months, q.sort_no, q.use_yn, q.remark, q.row_ver, q.updated_at,
+               q.updated_by,
+               (select count(distinct h.worker_id) from mst_worker_qual h join mst_worker w on w.worker_id = h.worker_id
+                 where h.qual_id = q.qual_id and w.use_yn = 'Y' and <include refid="validHeld"/>) as holder_cnt,
+               (select count(*) from mst_proc_qual_req r where r.qual_id = q.qual_id and r.use_yn = 'Y') as proc_cnt
+          from mst_qual q
+        <where><if test="useYn != null">q.use_yn = #{useYn}</if></where>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'QUAL_CD'">q.qual_cd<if test="o.desc"> desc</if></when>
+                <when test="o.key == 'QUAL_NM'">q.qual_nm<if test="o.desc"> desc</if></when>
+                <when test="o.key == 'VALID_MONTHS'">q.valid_months<if test="o.desc"> desc</if> nulls last</when>
+                <when test="o.key == 'HOLDER_CNT'">holder_cnt<if test="o.desc"> desc</if></when>
+                <when test="o.key == 'PROC_CNT'">proc_cnt<if test="o.desc"> desc</if></when>
+                <otherwise>q.sort_no<if test="o.desc"> desc</if></otherwise>
+            </choose>,
+        </foreach>
+        q.qual_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countQuals" resultType="long">
+        select count(*) from mst_qual q <where><if test="useYn != null">q.use_yn = #{useYn}</if></where>
+    </select>
+
+    <select id="findQual" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$QualRow">
+        select q.qual_id, q.qual_cd, q.qual_nm, q.valid_months, q.sort_no, q.use_yn, q.remark, q.row_ver, q.updated_at,
+               q.updated_by, 0 as holder_cnt, 0 as proc_cnt
+          from mst_qual q where q.qual_id = #{id}
+    </select>
+
+    <select id="findQualByCd" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$QualRow">
+        select q.qual_id, q.qual_cd, q.qual_nm, q.valid_months, q.sort_no, q.use_yn, q.remark, q.row_ver, q.updated_at,
+               q.updated_by, 0 as holder_cnt, 0 as proc_cnt
+          from mst_qual q where q.qual_cd = #{qualCd}
+    </select>
+
+    <select id="insertQual" resultType="long" flushCache="true">
+        insert into mst_qual (comp_cd, qual_cd, qual_nm, valid_months, sort_no, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.qualCd}, #{f.qualNm}, #{f.validMonths}, #{f.sortNo}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning qual_id
+    </select>
+
+    <update id="updateQual">
+        update mst_qual
+           set qual_nm = #{f.qualNm}, valid_months = #{f.validMonths}, sort_no = #{f.sortNo}, use_yn = #{f.useYn},
+               remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where qual_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <sql id="reqCols">
+        r.req_id, r.proc_id, p.proc_cd, p.proc_nm, p.use_yn as proc_use_yn, r.qual_id, q.qual_cd, q.qual_nm, r.gate_mode,
+        r.use_yn, r.row_ver
+    </sql>
+
+    <select id="findReqs" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$ReqRow">
+        select <include refid="reqCols"/>
+          from mst_proc_qual_req r join mst_proc p on p.proc_id = r.proc_id join mst_qual q on q.qual_id = r.qual_id
+        <where>
+            <if test="qualId != null">r.qual_id = #{qualId}</if>
+            <if test="procId != null">and r.proc_id = #{procId}</if>
+        </where>
+         order by p.sort_no, p.proc_cd, q.sort_no, q.qual_cd
+    </select>
+
+    <select id="findReq" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$ReqRow">
+        select <include refid="reqCols"/>
+          from mst_proc_qual_req r join mst_proc p on p.proc_id = r.proc_id join mst_qual q on q.qual_id = r.qual_id
+         where r.req_id = #{id}
+    </select>
+
+    <select id="findActiveProcs" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$ProcOption">
+        select proc_cd, proc_nm from mst_proc where use_yn = 'Y' order by sort_no, proc_cd
+    </select>
+
+    <select id="findProcId" resultType="long">
+        select proc_id from mst_proc where proc_cd = #{procCd} <if test="activeOnly">and use_yn = 'Y'</if>
+    </select>
+
+    <select id="insertReq" resultType="long" flushCache="true">
+        insert into mst_proc_qual_req (comp_cd, proc_id, qual_id, gate_mode, created_by, updated_by)
+        values (hb_current_comp(), #{procId}, #{qualId}, #{gateMode}, #{by}, #{by})
+        returning req_id
+    </select>
+
+    <update id="updateReq">
+        update mst_proc_qual_req
+           set gate_mode = #{gateMode}, use_yn = #{useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where req_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 작업자 -->
+
+    <sql id="workerCols">
+        w.worker_id, w.worker_cd, w.worker_nm, w.plant_cd, pl.plant_nm, w.dept_nm, w.badge_hash is not null as badge_set, w.pin_hash is not null as pin_set,
+        w.user_id, u.login_id, w.use_yn, w.remark, w.row_ver, w.updated_at, w.updated_by,
+        (select count(distinct h.qual_id) from mst_worker_qual h where h.worker_id = w.worker_id and <include refid="validHeld"/>) as qual_cnt
+    </sql>
+
+    <select id="findWorkers" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$WorkerRow">
+        select <include refid="workerCols"/>
+          from mst_worker w left join sys_plant pl on pl.plant_cd = w.plant_cd left join sys_user u on u.user_id = w.user_id
+        <where>
+            <if test="plantCd != null">w.plant_cd = #{plantCd}</if>
+            <if test="keywordLike != null">and (w.worker_cd ilike #{keywordLike} escape '\' or w.worker_nm ilike #{keywordLike} escape '\'
+                or w.dept_nm ilike #{keywordLike} escape '\')</if>
+            <if test="useYn != null">and w.use_yn = #{useYn}</if>
+        </where>
+         order by w.worker_cd
+         limit 2000
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): 기존 목록과 같은 조건, 정렬 허용 열은 WorkerSort, 끝 키 worker_id -->
+    <sql id="workerGridWhere">
+          from mst_worker w left join sys_plant pl on pl.plant_cd = w.plant_cd left join sys_user u on u.user_id = w.user_id
+        <where>
+            <if test="plantCd != null">w.plant_cd = #{plantCd}</if>
+            <if test="keywordLike != null">and (w.worker_cd ilike #{keywordLike} escape '\' or w.worker_nm ilike #{keywordLike} escape '\'
+                or w.dept_nm ilike #{keywordLike} escape '\')</if>
+            <if test="useYn != null">and w.use_yn = #{useYn}</if>
+        </where>
+    </sql>
+
+    <select id="findWorkerPage" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$WorkerRow">
+        select <include refid="workerCols"/> <include refid="workerGridWhere"/>
+         order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'WORKER_NM'">w.worker_nm</when>
+                <when test="s.key == 'PLANT'">coalesce(pl.plant_nm, w.plant_cd, '')</when>
+                <when test="s.key == 'DEPT_NM'">coalesce(w.dept_nm, '')</when>
+                <when test="s.key == 'QUAL_CNT'">qual_cnt</when>
+                <when test="s.key == 'UPDATED_AT'">w.updated_at</when>
+                <otherwise>w.worker_cd</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        w.worker_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countWorkers" resultType="long">
+        select count(*) <include refid="workerGridWhere"/>
+    </select>
+
+    <select id="findWorker" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$WorkerRow">
+        select <include refid="workerCols"/>
+          from mst_worker w left join sys_plant pl on pl.plant_cd = w.plant_cd left join sys_user u on u.user_id = w.user_id
+         where w.worker_id = #{id}
+    </select>
+
+    <select id="insertWorker" resultType="long" flushCache="true">
+        insert into mst_worker (comp_cd, worker_cd, worker_nm, plant_cd, dept_nm, user_id, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.workerCd}, #{f.workerNm}, #{f.plantCd}, #{f.deptNm}, #{f.userId}, #{f.useYn},
+                #{f.remark}, #{by}, #{by})
+        returning worker_id
+    </select>
+
+    <update id="updateWorker">
+        update mst_worker
+           set worker_nm = #{f.workerNm}, plant_cd = #{f.plantCd}, dept_nm = #{f.deptNm}, user_id = #{f.userId},
+               use_yn = #{f.useYn}, remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where worker_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="updateBadge">
+        update mst_worker set badge_hash = #{badgeHash}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where worker_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="updatePin">
+        update mst_worker set pin_hash = #{pinHash}, pin_fail_cnt = 0, pin_locked_until = null, row_ver = row_ver + 1,
+               updated_at = now(), updated_by = #{by}
+         where worker_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <select id="findWorkerIdByBadge" resultType="long">
+        select worker_id from mst_worker where badge_hash = #{badgeHash}
+    </select>
+
+    <sql id="heldCols">
+        h.wq_id, h.worker_id, h.qual_id, q.qual_cd, q.qual_nm, h.acquired_on, h.expires_on, h.revoked_on, h.cert_no, h.remark,
+        h.row_ver, h.updated_at, h.updated_by
+    </sql>
+
+    <select id="findWorkerQuals" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$WorkerQualRow">
+        select <include refid="heldCols"/> from mst_worker_qual h join mst_qual q on q.qual_id = h.qual_id
+         where h.worker_id = #{workerId}
+         order by q.sort_no, q.qual_cd, h.acquired_on desc, h.wq_id desc
+    </select>
+
+    <select id="findWorkerQual" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$WorkerQualRow">
+        select <include refid="heldCols"/> from mst_worker_qual h join mst_qual q on q.qual_id = h.qual_id where h.wq_id = #{id}
+    </select>
+
+    <select id="insertWorkerQual" resultType="long" flushCache="true">
+        insert into mst_worker_qual (comp_cd, worker_id, qual_id, acquired_on, expires_on, revoked_on, cert_no, remark,
+                                     created_by, updated_by)
+        values (hb_current_comp(), #{workerId}, #{f.qualId}, #{f.acquiredOn}, #{f.expiresOn}, #{f.revokedOn}, #{f.certNo},
+                #{f.remark}, #{by}, #{by})
+        returning wq_id
+    </select>
+
+    <!-- 대상·취득일은 바꾸지 않는다(트리거도 막는다) — 갱신은 새 행 -->
+    <update id="updateWorkerQual">
+        update mst_worker_qual
+           set expires_on = #{f.expiresOn}, revoked_on = #{f.revokedOn}, cert_no = #{f.certNo}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wq_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 게이트 -->
+
+    <select id="findGateReqs" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$GateReqRow">
+        select r.qual_id, q.qual_cd, q.qual_nm, r.gate_mode
+          from mst_proc_qual_req r join mst_qual q on q.qual_id = r.qual_id
+         where r.proc_id = #{procId} and r.use_yn = 'Y' and q.use_yn = 'Y'
+         order by q.sort_no, q.qual_cd
+    </select>
+
+    <select id="findHeld" resultType="io.smarthappy.module.master.workforce.WorkforceDtos$WorkerQualRow">
+        select <include refid="heldCols"/> from mst_worker_qual h join mst_qual q on q.qual_id = h.qual_id
+         where h.worker_id = #{workerId}
+           and h.qual_id in <foreach collection="qualIds" item="q" open="(" separator="," close=")">#{q}</foreach>
+    </select>
+</mapper>

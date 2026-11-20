@@ -1,0 +1,283 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 시정조치(8D)·고객 요구사항(CSR) (P3 QMS Q4, docs/29). 상태 전이는 조건부 UPDATE(지금 상태) — 트리거 hb_guard_qms_capa 가 최종.
+     기한 판정(목록·상세 같은 식): 종결·취소는 없음, 종결 기한 초과가 초기 대응 초과보다 먼저 -->
+<mapper namespace="io.smarthappy.module.qms.CapaMapper">
+
+    <sql id="cols">
+        c.capa_id, c.capa_no, c.source, c.cust_id, u.cust_cd, u.cust_nm, c.item_id, i.item_cd, i.item_nm, c.title, c.occurred_on,
+        c.status, c.owner_user_id, o.user_nm as owner_nm, c.contain_due, c.close_due, c.csr_id,
+        (select s.csr_no || ' / ' || s.csr_rev from qms_cust_csr s where s.csr_id = c.csr_id) as csr_label,
+        c.d1_team, c.d2_problem, c.d3_contain, c.d4_cause, c.d5_action, c.d6_verify, c.d7_prevent, c.d8_close, c.ncr_id, n.ncr_no, n.status as ncr_status, c.apr_id,
+        a.status as apr_status, a.requester_id as apr_requester_id, c.contained_at, c.closed_at, c.closed_by, c.cancel_reason,
+        (select count(*) from qms_capa_spread s where s.capa_id = c.capa_id and s.status = 'OPEN') as spread_open_cnt,
+        c.row_ver, c.updated_at
+    </sql>
+
+    <sql id="from">
+        from qms_capa c
+        left join mst_cust u on u.cust_id = c.cust_id
+        left join mst_item i on i.item_id = c.item_id
+        left join sys_user o on o.user_id = c.owner_user_id
+        left join apr_request a on a.apr_id = c.apr_id
+        left join qms_ncr n on n.ncr_id = c.ncr_id
+    </sql>
+
+    <sql id="where">
+        from (select <include refid="cols"/>,
+                     case when c.status in ('CLOSED', 'CANCELLED') then null
+                          when cast(#{q.today} as date) &gt; c.close_due then 'CLOSE_OVERDUE'
+                          when c.status = 'OPEN' and cast(#{q.today} as date) &gt; c.contain_due then 'CONTAIN_OVERDUE'
+                          else 'ON_TIME' end as due_state
+              <include refid="from"/>) c
+        <where>
+            <if test="q.keywordLike != null">and (c.capa_no ilike #{q.keywordLike} escape '\' or c.title ilike #{q.keywordLike} escape '\'
+                or c.cust_cd ilike #{q.keywordLike} escape '\' or c.item_cd ilike #{q.keywordLike} escape '\')</if>
+            <if test="q.status != null">and c.status = #{q.status}</if>
+            <if test="q.source != null">and c.source = #{q.source}</if>
+            <if test="q.dueState != null">and c.due_state = #{q.dueState}</if>
+            <if test="q.status == null and !q.withClosed">and c.status not in ('CLOSED', 'CANCELLED')</if>
+        </where>
+    </sql>
+
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'CAPA_NO'">c.capa_no</when>
+                <when test="o.key == 'OCCURRED_ON'">c.occurred_on</when>
+                <when test="o.key == 'STATUS'">c.status</when>
+                <when test="o.key == 'CLOSE_DUE'">c.close_due</when>
+                <otherwise>c.updated_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        c.capa_id desc
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.CapaDtos$CapaRow">
+        select c.* <include refid="where"/> <include refid="orderBy"/> limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.qms.CapaDtos$CapaRow" fetchSize="1000">
+        select c.* <include refid="where"/> <include refid="orderBy"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.CapaDtos$CapaRow">
+        select <include refid="cols"/>,
+               case when c.status in ('CLOSED', 'CANCELLED') then null
+                    when cast(#{today} as date) &gt; c.close_due then 'CLOSE_OVERDUE'
+                    when c.status = 'OPEN' and cast(#{today} as date) &gt; c.contain_due then 'CONTAIN_OVERDUE'
+                    else 'ON_TIME' end as due_state
+          <include refid="from"/>
+         where c.capa_id = #{id}
+    </select>
+
+    <select id="lockCapa" resultType="string">
+        select status from qms_capa where capa_id = #{id} for update
+    </select>
+
+    <select id="capaStatus" resultType="string">
+        select status from qms_capa where capa_id = #{id}
+    </select>
+
+    <select id="findSpreads" resultType="io.smarthappy.module.qms.CapaDtos$SpreadRow">
+        select s.spread_id, s.line_no, s.target_type, coalesce(i.item_cd, p.proc_cd, u.cust_cd) as target_cd,
+               coalesce(i.item_nm, p.proc_nm, u.cust_nm) as target_nm, s.status, s.note
+          from qms_capa_spread s
+          left join mst_item i on i.item_id = s.item_id
+          left join mst_proc p on p.proc_id = s.proc_id
+          left join mst_cust u on u.cust_id = s.cust_id
+         where s.capa_id = #{id}
+         order by s.line_no
+    </select>
+
+    <select id="findNcr" resultType="io.smarthappy.module.qms.CapaDtos$NcrRef">
+        select ncr_id as id, status from qms_ncr where upper(ncr_no) = upper(#{no}) order by (ncr_no = #{no}) desc, ncr_id limit 1
+    </select>
+
+    <update id="updateCapaNcr">
+        update qms_capa set ncr_id = #{ncrId} where capa_id = #{id} and status not in ('CLOSING', 'CLOSED', 'CANCELLED')
+    </update>
+
+    <select id="findCust" resultType="io.smarthappy.module.qms.CapaDtos$Ref">
+        select cust_id as id, use_yn from mst_cust where cust_cd = #{cd}
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.qms.CapaDtos$Ref">
+        select item_id as id, use_yn, item_class_id as class_id from mst_item where item_cd = #{cd}
+    </select>
+
+    <select id="findProc" resultType="io.smarthappy.module.qms.CapaDtos$Ref">
+        select proc_id as id, use_yn from mst_proc where proc_cd = #{cd}
+    </select>
+
+    <select id="findClass" resultType="io.smarthappy.module.qms.CapaDtos$Ref">
+        select class_id as id, use_yn from mst_item_class where class_cd = #{cd}
+    </select>
+
+    <!-- 고객 클레임 기한의 근거: 그 고객의 사용 중·시작한 CSR 중 품목(또는 품목 클래스)이 맞는 것 → 대상 없는 것, 그다음 늦게 시작한 것 -->
+    <select id="findCsrDue" resultType="io.smarthappy.module.qms.CapaDtos$CsrDue">
+        select s.csr_id, (s.overrides ->> 'CONTAIN_DAYS')::int as contain_days, (s.overrides ->> 'CLOSE_DAYS')::int as close_days
+          from qms_cust_csr s
+         where s.cust_id = #{custId} and s.use_yn = 'Y' and s.effective_from &lt;= #{on}
+           and (s.overrides ->> 'CONTAIN_DAYS' is not null or s.overrides ->> 'CLOSE_DAYS' is not null)
+           and (not exists (select 1 from qms_cust_csr_target t where t.csr_id = s.csr_id)
+                or exists (select 1 from qms_cust_csr_target t left join mst_item i on i.item_id = cast(#{itemId} as bigint)
+                            where t.csr_id = s.csr_id and (t.item_id = cast(#{itemId} as bigint) or t.item_class_id = i.item_class_id)))
+         order by exists (select 1 from qms_cust_csr_target t where t.csr_id = s.csr_id) desc, s.effective_from desc, s.csr_id desc
+         limit 1
+    </select>
+
+    <select id="insertCapa" resultType="long" flushCache="true">
+        insert into qms_capa (comp_cd, capa_no, source, cust_id, item_id, title, occurred_on, owner_user_id, contain_due, close_due, csr_id,
+                              d1_team, d2_problem, d3_contain, d4_cause, d5_action, d6_verify, d7_prevent, d8_close, created_by, updated_by)
+        values (hb_current_comp(), #{capaNo}, #{f.source}, #{f.custId}, #{f.itemId}, #{f.title}, #{f.occurredOn}, #{f.ownerUserId},
+                #{containDue}, #{closeDue}, #{csrId}, #{f.d1Team}, #{f.d2Problem}, #{f.d3Contain}, #{f.d4Cause}, #{f.d5Action},
+                #{f.d6Verify}, #{f.d7Prevent}, #{f.d8Close}, #{by}, #{by})
+        returning capa_id
+    </select>
+
+    <update id="updateCapa">
+        update qms_capa
+           set cust_id = #{f.custId}, item_id = #{f.itemId}, title = #{f.title}, owner_user_id = #{f.ownerUserId},
+               d1_team = #{f.d1Team}, d2_problem = #{f.d2Problem}, d3_contain = #{f.d3Contain}, d4_cause = #{f.d4Cause},
+               d5_action = #{f.d5Action}, d6_verify = #{f.d6Verify}, d7_prevent = #{f.d7Prevent}, d8_close = #{f.d8Close},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where capa_id = #{id} and row_ver = #{f.rowVer} and status not in ('CLOSING', 'CLOSED', 'CANCELLED')
+    </update>
+
+    <delete id="deleteSpreads">
+        delete from qms_capa_spread where capa_id = #{id}
+    </delete>
+
+    <insert id="insertSpreads">
+        insert into qms_capa_spread (comp_cd, capa_id, line_no, target_type, item_id, proc_id, cust_id, status, note, created_by)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{id}, #{r.lineNo}, #{r.targetType}, #{r.itemId}, #{r.procId}, #{r.custId}, #{r.status}, #{r.note}, #{by})
+        </foreach>
+    </insert>
+
+    <!-- 다음 단계 / 반려·회수(CLOSING → ACTIONED). rowVer 가 없으면(결재 엔진) 상태만 본다 -->
+    <update id="setStatus">
+        update qms_capa set status = #{to}, contained_at = case when #{to} = 'CONTAINED' then now() else contained_at end,
+                            row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where capa_id = #{id} and status = #{from} <if test="rowVer != null">and row_ver = #{rowVer}</if>
+    </update>
+
+    <update id="submitClose">
+        update qms_capa set status = 'CLOSING', apr_id = #{aprId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where capa_id = #{id} and status = 'VERIFIED' and row_ver = #{rowVer}
+    </update>
+
+    <update id="close">
+        update qms_capa set status = 'CLOSED', closed_at = now(), closed_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where capa_id = #{id} and status = #{from} <if test="rowVer != null">and row_ver = #{rowVer}</if>
+    </update>
+
+    <update id="cancel">
+        update qms_capa set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where capa_id = #{id} and status not in ('CLOSING', 'CLOSED', 'CANCELLED') and row_ver = #{rowVer}
+    </update>
+
+    <!-- 종결된 8D 첨부는 근거로 굳힌다(공통 sys_file.locked_yn) -->
+    <update id="lockFiles">
+        update sys_file set locked_yn = 'Y', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where target_type = 'qms-capa' and target_id = cast(#{id} as varchar) and use_yn = 'Y' and locked_yn = 'N'
+    </update>
+
+    <!-- ================================================================ CSR -->
+
+    <sql id="csrCols">
+        s.csr_id, s.cust_id, u.cust_cd, u.cust_nm, s.csr_no, s.csr_rev, s.title, s.effective_from, s.overrides::text as overrides_json,
+        s.notify_req::text as notify_req_json,
+        s.use_yn, s.remark, s.row_ver, s.updated_at,
+        (select string_agg(coalesce(i.item_cd, k.class_cd), ', ' order by t.target_id) from qms_cust_csr_target t
+           left join mst_item i on i.item_id = t.item_id left join mst_item_class k on k.class_id = t.item_class_id
+          where t.csr_id = s.csr_id) as target_text
+    </sql>
+
+    <!-- CSR 목록·그리드가 같은 조건(UI 단계 3, 결정 #45) -->
+    <sql id="csrWhere">
+         <where>
+             <if test="custLike != null">and (u.cust_cd ilike #{custLike} escape '\' or u.cust_nm ilike #{custLike} escape '\'
+                 or s.csr_no ilike #{custLike} escape '\' or s.title ilike #{custLike} escape '\')</if>
+             <if test="!withUnused">and s.use_yn = 'Y'</if>
+         </where>
+    </sql>
+
+    <select id="findCsrs" resultType="io.smarthappy.module.qms.CapaDtos$CsrRow">
+        select <include refid="csrCols"/>
+          from qms_cust_csr s join mst_cust u on u.cust_id = s.cust_id
+         <include refid="csrWhere"/>
+         order by u.cust_cd, s.csr_no, s.effective_from desc, s.csr_id desc
+         limit #{limit}
+    </select>
+
+    <!-- CSR 그리드: 정렬은 허용 enum 키만(choose) + 마지막 PK -->
+    <select id="findCsrGrid" resultType="io.smarthappy.module.qms.CapaDtos$CsrRow">
+        select <include refid="csrCols"/>
+          from qms_cust_csr s join mst_cust u on u.cust_id = s.cust_id
+         <include refid="csrWhere"/>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'CUST_CD'">u.cust_cd</when>
+                <when test="o.key == 'CSR_NO'">s.csr_no</when>
+                <when test="o.key == 'EFFECTIVE_FROM'">s.effective_from</when>
+                <otherwise>s.updated_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+         s.csr_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countCsrs" resultType="long">
+        select count(*) from qms_cust_csr s join mst_cust u on u.cust_id = s.cust_id <include refid="csrWhere"/>
+    </select>
+
+    <select id="findCsr" resultType="io.smarthappy.module.qms.CapaDtos$CsrRow">
+        select <include refid="csrCols"/> from qms_cust_csr s join mst_cust u on u.cust_id = s.cust_id where s.csr_id = #{id}
+    </select>
+
+    <select id="findCsrTargets" resultType="io.smarthappy.module.qms.CapaDtos$CsrTargetRow">
+        select case when t.item_id is not null then 'ITEM' else 'ITEM_CLASS' end as target_type,
+               coalesce(i.item_cd, k.class_cd) as target_cd, coalesce(i.item_nm, k.class_nm) as target_nm
+          from qms_cust_csr_target t left join mst_item i on i.item_id = t.item_id left join mst_item_class k on k.class_id = t.item_class_id
+         where t.csr_id = #{id}
+         order by t.target_id
+    </select>
+
+    <select id="insertCsr" resultType="long" flushCache="true">
+        insert into qms_cust_csr (comp_cd, cust_id, csr_no, csr_rev, title, effective_from, overrides, use_yn, remark, notify_req, created_by, updated_by)
+        values (hb_current_comp(), #{f.custId}, #{f.csrNo}, #{f.csrRev}, #{f.title}, #{f.effectiveFrom}, #{f.overridesJson}::jsonb, #{f.useYn},
+                #{f.remark}, coalesce(cast(#{f.notifyReqJson} as jsonb), '{}'::jsonb), #{by}, #{by})
+        returning csr_id
+    </select>
+
+    <update id="updateCsr">
+        update qms_cust_csr set csr_no = #{f.csrNo}, csr_rev = #{f.csrRev}, title = #{f.title}, effective_from = #{f.effectiveFrom},
+                                overrides = #{f.overridesJson}::jsonb, use_yn = #{f.useYn}, remark = #{f.remark},
+                                notify_req = coalesce(cast(#{f.notifyReqJson} as jsonb), notify_req),
+                                row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where csr_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <delete id="deleteCsrTargets">
+        delete from qms_cust_csr_target where csr_id = #{id}
+    </delete>
+
+    <insert id="insertCsrTargets">
+        insert into qms_cust_csr_target (comp_cd, csr_id, item_id, item_class_id, created_by)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{id}, #{r.itemId}, #{r.itemClassId}, #{by})
+        </foreach>
+    </insert>
+</mapper>

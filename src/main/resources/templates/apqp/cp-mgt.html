@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  관리계획서 (apqp-cp) — P6 APQP A2 (docs/41 5장, 결정 C1~C8).
+  목록(hb.grid) → 상세: 머리(품목 · 근거 PFMEA 확정 리비전 · 라우팅 · 단계) / 특별특성 빠짐 점검 / 행 표(공정 단계 × 특성 × 관리 방법) / 행 편집.
+  PFMEA 에서 끌어오기는 추가만(사람이 고친 행을 덮지 않는다). 확정(APPROVE)하면 규격을 스냅샷하고 고칠 수 없다 — 새 리비전·다음 단계로.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/apqp.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">관리계획서</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<section id="listView" class="apqp-list">
+    <form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+        <label><span th:text="#{apqp.keyword}">번호·제목·품번</span><input name="keyword" maxlength="100"></label>
+        <label><span th:text="#{apqp.col.phase}">단계</span><select name="phase" id="phaseFilter"></select></label>
+        <fieldset class="hb-seg">
+            <legend th:text="#{apqp.col.status}">상태</legend>
+            <label><input type="radio" name="status" value="" checked><span th:text="#{apqp.status.current}">현행</span></label>
+            <label><input type="radio" name="status" value="DRAFT"><span th:text="#{apqp.status.DRAFT}">작성 중</span></label>
+            <label><input type="radio" name="status" value="RELEASED"><span th:text="#{apqp.status.RELEASED}">확정</span></label>
+            <label><input type="radio" name="status" value="ALL"><span th:text="#{common.all}">전체</span></label>
+        </fieldset>
+        <div class="hb-sp-actions">
+            <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+            <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+        </div>
+    </form>
+    <div class="hb-toolbar">
+        <button type="button" id="newBtn" th:if="${actions.contains('SAVE')}" th:text="#{apqp.cp.new}">신규 관리계획서</button>
+    </div>
+    <div id="cpGrid" class="hb-grid-host"></div>
+</section>
+
+<section id="detailView" class="apqp-detail" hidden>
+    <div class="apqp-head">
+        <button type="button" id="backBtn" class="hb-btn-secondary" th:text="#{apqp.backToList}">← 목록</button>
+        <h2 id="title"></h2>
+        <span id="statusBox"></span>
+        <span id="summary" class="hb-muted"></span>
+    </div>
+    <p id="staleBox" class="hb-notice" role="status" hidden></p>
+    <div class="hb-toolbar">
+        <button type="button" id="saveHeadBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+        <button type="button" id="pullBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{apqp.cp.pull}"
+                data-help-key="apqp-cp.pull">PFMEA 에서 끌어오기</button>
+        <button type="button" id="releaseBtn" class="hb-btn-secondary" th:if="${actions.contains('APPROVE')}" th:text="#{apqp.cp.release}"
+                data-help-key="apqp-cp.release">확정</button>
+        <button type="button" id="reviseBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{apqp.fmea.revise}"
+                data-help-key="apqp-cp.revise">새 리비전</button>
+        <span id="nextBox" class="apqp-inline apqp-next" th:if="${actions.contains('SAVE')}">
+            <select id="nextPhaseSel" th:aria-label="#{apqp.cp.nextPhase}"></select>
+            <button type="button" id="nextPhaseBtn" class="hb-btn-secondary" th:text="#{apqp.cp.nextPhase}" data-help-key="apqp-cp.nextPhase">다음 단계로</button>
+        </span>
+        <button type="button" id="excelBtn" class="hb-btn-secondary" th:if="${actions.contains('PRINT')}" th:text="#{apqp.form.download}"
+                data-help-key="apqp.form">엑셀 양식</button>
+        <button type="button" id="docBtn" class="hb-btn-secondary" hidden th:text="#{apqp.doc.publish}"
+                data-help-key="apqp.doc">QMS 문서로 올리기</button>
+        <span id="docInfo" class="hb-muted" hidden></span>
+        <!-- 되돌릴 수 없는 동작은 저장 줄 끝, 떨어진 자리(docs/40 P1 ④) -->
+        <span class="apqp-gap"></span>
+        <button type="button" id="deleteBtn" class="hb-btn-danger-outline" th:if="${actions.contains('SAVE')}" hidden th:text="#{apqp.cp.delete}">작성 중 리비전 삭제</button>
+    </div>
+    <p id="aprNotice" class="hb-notice" role="status" hidden></p>
+    <p id="routingNotice" class="hb-notice" role="status" hidden></p>
+    <div id="changeNotice" class="hb-notice" role="status" hidden>
+        <p id="changeHead" class="apqp-change-head"></p>
+        <ul id="changeList" class="apqp-change-list"></ul>
+    </div>
+    <p id="ownEcoNotice" class="hb-notice" role="status" hidden></p>
+    <section class="hb-sub apqp-approval" id="aprBox" hidden>
+        <h3 th:text="#{apqp.apr.title}" data-help-key="apqp.apr">결재 상신</h3>
+        <div class="apqp-inline">
+            <select id="aprUser" th:aria-label="#{apqp.apr.user}"></select>
+            <select id="aprType" th:aria-label="#{apqp.apr.type}">
+                <option value="APPROVE" th:text="#{apqp.apr.type.APPROVE}">결재</option>
+                <option value="AGREE" th:text="#{apqp.apr.type.AGREE}">합의</option>
+                <option value="REF" th:text="#{apqp.apr.type.REF}">참조</option>
+            </select>
+            <button type="button" id="aprAddBtn" class="hb-btn-secondary" th:text="#{apqp.apr.add}">+ 결재선</button>
+        </div>
+        <ol id="aprLines" class="apqp-apr-lines"></ol>
+        <div class="hb-toolbar"><button type="button" id="aprSubmitBtn" th:text="#{apqp.apr.submit}">상신</button></div>
+    </section>
+    <details class="apqp-headform" id="headDetails">
+        <summary th:text="#{apqp.cp.head}">머리(품목·근거 PFMEA·단계)</summary>
+        <form id="headForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{apqp.col.itemCd}">품번</span><input data-field="itemCd" list="itemList" maxlength="40" required></label>
+            <datalist id="itemList"></datalist>
+            <label><span th:text="#{apqp.cp.basisFmea}">근거 PFMEA</span><select data-field="fmeaId" id="fmeaSel" data-help-key="apqp-cp.fmea"></select></label>
+            <label><span th:text="#{apqp.col.routing}">라우팅</span><select data-field="routingId" id="routingSel"></select></label>
+            <label><span th:text="#{apqp.col.phase}">단계</span><select data-field="phase" id="phaseSel" required data-help-key="apqp-cp.phase"></select></label>
+            <label class="hb-check apqp-create-only"><input type="checkbox" data-field="pullFromFmea" checked><span th:text="#{apqp.cp.pullOnCreate}">PFMEA 위험행으로 시작</span></label>
+            <label class="hb-wide"><span th:text="#{apqp.col.title}">제목</span><input data-field="title" maxlength="200" required></label>
+            <label><span th:text="#{apqp.col.project}">프로젝트</span><select data-field="projId" id="projSel"></select></label>
+            <label class="hb-wide"><span th:text="#{apqp.col.team}">팀</span><input data-field="team" maxlength="500"></label>
+            <label class="hb-wide"><span th:text="#{apqp.cp.changeReason}">개정 사유</span><input data-field="changeReason" maxlength="500"
+                    data-help-key="apqp-cp.changeReason"></label>
+        </form>
+    </details>
+
+    <section class="hb-sub apqp-gaps" id="gapBox" hidden>
+        <h3 th:text="#{apqp.cp.gaps}">행이 없는 특별특성</h3>
+        <ul id="gapList"></ul>
+    </section>
+
+    <section class="hb-sub apqp-compare" id="compareBox" hidden>
+        <h3 th:text="#{apqp.cp.compare}" data-help-key="apqp-cp.compare">검사계획 대조</h3>
+        <p id="compareSummary" class="hb-muted"></p>
+        <div class="apqp-scroll">
+            <table class="hb-cmp-table" id="compareTable">
+                <thead><tr>
+                    <th th:text="#{apqp.cp.cmpKind}">구분</th>
+                    <th th:text="#{apqp.cp.char}">특성</th>
+                    <th th:text="#{apqp.cp.inspType}">검사 유형</th>
+                    <th th:text="#{apqp.cp.proc}">공정</th>
+                    <th th:text="#{apqp.cp.cmpPlan}">검사계획</th>
+                    <th th:text="#{apqp.cp.gauge}">계측기</th>
+                    <th th:text="#{apqp.cp.freq}">주기</th>
+                    <th th:text="#{apqp.cp.sample}">샘플</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="apqp-cp-lines" id="linesBox">
+        <h3 th:text="#{apqp.cp.lines}">관리 항목</h3>
+        <div class="apqp-scroll">
+            <table class="hb-cmp-table apqp-cp-table" id="lineTable">
+                <thead><tr>
+                    <th>No</th>
+                    <th th:text="#{apqp.col.step}">공정 단계</th>
+                    <th th:text="#{apqp.cp.char}">특성</th>
+                    <th th:text="#{apqp.col.special}">특별특성</th>
+                    <th th:text="#{apqp.cp.spec}">규격</th>
+                    <th th:text="#{apqp.cp.ctrlMethod}">관리 방법</th>
+                    <th th:text="#{apqp.cp.evalMethod}">평가·측정 방법</th>
+                    <th th:text="#{apqp.cp.gauge}">계측기</th>
+                    <th th:text="#{apqp.cp.sample}">샘플</th>
+                    <th th:text="#{apqp.cp.freq}">주기</th>
+                    <th th:text="#{apqp.cp.reaction}">반응계획</th>
+                    <th>AP</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <section class="hb-sub" id="lineBox">
+            <h4 id="lineTitle"></h4>
+            <form id="lineForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{apqp.col.step}">공정 단계</span><select data-field="stepId" id="stepSel"></select></label>
+                <label id="stepTextBox"><span th:text="#{apqp.cp.stepText}">공정 단계(글자)</span><input data-field="stepText" maxlength="200"></label>
+                <label><span th:text="#{apqp.cp.char}">특성</span><select data-field="charId" id="charSel"></select></label>
+                <label id="charTextBox"><span th:text="#{apqp.cp.charText}">특성(글자)</span><input data-field="charText" maxlength="200"></label>
+                <label><span th:text="#{apqp.cp.ctrlMethod}">관리 방법</span><select data-field="ctrlMethod" id="methodSel" required></select></label>
+                <label class="hb-wide"><span th:text="#{apqp.cp.evalMethod}">평가·측정 방법</span><input data-field="evalMethod" maxlength="500"></label>
+                <label><span th:text="#{apqp.cp.gauge}">계측기</span><select data-field="gaugeClass" id="gaugeSel"></select></label>
+                <label><span th:text="#{apqp.cp.inspType}">검사 유형</span><select data-field="inspType" id="inspTypeSel" data-help-key="apqp-cp.inspType"></select></label>
+                <label><span th:text="#{apqp.cp.sampleN}">샘플 수</span><input data-field="sampleN" inputmode="numeric" maxlength="7" class="apqp-num"></label>
+                <label><span th:text="#{apqp.cp.sampleText}">샘플(글자)</span><input data-field="sampleText" maxlength="100"></label>
+                <label><span th:text="#{apqp.cp.freq}">주기</span><select data-field="freqType" id="freqSel"></select></label>
+                <label><span th:text="#{apqp.cp.freqN}">주기 값</span><input data-field="freqN" inputmode="numeric" maxlength="7" class="apqp-num"></label>
+                <label class="hb-wide"><span th:text="#{apqp.cp.reaction}">반응계획</span><input data-field="reactionPlan" maxlength="500"></label>
+                <label class="hb-wide"><span th:text="#{apqp.cp.risk}">근거 위험행</span><select data-field="riskId" id="riskSel"></select></label>
+                <label><span th:text="#{apqp.col.special}">특별특성</span><select data-field="specialCls" id="specialSel"></select></label>
+            </form>
+            <div class="hb-toolbar apqp-edit">
+                <button type="button" id="saveLineBtn" class="hb-btn-secondary" th:text="#{common.save}">저장</button>
+                <button type="button" id="newLineBtn" class="hb-btn-ghost" th:text="#{apqp.cp.newLine}">새 행</button>
+                <button type="button" class="hb-btn-ghost" data-move="UP" th:text="#{apqp.moveUp}">위로</button>
+                <button type="button" class="hb-btn-ghost" data-move="DOWN" th:text="#{apqp.moveDown}">아래로</button>
+                <span class="apqp-gap"></span>
+                <button type="button" id="deleteLineBtn" class="hb-btn-danger-outline" hidden th:text="#{apqp.cp.deleteLine}">행 삭제</button>
+            </div>
+        </section>
+    </section>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/apqp/cp-mgt.js}"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  가용 정의 하나 (docs/53 2장, 사용자 결정 2026-10-29 F2·F-a) + 출하 예약(4장 (가)) — SQL 조각만, 문장 없음.
+  가용 = 상태 AVAILABLE 이고, 칸 용도가 출하 대기(STAGING)·검사(QC)가 아니고, 그 칸이나 조상이 폐기(SCRAP)가 아니고, LOT 이 보류(hold)가 아님.
+  쓰는 곳(다섯): 출하 피킹(ShipMapper)·생산 투입(LotStockMapper)·MRO 출고(MroMapper)·차감 미리보기(AllocMapper)·APS 가용(WmsLinkMapper).
+  재고 행 별칭은 s(inv_stock — node_id·stock_status). 다른 매퍼에서 부를 때와 조각 안의 include 는 이름공간을 붙여 쓴다.
+  LOT 보류(hold_yn)도 이 정의 안(사용자 결정 2026-10-30 A-1 — 다섯 경로가 같은 규칙. 차감 미리보기는 칸 플래그처럼 lotFree 를 따로 받아 HOLD 로 건너뜀).
+-->
+<mapper namespace="io.smarthappy.module.wms.inv.AvailSql">
+
+    <!-- 꺼낼 수 있는 칸: 용도 STAGING·QC 아님(칸 자신), SCRAP 아님(칸이나 조상 — 폐기 창고 아래 로케이션) -->
+    <sql id="availLoc">
+        not exists (select 1 from wms_loc_attr ux where ux.node_id = s.node_id and ux.loc_usage in ('STAGING', 'QC'))
+        and not exists (
+            with recursive up as (
+                select h.node_id, h.parent_id, 1 as lv from mst_equip_hier h where h.node_id = s.node_id
+                union all
+                select p.node_id, p.parent_id, u.lv + 1 from up u join mst_equip_hier p on p.node_id = u.parent_id where u.lv &lt; 20
+            )
+            select 1 from up join wms_loc_attr x on x.node_id = up.node_id where x.loc_usage = 'SCRAP')
+    </sql>
+
+    <!--
+      출하 예약(docs/53 (가) 계산형 소프트 예약, 2026-10-29) — 열린 출하 지시(DRAFT·PICKING) 줄마다 아직 피킹하지 않은 수량
+      = 지시 수량 − 피킹 합(PICKED·SHIPPED), 0 아래면 0. 행 = (plant_cd, ship_id, item_id, qty). 새 표 없음 — 피킹·피킹 취소·출하·지시 취소가 곧 해제.
+      쓰는 곳: StockQuery.reservedByShip(WmsLinkMapper)·홈 카드 "예약 초과 품목"(ShipHomeMapper). 품목 기본 단위(지시 줄 단위와 같음)
+    -->
+    <sql id="openShipReserve">
+        select h.plant_cd, h.ship_id, l.item_id,
+               greatest(l.qty - coalesce((select sum(p.qty) from wms_ship_pick p
+                                           where p.ship_line_id = l.ship_line_id and p.status in ('PICKED', 'SHIPPED')), 0), 0) as qty
+          from wms_ship h
+          join wms_ship_line l on l.ship_id = h.ship_id
+         where h.status in ('DRAFT', 'PICKING')
+    </sql>
+
+    <!-- 보류 아닌 LOT(비관리 품목 = lot_id 없음은 해당 없음) — LOT 보류는 MES lot_master.hold_yn(읽기만) -->
+    <sql id="lotFree">
+        (s.lot_id is null or not exists (select 1 from lot_master hx where hx.lot_id = s.lot_id and hx.hold_yn = 'Y'))
+    </sql>
+
+    <!-- 가용 재고 행 = 상태 AVAILABLE + 꺼낼 수 있는 칸 + 보류 아닌 LOT -->
+    <sql id="available">
+        s.stock_status = 'AVAILABLE' and <include refid="io.smarthappy.module.wms.inv.AvailSql.availLoc"/>
+        and <include refid="io.smarthappy.module.wms.inv.AvailSql.lotFree"/>
+    </sql>
+</mapper>

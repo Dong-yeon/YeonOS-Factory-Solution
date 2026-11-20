@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 변경 표시·조회 (PLM 3b, docs/39 13장). 회사 조건은 RLS. MES 표는 잠금 없이 읽기만 -->
+<mapper namespace="io.smarthappy.module.plm.link.PlmLinkMapper">
+
+    <select id="findLot" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$LotRef">
+        select l.item_id, l.wo_id from lot_master l where l.lot_id = #{lotId}
+    </select>
+
+    <select id="findWo" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$LotRef">
+        select w.item_id, w.wo_id, w.bom_id, w.routing_id from prd_wo w where w.wo_id = #{woId}
+    </select>
+
+    <select id="equipVisible" resultType="boolean">
+        select exists (select 1 from mst_equip q where q.equip_id = #{equipId})
+    </select>
+
+    <!--
+      대상 맞춤: BOM·ROUTING = 지시 리비전(날짜 무관) / EQUIP·PROC = 발생일 ≥ 유효일 /
+      ITEM = 같은 품목의 다른 유형 대상이 없을 때만, 발생일 ≥ 유효일. 표시 끝이 있으면 유효일 ≤ 발생일 ≤ 끝
+    -->
+    <select id="candidates" resultType="long">
+        select e.eco_id
+          from plm_eco e
+         where e.status = 'RELEASED'
+           and (e.mark_until is null or (e.effective_date &lt;= #{day} and #{day} &lt;= e.mark_until))
+           and exists (
+               select 1 from plm_eco_target t
+                where t.eco_id = e.eco_id and t.item_id = #{itemId}
+                  and (   (t.target_type = 'BOM' and t.bom_id = #{bomId,jdbcType=BIGINT})
+                       or (t.target_type = 'ROUTING' and t.routing_id = #{routingId,jdbcType=BIGINT})
+                       or (e.effective_date &lt;= #{day} and (
+                              (t.target_type = 'EQUIP' and t.equip_id = #{equipId,jdbcType=BIGINT})
+                           or (t.target_type = 'PROC' and exists (select 1 from prd_wo_proc p
+                                                                   where p.wo_id = #{woId,jdbcType=BIGINT} and p.proc_id = t.proc_id))
+                           or (t.target_type = 'ITEM' and not exists (select 1 from plm_eco_target o
+                                                                       where o.eco_id = t.eco_id and o.item_id = t.item_id
+                                                                         and o.target_type &lt;&gt; 'ITEM'))))))
+         order by e.eco_id
+    </select>
+
+    <select id="lockReleased" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$MarkEco">
+        select e.eco_id, e.change_kind, e.mark_lots, e.mark_until
+          from plm_eco e where e.eco_id = #{ecoId} and e.status = 'RELEASED'
+           for no key update
+    </select>
+
+    <select id="marked" resultType="boolean">
+        select exists (select 1 from plm_eco_lot m where m.eco_id = #{ecoId} and m.lot_id = #{lotId})
+    </select>
+
+    <select id="countMarks" resultType="int">
+        select count(*) from plm_eco_lot m where m.eco_id = #{ecoId}
+    </select>
+
+    <insert id="insertMark">
+        insert into plm_eco_lot (comp_cd, eco_id, lot_id, mark_reason, seq_no, wo_id, equip_id, occurred_at, recorded_by)
+        values (hb_current_comp(), #{ecoId}, #{lotId}, #{reason}, #{seqNo}, #{woId,jdbcType=BIGINT}, #{equipId,jdbcType=BIGINT},
+                #{occurredAt}, #{by})
+    </insert>
+
+    <select id="latestMark" resultType="long">
+        select e.eco_id from plm_eco_lot m join plm_eco e on e.eco_id = m.eco_id
+         where m.lot_id = #{lotId}
+         order by e.released_at desc, e.eco_id desc
+         limit 1
+    </select>
+
+    <select id="ecosOfLot" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$TraceRow">
+        select e.eco_id, e.eco_no, e.title, e.effective_date, e.cust_approval_status,
+               case when bool_or(x.via = 'REVISION') then 'REVISION' else 'MARK' end as via
+          from (
+                select t.eco_id, 'REVISION' as via
+                  from lot_master l
+                  join prd_wo w on w.wo_id = l.wo_id
+                  join plm_eco_target t on (t.target_type = 'BOM' and t.bom_id = w.bom_id)
+                                        or (t.target_type = 'ROUTING' and t.routing_id = w.routing_id)
+                 where l.lot_id = #{lotId}
+                union all
+                select m.eco_id, 'MARK' from plm_eco_lot m where m.lot_id = #{lotId}
+               ) x
+          join plm_eco e on e.eco_id = x.eco_id
+         where e.status = 'RELEASED'
+         group by e.eco_id, e.eco_no, e.title, e.effective_date, e.cust_approval_status
+         order by e.effective_date, e.eco_id
+    </select>
+
+    <!-- ================================================================ QMS 2부 계약 (docs/39 16장) — 읽기만 -->
+
+    <select id="markedLots" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$MarkRow">
+        select m.lot_id, l.lot_no, m.mark_reason, m.seq_no, m.occurred_at
+          from plm_eco_lot m join lot_master l on l.lot_id = m.lot_id
+         where m.eco_id = #{ecoId}
+         order by m.seq_no
+    </select>
+
+    <!-- 품목의 첫 LOT 표시 — 적용된 ECO 만, 최근 표시부터. 읽기만(QMS 착수 게이트, docs/29_P3 12.9 R-1) -->
+    <select id="firstLotsOfItem" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$MarkRow">
+        select m.eco_id, e.eco_no, m.lot_id, l.lot_no, m.mark_reason, m.seq_no, m.occurred_at
+          from plm_eco_lot m
+          join lot_master l on l.lot_id = m.lot_id
+          join plm_eco e on e.eco_id = m.eco_id
+         where l.item_id = #{itemId} and m.mark_reason = 'FIRST_LOT' and e.status = 'RELEASED'
+         order by m.recorded_at desc, m.eco_lot_id desc
+         limit #{limit}
+    </select>
+
+    <!--
+      출하 확인 (WMS 출하 게이트, docs/39 17장) — LOT 에 걸린 적용 ECO = (가) 리비전 경로 + (나) 표시(ecosOfLot 과 같은 근거).
+      그중 PPAP 패키지가 있고 APPROVED 가 아닌 것만. 읽기만
+    -->
+    <select id="shipChecks" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$ShipRow">
+        select x.lot_id, e.eco_id, e.eco_no, p.status as ppap_status
+          from (
+                select l.lot_id, t.eco_id
+                  from lot_master l
+                  join prd_wo w on w.wo_id = l.wo_id
+                  join plm_eco_target t on (t.target_type = 'BOM' and t.bom_id = w.bom_id)
+                                        or (t.target_type = 'ROUTING' and t.routing_id = w.routing_id)
+                 where l.lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+                union
+                select m.lot_id, m.eco_id
+                  from plm_eco_lot m
+                 where m.lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+               ) x
+          join plm_eco e on e.eco_id = x.eco_id
+          join plm_ppap p on p.eco_id = e.eco_id
+         where e.status = 'RELEASED' and p.status &lt;&gt; 'APPROVED'
+         order by x.lot_id, e.eco_id
+    </select>
+
+    <!-- ECO 의 PPAP 패키지 (계약 EcoLookup.ppap, PMS PM7) — 읽기만 -->
+    <select id="ppapOf" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$PpapRow">
+        select p.ppap_id, p.status, p.decided_on from plm_ppap p where p.eco_id = #{ecoId}
+    </select>
+
+    <!-- QMS 4M 고객 통지 판단(docs/29_P3 52장) — 읽기만 -->
+    <select id="ecoCustId" resultType="long">
+        select e.cust_id from plm_eco e where e.eco_id = #{ecoId}
+    </select>
+
+    <select id="pcnsOf" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$PcnRow">
+        select p.pcn_id, p.pcn_no, p.cust_id, p.notified_on, p.response_due, p.status, p.responded_on
+          from plm_pcn p where p.eco_id = #{ecoId}
+         order by p.notified_on, p.pcn_id
+    </select>
+
+    <select id="ecoHead" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$EcoHead">
+        select <include refid="ecoHeadCols"/> from plm_eco e where e.eco_id = #{ecoId}
+    </select>
+
+    <select id="ecoTargets" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$TargetRef">
+        select <include refid="targetRefCols"/>
+          from plm_eco_target t
+         where t.eco_id = #{ecoId}
+         order by t.seq
+    </select>
+
+    <sql id="targetRefCols">
+        t.eco_id, t.target_type, t.item_id,
+        case t.target_type when 'EQUIP' then t.equip_id when 'PROC' then t.proc_id when 'DOC' then t.doc_rev_id end as ref_id
+    </sql>
+
+    <sql id="ecoHeadCols">
+        e.eco_id, e.eco_no, e.title, e.change_kind, e.status, e.effective_date, e.mark_lots, e.mark_until, e.cust_approval_status,
+        e.approved_at, e.released_at
+    </sql>
+
+    <select id="ecoHeadByNo" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$EcoHead">
+        select <include refid="ecoHeadCols"/> from plm_eco e where e.eco_no = #{ecoNo}
+    </select>
+
+    <select id="ecoHeads" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$EcoHead">
+        select <include refid="ecoHeadCols"/> from plm_eco e
+         where e.eco_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by e.eco_id
+    </select>
+
+    <select id="ecoTargetsOf" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$TargetRef">
+        select <include refid="targetRefCols"/>
+          from plm_eco_target t
+         where t.eco_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by t.eco_id, t.seq
+    </select>
+
+    <!-- 품목별 ECO (docs/39 24장) — 대상 행의 품목 = itemId(EcoView.itemIds 정의), 상태·기준 시각으로 거름. 색인 ix_plm_eco_target_item_ref -->
+    <select id="ecoHeadsForItem" resultType="io.smarthappy.module.plm.link.PlmLinkMapper$EcoHead">
+        select <include refid="ecoHeadCols"/>
+          from plm_eco e
+         where exists (select 1 from plm_eco_target t where t.eco_id = e.eco_id and t.item_id = #{itemId})
+        <choose>
+            <when test="basis == 'RELEASED'">
+           and e.status = 'RELEASED' and e.released_at &gt;= #{from}
+         order by e.released_at, e.eco_id
+            </when>
+            <otherwise>
+           and e.status in ('APPROVED', 'RELEASED') and e.approved_at &gt;= #{from}
+         order by e.approved_at, e.eco_id
+            </otherwise>
+        </choose>
+         limit #{limit}
+    </select>
+</mapper>

@@ -1,0 +1,29 @@
+# 테스트: 접속 정보는 PostgresTestBase 가 Testcontainers 값으로 주입한다 (.env 값보다 우선)
+logging:
+  level:
+    # INFO(2026-11-10, docs/71 6.2): DEBUG 면 트랜잭션 관리자(TenantAwareTransactionManager)·MyBatis SQL 이 줄마다 찍혀
+    # 시험 결과 XML 이 1.5GB(그중 DEBUG 99.6%) — Jenkins junit OOM·디스크·시간 낭비. 한 번만 자세히 볼 때는
+    # 환경 변수 LOGGING_LEVEL_IO_SMARTHAPPY=DEBUG 로 돌린다(시험 JVM 이 환경을 물려받는다)
+    io.smarthappy: INFO
+    org.testcontainers: INFO
+
+happyboot:
+  deploy:
+    mode: saas    # 로컬 .env 의 DEPLOY_MODE·DEPLOY_COMP_CD(설치형 = 회사 1개) 값이 시험에 새지 않게 고정 — 시험은 회사코드를 여럿 쓴다(docs/72 4장)
+    comp-cd: ""
+  files:
+    root: build/test-files
+  scheduling:
+    enabled: false   # 테스트는 작업을 직접 호출한다
+  wms:
+    print-allow-loopback: true   # 가짜 라벨 프린터(127.0.0.1) — 운영 기본 false(docs/30 D6)
+  cms:
+    edge-allow-loopback: true    # 가짜 엣지 DIRECT 어댑터(127.0.0.1) — 운영 기본 false(docs/65 16.1)
+  status-file: build/test-status.json
+  pda:
+    dir: build/test-pda
+  ops:
+    allowed-ips: 127.0.0.1/32,10.99.0.0/16
+    secret-key: dGVzdC1vbmx5LW9wcy1rZXktMzItYnl0ZXMtLS0tLS0=
+  backup:
+    status-dir: build/test-backup-status

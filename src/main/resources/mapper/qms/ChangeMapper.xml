@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- P3 QMS 2부 Q5 4M 변경 (docs/29_P3 11장·12.1). plm_eco 는 lockEcoStatus(FOR SHARE) 에서만 읽는다 — ECO 머리는 PLM 계약 EcoLookup -->
+<mapper namespace="io.smarthappy.module.qms.ChangeMapper">
+
+    <sql id="listCols">
+        c.eco_id, c.eco_no, array_to_string(c.m4_types, ',') as m4_text, c.before_desc, c.after_desc, c.updated_at, c.updated_by,
+               (select count(*) from qms_change_char x where x.eco_id = c.eco_id) as char_cnt
+    </sql>
+
+    <!-- 목록·그리드가 같은 조건(UI 단계 3, 결정 #45) -->
+    <sql id="listWhere">
+         <where>
+             <if test="keywordLike != null">and (c.eco_no ilike #{keywordLike} escape '\' or c.before_desc ilike #{keywordLike} escape '\'
+                 or c.after_desc ilike #{keywordLike} escape '\')</if>
+             <if test="m4Type != null">and cast(#{m4Type} as varchar) = any (c.m4_types)</if>
+             <!-- 복귀 기한 지남(docs/29_P3 51.2 RV-5) — 서비스가 계약으로 고른 ECO id, 비면 0건 -->
+             <if test="ecoIds != null">and <choose><when test="ecoIds.isEmpty()">false</when><otherwise>c.eco_id in
+                 <foreach collection="ecoIds" item="x" open="(" separator="," close=")">#{x}</foreach></otherwise></choose></if>
+         </where>
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.ChangeDtos$ChangeRow">
+        select <include refid="listCols"/>
+          from qms_change c
+         <include refid="listWhere"/>
+         order by c.updated_at desc, c.eco_id desc
+         limit #{limit}
+    </select>
+
+    <!-- 그리드: 정렬은 허용 enum 키만(choose) + 마지막 PK. ECO 제목·상태는 PLM 계약으로 채워 정렬 대상 아님 -->
+    <select id="findGrid" resultType="io.smarthappy.module.qms.ChangeDtos$ChangeRow">
+        select <include refid="listCols"/>
+          from qms_change c
+         <include refid="listWhere"/>
+         order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ECO_NO'">c.eco_no</when>
+                <otherwise>c.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+         c.eco_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countList" resultType="long">
+        select count(*) from qms_change c <include refid="listWhere"/>
+    </select>
+
+    <select id="findHead" resultType="io.smarthappy.module.qms.ChangeDtos$ChangeHead">
+        select eco_id, eco_no, array_to_string(m4_types, ',') as m4_text, before_desc, after_desc, reason_desc, impact_desc, revert_cond, row_ver, updated_at, updated_by
+          from qms_change where eco_id = #{ecoId}
+    </select>
+
+    <select id="findChars" resultType="io.smarthappy.module.qms.ChangeDtos$CharRow">
+        select x.line_no, case when x.char_id is not null then 'CHAR' else 'PLAN' end as ref_type, x.char_id, x.insp_plan_id, x.impact_desc,
+               case when x.char_id is not null then coalesce(i.item_cd, p.proc_cd) || '-' || ch.char_no
+                    else coalesce(pi.item_cd, pk.class_cd, pp.proc_cd) || ' ' || pl.insp_type || ' ' || pl.rev end as ref_label,
+               case when x.char_id is not null then ch.char_nm else pl.status end as ref_nm
+          from qms_change_char x
+          left join qms_char ch on ch.char_id = x.char_id
+          left join mst_item i on i.item_id = ch.item_id
+          left join mst_proc p on p.proc_id = ch.proc_id
+          left join qms_insp_plan pl on pl.insp_plan_id = x.insp_plan_id
+          left join mst_item pi on pi.item_id = pl.item_id
+          left join mst_item_class pk on pk.class_id = pl.item_class_id
+          left join mst_proc pp on pp.proc_id = pl.proc_id
+         where x.eco_id = #{ecoId}
+         order by x.line_no
+    </select>
+
+    <select id="lockEcoStatus" resultType="string">
+        select status from plm_eco where eco_id = #{ecoId} for share
+    </select>
+
+    <!-- 영향 행 후보: ECO 대상 품목의 제품 특성 + 대상 공정의 공정 특성(사용 중) -->
+    <select id="charChoices" resultType="io.smarthappy.module.qms.ChangeDtos$Choice">
+        select 'CHAR' as ref_type, ch.char_id as ref_id, coalesce(i.item_cd, p.proc_cd) || '-' || ch.char_no as ref_label, ch.char_nm as ref_nm
+          from qms_char ch
+          left join mst_item i on i.item_id = ch.item_id
+          left join mst_proc p on p.proc_id = ch.proc_id
+         where ch.use_yn = 'Y'
+           and (<choose><when test="itemIds != null and !itemIds.isEmpty()">ch.item_id in
+                <foreach collection="itemIds" item="x" open="(" separator="," close=")">#{x}</foreach></when><otherwise>false</otherwise></choose>
+                or <choose><when test="procIds != null and !procIds.isEmpty()">(ch.item_id is null and ch.proc_id in
+                <foreach collection="procIds" item="x" open="(" separator="," close=")">#{x}</foreach>)</when><otherwise>false</otherwise></choose>)
+         order by ref_label
+         limit 500
+    </select>
+
+    <!-- 그 품목(또는 그 품목의 클래스)·공정의 작성 중·확정 검사계획 -->
+    <select id="planChoices" resultType="io.smarthappy.module.qms.ChangeDtos$Choice">
+        select 'PLAN' as ref_type, pl.insp_plan_id as ref_id,
+               coalesce(pi.item_cd, pk.class_cd, pp.proc_cd) || ' ' || pl.insp_type || ' ' || pl.rev as ref_label, pl.status as ref_nm
+          from qms_insp_plan pl
+          left join mst_item pi on pi.item_id = pl.item_id
+          left join mst_item_class pk on pk.class_id = pl.item_class_id
+          left join mst_proc pp on pp.proc_id = pl.proc_id
+         where pl.status in ('DRAFT', 'RELEASED')
+           and (<choose><when test="itemIds != null and !itemIds.isEmpty()">(pl.item_id in
+                <foreach collection="itemIds" item="x" open="(" separator="," close=")">#{x}</foreach>
+                or pl.item_class_id in (select m.item_class_id from mst_item m where m.item_id in
+                <foreach collection="itemIds" item="x" open="(" separator="," close=")">#{x}</foreach>))</when><otherwise>false</otherwise></choose>
+                or <choose><when test="procIds != null and !procIds.isEmpty()">pl.proc_id in
+                <foreach collection="procIds" item="x" open="(" separator="," close=")">#{x}</foreach></when><otherwise>false</otherwise></choose>)
+         order by ref_label
+         limit 500
+    </select>
+
+    <select id="charOfComp" resultType="long">
+        select char_id from qms_char where char_id = #{id}
+    </select>
+
+    <select id="planOfComp" resultType="long">
+        select insp_plan_id from qms_insp_plan where insp_plan_id = #{id}
+    </select>
+
+    <insert id="insertChange">
+        insert into qms_change (eco_id, comp_cd, eco_no, m4_types, before_desc, after_desc, reason_desc, impact_desc, revert_cond,
+                                created_by, updated_by)
+        values (#{ecoId}, hb_current_comp(), '-', #{f.m4Types, typeHandler=org.apache.ibatis.type.ArrayTypeHandler}::varchar(10)[],
+                #{f.beforeDesc}, #{f.afterDesc}, #{f.reasonDesc}, #{f.impactDesc}, #{f.revertCond}, #{by}, #{by})
+    </insert>
+
+    <update id="updateChange">
+        update qms_change set m4_types = #{f.m4Types, typeHandler=org.apache.ibatis.type.ArrayTypeHandler}::varchar(10)[],
+                              before_desc = #{f.beforeDesc}, after_desc = #{f.afterDesc}, reason_desc = #{f.reasonDesc},
+                              impact_desc = #{f.impactDesc}, revert_cond = #{f.revertCond},
+                              row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and row_ver = #{f.rowVer}
+    </update>
+
+    <delete id="deleteChars">
+        delete from qms_change_char where eco_id = #{ecoId}
+    </delete>
+
+    <insert id="insertChars">
+        insert into qms_change_char (comp_cd, eco_id, line_no, char_id, insp_plan_id, impact_desc, created_by)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{ecoId}, #{r.lineNo}, #{r.charId}, #{r.inspPlanId}, #{r.impactDesc}, #{by})
+        </foreach>
+    </insert>
+
+    <delete id="deleteChange">
+        delete from qms_change where eco_id = #{ecoId} and row_ver = #{rowVer}
+    </delete>
+
+    <select id="exists" resultType="boolean">
+        select exists (select 1 from qms_change where eco_id = #{ecoId})
+    </select>
+
+    <select id="charCount" resultType="int">
+        select count(*) from qms_change_char where eco_id = #{ecoId}
+    </select>
+</mapper>

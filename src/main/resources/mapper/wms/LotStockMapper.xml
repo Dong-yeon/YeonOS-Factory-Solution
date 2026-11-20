@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- LOT 계보 → 재고 원장 (P4 2부 B5·B2+, docs/30 12.4). MES 표는 읽기만, 잠그는 것은 inv_stock 칸(stock_id 순) -->
+<mapper namespace="io.smarthappy.module.wms.inv.LotStockMapper">
+
+    <select id="findGen" resultType="io.smarthappy.module.wms.inv.LotStockMapper$GenRow">
+        select g.gen_id, g.rel_type, g.parent_lot_id, g.child_lot_id, g.qty, g.unit_cd, g.wo_proc_id, g.occurred_at, g.recorded_by,
+               g.performed_by, g.reversal_of_id, g.reason, l.item_id, i.unit_cd as item_unit_cd, i.lot_ctrl_yn,
+               w.plant_cd as proc_plant_cd, wp.node_id as proc_node_id
+          from lot_genealogy g
+          join lot_master l on l.lot_id = g.parent_lot_id
+          join mst_item i on i.item_id = l.item_id
+          left join prd_wo_proc wp on wp.wo_proc_id = g.wo_proc_id
+          left join prd_wo w on w.wo_id = wp.wo_id
+         where g.gen_id = #{genId}
+    </select>
+
+    <select id="feedNodesOf" resultType="long">
+        select n.node_id from mst_equip_hier n where n.node_id = #{nodeId}
+        union
+        select p.node_id from mst_equip_hier n join mst_equip_hier p on p.node_id = n.parent_id
+         where n.node_id = #{nodeId} and n.node_type = 'CELL' and p.node_type = 'LINE'
+    </select>
+
+    <!-- 출하 대기 칸에만 남은 가용 수량 — 투입 부족 안내용(docs/53 F1) -->
+    <select id="stagingQty" resultType="java.math.BigDecimal">
+        select coalesce(sum(s.qty), 0)
+          from inv_stock s
+          join wms_loc_attr a on a.node_id = s.node_id
+         where s.plant_cd = #{plantCd} and s.item_id = #{itemId} and s.lot_id is not distinct from #{lotId}::bigint
+           and s.stock_status = 'AVAILABLE' and s.qty &gt; 0 and a.loc_usage = 'STAGING'
+    </select>
+
+    <select id="issueCells" resultType="io.smarthappy.module.wms.inv.LotStockMapper$Cell">
+        select s.stock_id, s.plant_cd, s.node_id, s.stock_status, s.qty
+          from inv_stock s
+          left join wms_loc_attr a on a.node_id = s.node_id
+         where s.plant_cd = #{plantCd} and s.item_id = #{itemId} and s.lot_id is not distinct from #{lotId}::bigint
+           and s.qty &gt; 0
+           -- 가용 정의 하나(AvailSql) — 출하 대기(F1)·검사 용도(F-a)·폐기 칸은 투입하지 않는다
+           and <include refid="io.smarthappy.module.wms.inv.AvailSql.available"/>
+           -- 다른 라인을 보급하는 라인 옆 위치는 건드리지 않는다(그 라인의 자재)
+           and not (a.loc_usage = 'LINESIDE' and a.feed_node_id is not null
+                    <if test="feeds != null and !feeds.isEmpty()">
+                        and a.feed_node_id not in <foreach collection="feeds" item="f" open="(" separator="," close=")">#{f}</foreach>
+                    </if>)
+         order by case when a.loc_usage = 'LINESIDE'
+                        <choose>
+                            <when test="feeds != null and !feeds.isEmpty()">
+                                and a.feed_node_id in <foreach collection="feeds" item="f" open="(" separator="," close=")">#{f}</foreach>
+                            </when>
+                            <otherwise>and false</otherwise>
+                        </choose>
+                       then 0 else 1 end,
+                  coalesce(a.pick_seq, 0), s.node_id
+    </select>
+
+    <select id="convCells" resultType="io.smarthappy.module.wms.inv.LotStockMapper$Cell">
+        select s.stock_id, s.plant_cd, s.node_id, s.stock_status, s.qty
+          from inv_stock s
+          left join wms_loc_attr a on a.node_id = s.node_id
+         where s.lot_id = #{lotId} and s.qty &gt; 0
+         order by array_position(array[<foreach collection="statusOrder" item="st" separator=",">#{st}</foreach>]::varchar[],
+                                 s.stock_status::varchar),
+                  coalesce(a.pick_seq, 0), s.node_id
+    </select>
+
+    <select id="lockCells" resultType="io.smarthappy.module.wms.inv.LotStockMapper$Cell">
+        select s.stock_id, s.plant_cd, s.node_id, s.stock_status, s.qty
+          from inv_stock s
+         where s.stock_id in <foreach collection="stockIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by s.item_id, s.node_id, s.lot_id nulls first, s.stock_status   -- InventoryService.CELL_ORDER 와 같은 순서(docs/30 11.6)
+           for update
+    </select>
+
+    <select id="stockTracked" resultType="boolean">
+        select exists (select 1 from inv_trx t where t.lot_id = #{lotId})
+            or exists (select 1 from inv_trx t where t.src_type = 'MAT_RECEIPT' and t.src_id = #{lotId})
+            or exists (select 1 from inv_trx t join prd_receipt r on r.receipt_id = t.src_id
+                        where t.src_type = 'PRD_RECEIPT' and r.lot_id = #{lotId})
+    </select>
+
+    <select id="lastPlantOf" resultType="string">
+        select t.plant_cd from inv_trx t where t.lot_id = #{lotId} order by t.trx_id desc limit 1
+    </select>
+
+    <select id="liveTrxOf" resultType="long">
+        select t.trx_id
+          from inv_trx t
+         where t.src_type = 'LOT_GEN' and t.src_id = #{genId} and t.reversal_of_id is null
+           and t.trx_type in ('ISSUE_WO', 'CONV_OUT')
+           and not exists (select 1 from inv_trx r where r.reversal_of_id = t.trx_id)
+         order by t.trx_id
+    </select>
+</mapper>

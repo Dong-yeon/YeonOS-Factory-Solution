@@ -1,0 +1,379 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- BOM 관리 (P1 3a, docs/18). 목록·건수·엑셀은 같은 조건·정렬 조각. 전개·역전개(3b)는 별도 매퍼 -->
+<mapper namespace="io.smarthappy.module.master.bom.BomMapper">
+
+    <sql id="headCols">
+        b.bom_id, b.item_id, i.item_cd, i.item_nm, i.unit_cd as item_unit, b.alt_no, b.rev, b.status, b.valid_from,
+        b.valid_to, b.base_qty, b.change_no, b.change_reason, b.remark, b.released_at, b.released_by, b.row_ver,
+        b.updated_at, b.updated_by,
+        (select count(*) from mst_bom_line l where l.bom_id = b.bom_id) as line_cnt
+    </sql>
+
+    <sql id="where">
+        from mst_bom b join mst_item i on i.item_id = b.item_id
+        <where>
+            <if test="q.itemCdLike != null">and i.item_cd like #{q.itemCdLike} escape '\'</if>
+            <if test="q.itemNmLike != null">and (i.item_nm ilike #{q.itemNmLike} escape '\' or i.spec ilike #{q.itemNmLike} escape '\')</if>
+            <if test="q.status != null">and b.status = #{q.status}</if>
+            <if test="q.status == null and !q.withObsolete">and b.status &lt;&gt; 'OBSOLETE'</if>
+        </where>
+    </sql>
+
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ITEM_CD'">i.item_cd</when>
+                <when test="s.key == 'REV'">b.rev</when>
+                <when test="s.key == 'STATUS'">b.status</when>
+                <when test="s.key == 'VALID_FROM'">b.valid_from</when>
+                <otherwise>b.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        b.bom_id
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.master.bom.BomDtos$BomRow">
+        select <include refid="headCols"/> <include refid="where"/> <include refid="orderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.master.bom.BomDtos$BomRow" fetchSize="1000">
+        select <include refid="headCols"/> <include refid="where"/> <include refid="orderBy"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.master.bom.BomDtos$BomRow">
+        select <include refid="headCols"/> from mst_bom b join mst_item i on i.item_id = b.item_id where b.bom_id = #{id}
+    </select>
+
+    <select id="findLines" resultType="io.smarthappy.module.master.bom.BomDtos$LineRow">
+        select l.line_id, l.bom_id, l.line_no, l.item_id, i.item_cd, i.item_nm, i.unit_cd as item_unit,
+               i.use_yn as item_use_yn, i.lot_ctrl_yn, l.line_type, l.qty, l.unit_cd, l.scrap_pct, l.fixed_yn,
+               l.issue_method, l.op_seq, l.alt_grp, l.alt_priority, l.alt_pct, l.position, l.remark, l.row_ver
+          from mst_bom_line l join mst_item i on i.item_id = l.item_id
+         where l.bom_id = #{bomId}
+         order by l.line_no, l.line_id
+    </select>
+
+    <sql id="itemCols">item_id, item_cd, item_nm, spec, item_type, unit_cd, lot_ctrl_yn, use_yn</sql>
+
+    <select id="findItemByCd" resultType="io.smarthappy.module.master.bom.BomDtos$ItemLookup">
+        select <include refid="itemCols"/> from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="findItemById" resultType="io.smarthappy.module.master.bom.BomDtos$ItemLookup">
+        select <include refid="itemCols"/> from mst_item where item_id = #{itemId}
+    </select>
+
+    <select id="findRevs" resultType="string">
+        select rev from mst_bom where item_id = #{itemId} and alt_no = #{altNo}
+    </select>
+
+    <select id="findDraftId" resultType="long">
+        select bom_id from mst_bom where item_id = #{itemId} and alt_no = #{altNo} and status = 'DRAFT'
+    </select>
+
+    <select id="insertHeader" resultType="long" flushCache="true">
+        insert into mst_bom (comp_cd, item_id, alt_no, rev, valid_from, base_qty, change_no, change_reason, remark,
+                             created_by, updated_by)
+        values (hb_current_comp(), #{f.itemId}, #{f.altNo}, #{f.rev}, #{f.validFrom}, #{f.baseQty}, #{f.changeNo},
+                #{f.changeReason}, #{f.remark}, #{by}, #{by})
+        returning bom_id
+    </select>
+
+    <update id="updateHeader">
+        update mst_bom
+           set rev = #{f.rev}, valid_from = #{f.validFrom}, base_qty = #{f.baseQty}, change_no = #{f.changeNo},
+               change_reason = #{f.changeReason}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where bom_id = #{id} and status = 'DRAFT' and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="touch">
+        update mst_bom set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where bom_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <select id="insertLine" resultType="long" flushCache="true">
+        insert into mst_bom_line (comp_cd, bom_id, line_no, item_id, line_type, qty, unit_cd, scrap_pct, fixed_yn,
+                                  issue_method, op_seq, alt_grp, alt_priority, alt_pct, position, remark,
+                                  created_by, updated_by)
+        values (hb_current_comp(), #{bomId}, #{l.lineNo}, #{l.itemId}, #{l.lineType}, #{l.qty}, #{l.unitCd},
+                #{l.scrapPct}, #{l.fixedYn}, #{l.issueMethod}, #{l.opSeq}, #{l.altGrp}, #{l.altPriority}, #{l.altPct},
+                #{l.position}, #{l.remark}, #{by}, #{by})
+        returning line_id
+    </select>
+
+    <update id="updateLine">
+        update mst_bom_line
+           set line_no = #{l.lineNo}, item_id = #{l.itemId}, line_type = #{l.lineType}, qty = #{l.qty},
+               unit_cd = #{l.unitCd}, scrap_pct = #{l.scrapPct}, fixed_yn = #{l.fixedYn},
+               issue_method = #{l.issueMethod}, op_seq = #{l.opSeq}, alt_grp = #{l.altGrp},
+               alt_priority = #{l.altPriority}, alt_pct = #{l.altPct}, position = #{l.position}, remark = #{l.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where line_id = #{l.lineId} and bom_id = #{bomId} and row_ver = #{l.rowVer}
+    </update>
+
+    <delete id="deleteLine">
+        delete from mst_bom_line where line_id = #{lineId} and bom_id = #{bomId} and row_ver = #{rowVer}
+    </delete>
+
+    <!-- DB 트리거 hb_guard_bom_line 과 같은 규칙: 자품목에서 아래로(미폐기 모든 리비전) 내려가 모품목을 만나면 순환 -->
+    <select id="wouldCycle" resultType="boolean">
+        with recursive down(item_id) as (
+            select cast(#{childItemId} as bigint)
+            union
+            select l.item_id
+              from down d
+              join mst_bom b on b.item_id = d.item_id and b.status &lt;&gt; 'OBSOLETE'
+              join mst_bom_line l on l.bom_id = b.bom_id
+        )
+        select #{parentItemId} = #{childItemId} or exists (select 1 from down where item_id = #{parentItemId})
+    </select>
+
+    <select id="findReleasedOverlaps" resultType="io.smarthappy.module.master.bom.BomDtos$BomRow">
+        select <include refid="headCols"/> from mst_bom b join mst_item i on i.item_id = b.item_id
+         where b.item_id = #{itemId} and b.alt_no = #{altNo} and b.status = 'RELEASED' and b.bom_id &lt;&gt; #{exceptId}
+           and daterange(b.valid_from, b.valid_to, '[)') &amp;&amp; daterange(cast(#{from} as date), cast(#{to} as date), '[)')
+         order by b.valid_from
+    </select>
+
+    <update id="closeValidTo">
+        update mst_bom set valid_to = #{validTo}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where bom_id = #{id} and status = 'RELEASED'
+    </update>
+
+    <update id="release">
+        update mst_bom set status = 'RELEASED', released_at = now(), released_by = #{by},
+                           row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where bom_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="obsolete">
+        update mst_bom set status = 'OBSOLETE', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where bom_id = #{id} and status in ('DRAFT', 'RELEASED') and row_ver = #{rowVer}
+    </update>
+
+    <insert id="copyLines">
+        insert into mst_bom_line (comp_cd, bom_id, line_no, item_id, line_type, qty, unit_cd, scrap_pct, fixed_yn,
+                                  issue_method, op_seq, alt_grp, alt_priority, alt_pct, position, remark,
+                                  created_by, updated_by)
+        select comp_cd, #{toBomId}, line_no, item_id, line_type, qty, unit_cd, scrap_pct, fixed_yn, issue_method,
+               op_seq, alt_grp, alt_priority, alt_pct, position, remark, #{by}, #{by}
+          from mst_bom_line where bom_id = #{fromBomId}
+         order by line_no
+    </insert>
+
+    <select id="convertible" resultType="boolean">
+        select exists (select 1 from mst_item where item_id = #{itemId} and unit_cd = #{fromUnit})
+            or exists (select 1 from mst_unit_conv c join mst_item i on i.item_id = c.item_id
+                        where c.item_id = #{itemId} and c.from_unit = #{fromUnit} and c.to_unit = i.unit_cd
+                          and c.use_yn = 'Y')
+    </select>
+
+    <select id="unitUsable" resultType="boolean">
+        select exists (select 1 from sys_code where grp_cd = 'UNIT' and code = #{unitCd} and use_yn = 'Y')
+            or exists (select 1 from sys_comp_code where grp_cd = 'UNIT' and code = #{unitCd} and use_yn = 'Y')
+    </select>
+
+    <!-- 단위 환산 -->
+    <select id="findConvs" resultType="io.smarthappy.module.master.bom.BomDtos$ConvRow">
+        select conv_id, item_id, from_unit, to_unit, factor, row_ver from mst_unit_conv
+         where item_id = #{itemId} and use_yn = 'Y' order by from_unit
+    </select>
+
+    <!-- 사용 안 함이던 같은 단위 행은 되살린다. 사용 중인 행과 겹치면 0행 → null (서비스가 중복 오류로) -->
+    <select id="insertConv" resultType="java.lang.Long" flushCache="true">
+        insert into mst_unit_conv (comp_cd, item_id, from_unit, to_unit, factor, created_by, updated_by)
+        values (hb_current_comp(), #{itemId}, #{fromUnit}, #{toUnit}, #{factor}, #{by}, #{by})
+        on conflict (comp_cd, item_id, from_unit) do update
+           set to_unit = excluded.to_unit, factor = excluded.factor, use_yn = 'Y', row_ver = mst_unit_conv.row_ver + 1,
+               updated_at = now(), updated_by = excluded.updated_by
+         where mst_unit_conv.use_yn = 'N'
+        returning conv_id
+    </select>
+
+    <update id="updateConv">
+        <!-- to_unit 도 지금 품목 기본 단위로 — 기본 단위를 바꾼 뒤 수정하면 새 기준이 된다 (QA 3a #3) -->
+        update mst_unit_conv set from_unit = #{fromUnit}, factor = #{factor},
+                                 to_unit = (select i.unit_cd from mst_item i where i.item_id = #{itemId}),
+                                 row_ver = row_ver + 1,
+                                 updated_at = now(), updated_by = #{by}
+         where conv_id = #{convId} and item_id = #{itemId} and use_yn = 'Y' and row_ver = #{rowVer}
+    </update>
+
+    <update id="disableConv">
+        update mst_unit_conv set use_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where conv_id = #{convId} and item_id = #{itemId} and use_yn = 'Y' and row_ver = #{rowVer}
+    </update>
+
+    <update id="touchItem">
+        update mst_item set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where item_id = #{itemId} and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================= 전개·역전개 (P1 3b, docs/18 5.2·5.3) ================= -->
+
+    <!-- 기준일에 유효한 확정 BOM (대체 1). 배제 제약 덕분에 0 또는 1건 -->
+    <select id="findEffective" resultType="io.smarthappy.module.master.bom.BomDtos$BomRow">
+        select <include refid="headCols"/> from mst_bom b join mst_item i on i.item_id = b.item_id
+         where b.item_id = #{itemId} and b.alt_no = 1 and b.status = 'RELEASED'
+           and b.valid_from &lt;= #{date} and (b.valid_to is null or #{date} &lt; b.valid_to)
+    </select>
+
+    <sql id="convJoin">
+        join mst_item i on i.item_id = l.item_id
+        left join mst_unit_conv c on c.item_id = l.item_id and c.from_unit = l.unit_cd and c.to_unit = i.unit_cd
+                                 and c.use_yn = 'Y'
+    </sql>
+
+    <!--
+      정전개 (다단). 루트 = 지정 BOM(작성 중 미리보기 포함), 아래 = 기준일 유효 확정 BOM.
+      필요량 = (고정 ? qty : qty / 기준 수량 × 상위 필요량) × (1 + 손실률/100) × 환산(없으면 1, noConv 표시) × 대체 사용 비율.
+      부산물은 아래로 내려가지 않는다. 순환(비정상 데이터)은 표시하고 멈춘다. 정렬 = 경로(순번 → 행 id).
+      depthLimit = 상한 + 1 까지 내려가 "상한 초과"를 서비스가 알 수 있게, rowLimit = 상한 + 1.
+      capped: 재귀를 정렬 전에 rowLimit 행에서 끊는다(바깥 LIMIT 만큼만 작업 테이블을 당김, 너비 우선) — 정렬 뒤 LIMIT 이면
+      상한을 넘는 구조(같은 자품목 여러 행이 이어져 경로 2^n)도 끝까지 계산한다(QA 3b #1).
+      필요량은 레벨마다 소수 20자리로 반올림 — 안 하면 나눗셈·곱셈 자릿수가 레벨마다 쌓인다(10단 400자리, QA 3b #2). 응답은 12자리.
+    -->
+    <select id="explode" resultType="io.smarthappy.module.master.bom.BomTreeDtos$ExplodeRow">
+        with recursive eff as materialized (
+            select b.bom_id, b.item_id, b.base_qty, b.rev
+              from mst_bom b
+             where b.status = 'RELEASED' and b.alt_no = 1
+               and b.valid_from &lt;= #{date} and (b.valid_to is null or #{date} &lt; b.valid_to)
+        ),
+        tree as (
+            select 1 as lvl, h.bom_id, h.rev as bom_rev, l.line_id, l.line_no, h.item_id as parent_id, l.item_id,
+                   l.line_type, l.qty, l.unit_cd as line_unit, h.base_qty, l.scrap_pct, l.fixed_yn, l.issue_method,
+                   l.alt_grp, l.alt_priority, l.alt_pct, l.op_seq, l.position,
+                   coalesce(c.factor, case when l.unit_cd = i.unit_cd then 1 end) as factor,
+                   round((case when l.fixed_yn = 'Y' then l.qty else l.qty / h.base_qty * cast(#{qty} as numeric) end)
+                       * (1 + l.scrap_pct / 100) * coalesce(c.factor, 1) * coalesce(l.alt_pct / 100, 1), 20) as req_qty,
+                   array[h.item_id, l.item_id] as items,
+                   array[lpad(l.line_no::text, 4, '0') || lpad(l.line_id::text, 14, '0')] as ord,
+                   (l.item_id = h.item_id) as cycle
+              from mst_bom h
+              join mst_bom_line l on l.bom_id = h.bom_id
+              <include refid="convJoin"/>
+             where h.bom_id = #{rootBomId}
+            union all
+            select t.lvl + 1, e.bom_id, e.rev, l.line_id, l.line_no, e.item_id, l.item_id,
+                   l.line_type, l.qty, l.unit_cd, e.base_qty, l.scrap_pct, l.fixed_yn, l.issue_method,
+                   l.alt_grp, l.alt_priority, l.alt_pct, l.op_seq, l.position,
+                   coalesce(c.factor, case when l.unit_cd = i.unit_cd then 1 end),
+                   round((case when l.fixed_yn = 'Y' then l.qty else l.qty / e.base_qty * t.req_qty end)
+                       * (1 + l.scrap_pct / 100) * coalesce(c.factor, 1) * coalesce(l.alt_pct / 100, 1), 20),
+                   t.items || l.item_id,
+                   t.ord || (lpad(l.line_no::text, 4, '0') || lpad(l.line_id::text, 14, '0')),
+                   l.item_id = any(t.items)
+              from tree t
+              join eff e on e.item_id = t.item_id
+              join mst_bom_line l on l.bom_id = e.bom_id
+              <include refid="convJoin"/>
+             where not t.cycle and t.line_type &lt;&gt; 'BYPRODUCT' and t.lvl &lt; #{depthLimit}
+        ),
+        capped as (select * from tree limit #{rowLimit})
+        select t.lvl, t.bom_id, t.bom_rev, t.line_id, t.line_no, p.item_cd as parent_cd, t.item_id, i.item_cd, i.item_nm,
+               i.spec, i.item_type, t.line_type, t.qty, t.line_unit, t.base_qty, t.scrap_pct, t.fixed_yn, t.factor,
+               round(t.req_qty, 12) as req_qty, i.unit_cd as item_unit, t.issue_method, t.alt_grp, t.alt_priority, t.alt_pct, t.op_seq,
+               t.position, ce.rev as child_rev, (t.factor is null) as no_conv, t.cycle
+          from capped t
+          join mst_item i on i.item_id = t.item_id
+          join mst_item p on p.item_id = t.parent_id
+          left join eff ce on ce.item_id = t.item_id
+         order by t.ord
+    </select>
+
+    <!-- 역전개 범위: 기준일 유효 확정본(대체 번호 전부) 또는 미폐기 전부(전체 리비전 — 변경 영향 분석) -->
+    <sql id="whereScope">
+        <choose>
+            <when test="allRevs">b.status &lt;&gt; 'OBSOLETE'</when>
+            <otherwise>b.status = 'RELEASED' and b.valid_from &lt;= #{date} and (b.valid_to is null or #{date} &lt; b.valid_to)</otherwise>
+        </choose>
+    </sql>
+
+    <!--
+      역전개 (다단): 자품목 → 행 → 머리(모품목) 방향. 재귀는 정전개처럼 정렬 전에 rowLimit 에서 끊는다(QA 3b #1).
+      top(더 위에서 쓰지 않는 모품목)은 서비스가 child_id 집합으로 정한다 — 여기서 up 을 다시 훑는 상관 서브쿼리로 하면
+      재귀 CTE 행 수 추정(11) 때문에 행마다 전체를 훑는 SubPlan 이 되어 O(행²)(QA 3b #6: 16,382행 30초 초과)
+    -->
+    <select id="whereUsed" resultType="io.smarthappy.module.master.bom.BomTreeDtos$WhereRow">
+        with recursive up as (
+            select 1 as lvl, b.bom_id, b.rev, b.status, b.valid_from, b.valid_to, b.item_id as parent_id,
+                   l.item_id as child_id, l.line_no, l.line_type, l.qty, l.unit_cd as line_unit, b.base_qty,
+                   array[l.item_id, b.item_id] as items,
+                   array[rpad(p.item_cd, 40) || b.rev || lpad(l.line_id::text, 14, '0')] as ord,
+                   (b.item_id = l.item_id) as cycle
+              from mst_bom_line l
+              join mst_bom b on b.bom_id = l.bom_id
+              join mst_item p on p.item_id = b.item_id
+             where l.item_id = #{itemId} and <include refid="whereScope"/>
+            union all
+            select u.lvl + 1, b.bom_id, b.rev, b.status, b.valid_from, b.valid_to, b.item_id,
+                   l.item_id, l.line_no, l.line_type, l.qty, l.unit_cd, b.base_qty,
+                   u.items || b.item_id,
+                   u.ord || (rpad(p.item_cd, 40) || b.rev || lpad(l.line_id::text, 14, '0')),
+                   b.item_id = any(u.items)
+              from up u
+              join mst_bom_line l on l.item_id = u.parent_id
+              join mst_bom b on b.bom_id = l.bom_id
+              join mst_item p on p.item_id = b.item_id
+             where not u.cycle and u.lvl &lt; #{depthLimit} and <include refid="whereScope"/>
+        ),
+        capped as (select * from up limit #{rowLimit})
+        select u.lvl, u.bom_id, u.rev, u.status, u.valid_from, u.valid_to, u.parent_id, p.item_cd as parent_cd,
+               p.item_nm as parent_nm, p.item_type as parent_type, u.child_id, c.item_cd as child_cd, u.line_no, u.line_type,
+               u.qty, u.line_unit, u.base_qty, u.cycle
+          from capped u
+          join mst_item p on p.item_id = u.parent_id
+          join mst_item c on c.item_id = u.child_id
+         order by u.ord
+    </select>
+
+    <!-- ================= 변경 도구 (P1 3c) ================= -->
+
+    <!-- 자품목 X 를 쓰는 미폐기 BOM. unitWarn = 행 단위가 Y 의 기본 단위도 아니고 Y 의 환산도 없음 -->
+    <select id="bomsUsing" resultType="io.smarthappy.module.master.bom.BomChangeDtos$UseRow">
+        select b.bom_id, b.alt_no, b.item_id as parent_id, p.item_cd as parent_cd, p.item_nm as parent_nm, b.rev, b.status,
+               b.valid_from, b.valid_to, count(*) as line_cnt,
+               bool_or(l.unit_cd &lt;&gt; y.unit_cd and not exists (
+                   select 1 from mst_unit_conv c where c.item_id = y.item_id and c.from_unit = l.unit_cd
+                      and c.to_unit = y.unit_cd and c.use_yn = 'Y')) as unit_warn
+          from mst_bom b
+          join mst_bom_line l on l.bom_id = b.bom_id and l.item_id = #{fromItemId}
+          join mst_item p on p.item_id = b.item_id
+          join mst_item y on y.item_id = #{toItemId}
+         where b.status &lt;&gt; 'OBSOLETE'
+         group by b.bom_id, b.alt_no, b.item_id, p.item_cd, p.item_nm, b.rev, b.status, b.valid_from, b.valid_to
+         order by p.item_cd, b.alt_no, b.valid_from desc, b.bom_id desc
+    </select>
+
+    <!-- 작성 중 BOM 의 자품목 X → Y (행마다 순환 트리거를 지난다) -->
+    <update id="replaceItem">
+        update mst_bom_line set item_id = #{toItemId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where bom_id = #{bomId} and item_id = #{fromItemId}
+    </update>
+
+    <update id="touchDraft">
+        update mst_bom set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where bom_id = #{bomId} and status = 'DRAFT'
+    </update>
+
+    <select id="edges" resultType="io.smarthappy.module.master.bom.BomChangeDtos$Edge">
+        select distinct b.item_id as parent_id, l.item_id as child_id
+          from mst_bom b join mst_bom_line l on l.bom_id = b.bom_id
+         where b.status &lt;&gt; 'OBSOLETE'
+    </select>
+
+    <select id="itemsByIds" resultType="io.smarthappy.module.master.bom.BomChangeDtos$LlcRow">
+        select item_id, item_cd, item_nm, item_type from mst_item
+         where item_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+</mapper>

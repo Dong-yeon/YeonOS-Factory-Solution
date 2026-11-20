@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  공장 휴일 달력 예외 (docs/25 4.15). 회사 조건은 RLS. 기간 조회는 uq_mst_work_cal (comp_cd, cal_date, …) WHERE use_yn = 'Y' 범위.
+-->
+<mapper namespace="io.smarthappy.module.master.workforce.WorkCalMapper">
+
+    <sql id="cols">
+        c.cal_id, c.plant_cd, c.cal_date, c.shift_cd, s.shift_nm, c.day_type, c.reason, c.use_yn, c.row_ver, c.updated_at, c.updated_by
+          from mst_work_cal c
+          left join mst_shift s on s.comp_cd = c.comp_cd and s.plant_cd = c.plant_cd and s.shift_cd = c.shift_cd
+    </sql>
+
+    <sql id="activeWhere">
+         where c.use_yn = 'Y'
+           and c.cal_date between #{from} and #{to}
+           and (c.plant_cd is null <if test="plantCd != null">or c.plant_cd = #{plantCd}</if>)
+    </sql>
+
+    <select id="findActive" resultType="io.smarthappy.module.master.workforce.WorkCalDtos$CalRow" flushCache="true" useCache="false">
+        select <include refid="cols"/>
+        <include refid="activeWhere"/>
+         order by c.cal_date, c.plant_cd nulls first, c.shift_cd nulls first
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): findActive 와 같은 조건. 범위·근무조는 비어 있는 것(회사 공통·하루 전체)이 오름차순에서 먼저 -->
+    <select id="findActivePage" resultType="io.smarthappy.module.master.workforce.WorkCalDtos$CalRow" flushCache="true" useCache="false">
+        select <include refid="cols"/>
+        <include refid="activeWhere"/>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'PLANT_CD'">c.plant_cd<if test="o.desc"> desc nulls last</if><if test="!o.desc"> nulls first</if></when>
+                <when test="o.key == 'SHIFT_CD'">c.shift_cd<if test="o.desc"> desc nulls last</if><if test="!o.desc"> nulls first</if></when>
+                <when test="o.key == 'DAY_TYPE'">c.day_type<if test="o.desc"> desc</if></when>
+                <otherwise>c.cal_date<if test="o.desc"> desc</if></otherwise>
+            </choose>,
+        </foreach>
+        c.cal_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countActive" resultType="long" flushCache="true" useCache="false">
+        select count(*) from mst_work_cal c
+        <include refid="activeWhere"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.master.workforce.WorkCalDtos$CalRow" flushCache="true" useCache="false">
+        select <include refid="cols"/> where c.cal_id = #{id}
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into mst_work_cal (comp_cd, plant_cd, cal_date, shift_cd, day_type, reason, created_by, updated_by)
+        values (hb_current_comp(), #{f.plantCd}, #{f.calDate}, #{f.shiftCd}, #{f.dayType}, #{f.reason}, #{by}, #{by})
+        returning cal_id
+    </select>
+
+    <update id="update">
+        update mst_work_cal
+           set day_type = #{dayType}, reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cal_id = #{id} and row_ver = #{rowVer} and use_yn = 'Y'
+    </update>
+
+    <update id="disable">
+        update mst_work_cal
+           set use_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cal_id = #{id} and row_ver = #{rowVer} and use_yn = 'Y'
+    </update>
+</mapper>

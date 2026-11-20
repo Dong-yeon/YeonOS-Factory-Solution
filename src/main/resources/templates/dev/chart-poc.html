@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<!--
+  hb.chart 확인 화면 (docs/61 11장). local 프로필 전용(ChartPocController), sys_prog·메뉴에 없음. 데이터는 가짜(화면 JS 고정 값).
+  현행 CSP 그대로 — 위반이 생기면 위쪽 숫자가 올라간다. 문구는 확인 화면이라 i18n 키를 쓰지 않는다(차트 안 문구는 js.chart.* 키).
+  화면은 hb.chart.js 하나만 싣는다 — Highcharts·CSS 는 hb.chart 가 처음 그릴 때 싣는다.
+-->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${prog.name}">hb.chart 확인</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/css/dev/chart-poc.css}">
+</head>
+<body class="hb-page poc">
+<h1 th:text="${prog.name}">hb.chart 확인</h1>
+<p class="poc-note">local 프로필 전용 · docs/61 11장 · 가짜 데이터 ·
+    CSP 위반 <strong id="cspCount" class="poc-count">0</strong> · 라이브러리 <strong id="libState">확인 중</strong></p>
+<ul id="cspList" class="poc-csp-list"></ul>
+<p class="poc-toolbar">
+    <button type="button" id="redrawBtn" class="hb-btn-secondary">다시 그리기(빠르게 두 번 — 늦은 응답 버림 확인)</button>
+    <button type="button" id="printBtn" class="hb-btn-secondary">인쇄 미리보기</button>
+    <span id="clickOut" class="poc-dim" role="status"></span>
+</p>
+
+<div class="poc-charts">
+    <section class="poc-card">
+        <h2>1. 파레토 — 불량 유형(상위 6 + 기타, 막대 클릭 = 드릴다운)</h2>
+        <div id="paretoChart"></div>
+    </section>
+    <section class="poc-card">
+        <h2>2. 막대 — 일별 계획 대비 실적 + 달성률(오른쪽 축)</h2>
+        <div id="barChart"></div>
+    </section>
+    <section class="poc-card">
+        <h2>3. 게이지 — 가동률·품질률·불량 PPM(작을수록 좋음)</h2>
+        <div class="poc-gauges">
+            <div id="gaugeA"></div>
+            <div id="gaugeB"></div>
+            <div id="gaugeC"></div>
+        </div>
+    </section>
+    <section class="poc-card">
+        <h2>4. 관리도 — X̄(한계 변경 계단선·규칙 위반) / R</h2>
+        <div id="xbarChart"></div>
+        <div id="rChart"></div>
+    </section>
+    <section class="poc-card">
+        <h2>5. 빈 데이터 · 가로 누적 막대</h2>
+        <div id="emptyChart"></div>
+        <div id="stackChart"></div>
+    </section>
+</div>
+
+<script th:src="@{/js/common/hb.js}"></script>
+<script th:src="@{/js/common/hb.chart.js}"></script>
+<script th:src="@{/js/dev/chart-poc/chart-poc.js}"></script>
+</body>
+</html>

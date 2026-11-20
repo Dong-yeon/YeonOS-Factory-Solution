@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  사무 실적 조회 (docs/25 4.16). 회사 조건은 RLS. 줄의 기준 = 원래 실적(역분개 행은 따로 세지 않고 v 로 "정정됨" 표시 —
+  정정은 언제나 실적 전체의 역분개). 묶음 보기는 정정된 실적을 빼고 더한다(순수량, 원래 작업일·근무조·작업자 기준).
+  기간: ix_prd_result_day (comp_cd, work_day, result_id) 범위, 정정 여부: uq_prd_result_reversal, 불량: ix_prd_result_defect_result.
+  목록·건수·커서·불량 합계가 같은 조각(joins·cond)을 쓴다. 보기는 서버 enum → choose (문자열 치환 없음).
+-->
+<mapper namespace="io.smarthappy.module.production.ResultViewMapper">
+
+    <sql id="joins">
+          join prd_wo w on w.wo_id = r.wo_id
+          join prd_wo_proc wp on wp.wo_proc_id = r.wo_proc_id
+          join mst_item i on i.item_id = w.item_id
+          left join prd_result v on v.reversal_of_id = r.result_id
+          left join mst_worker k on k.worker_id = r.performed_by
+          left join mst_equip e on e.equip_id = r.equip_id
+          left join lot_master l on l.lot_id = r.lot_id
+    </sql>
+
+    <sql id="cond">
+         where r.reversal_of_id is null
+           and r.work_day between #{q.from} and #{q.to}
+           <if test="q.plantCd != null">and w.plant_cd = #{q.plantCd}</if>
+           <if test="q.shiftCd != null">and r.shift_cd = #{q.shiftCd}</if>
+           <if test="q.keyword != null">and w.wo_no like '%' || #{q.keyword} || '%' escape '\'</if>
+           <if test="q.itemId != null">and w.item_id = #{q.itemId}</if>
+           <if test="q.procCd != null">and wp.proc_cd = #{q.procCd}</if>
+           <if test="q.workerId != null">and r.performed_by = #{q.workerId}</if>
+    </sql>
+
+    <!-- 묶음 보기 합계 — 정정된 실적은 빠진다(cond 뒤에 v.result_id is null) -->
+    <sql id="sums">
+        count(*) as cnt,
+        trim_scale(sum(r.good_qty)) as good_qty, trim_scale(sum(r.scrap_qty)) as scrap_qty,
+        trim_scale(sum(r.rework_qty)) as rework_qty, trim_scale(sum(r.repair_qty)) as repair_qty,
+        round(100 * (sum(r.scrap_qty) + sum(r.rework_qty) + sum(r.repair_qty))
+              / nullif(sum(r.good_qty + r.scrap_qty + r.rework_qty + r.repair_qty), 0), 2) as defect_rate
+    </sql>
+
+    <sql id="select">
+        <choose>
+            <when test="q.view == 'WO'">
+                select w.wo_no, i.item_cd, i.item_nm, r.unit_cd, <include refid="sums"/>
+                  from prd_result r <include refid="joins"/> <include refid="cond"/> and v.result_id is null
+                 group by w.wo_no, i.item_cd, i.item_nm, r.unit_cd
+            </when>
+            <when test="q.view == 'PROC'">
+                select w.wo_no, wp.op_seq, wp.proc_cd, wp.proc_nm, i.item_cd, i.item_nm, r.unit_cd, <include refid="sums"/>
+                  from prd_result r <include refid="joins"/> <include refid="cond"/> and v.result_id is null
+                 group by w.wo_no, wp.op_seq, wp.proc_cd, wp.proc_nm, i.item_cd, i.item_nm, r.unit_cd
+            </when>
+            <when test="q.view == 'WORKER'">
+                select k.worker_cd, k.worker_nm, r.unit_cd, <include refid="sums"/>
+                  from prd_result r <include refid="joins"/> <include refid="cond"/> and v.result_id is null
+                 group by k.worker_cd, k.worker_nm, r.unit_cd
+            </when>
+            <when test="q.view == 'SHIFT'">
+                select r.work_day, r.shift_cd, r.unit_cd, <include refid="sums"/>
+                  from prd_result r <include refid="joins"/> <include refid="cond"/> and v.result_id is null
+                 group by r.work_day, r.shift_cd, r.unit_cd
+            </when>
+            <otherwise>
+                select r.result_id, r.work_day, r.shift_cd, w.wo_no, wp.op_seq, wp.proc_cd, wp.proc_nm, i.item_cd, i.item_nm,
+                       e.equip_cd, k.worker_cd, k.worker_nm, l.lot_no,
+                       trim_scale(r.good_qty) as good_qty, trim_scale(r.scrap_qty) as scrap_qty,
+                       trim_scale(r.rework_qty) as rework_qty, trim_scale(r.repair_qty) as repair_qty, r.unit_cd,
+                       r.occurred_at, r.recorded_by,
+                       v.result_id is not null as corrected, v.recorded_at as corrected_at, v.reason as correct_reason,
+                       aw.worker_cd as approver_cd, aw.worker_nm as approver_nm
+                  from prd_result r <include refid="joins"/>
+                  <!-- POP 감독자 승인(docs/25 4.37·4.39) — 정정 하나에 승인 하나(uq_pop_approval_target (action_cd, target_id)) 라 바깥 조인으로
+                       행이 늘지 않는다. 승인 없이 한 정정은 비어 있다. lateral 대신 조인 — 그리드 쪽(offset)에서 행마다 부질의를 돌리지 않게(OffsetLedgerGuard) -->
+                  left join pop_approval pa on pa.action_cd = 'RESULT_CORRECT' and pa.target_id = r.result_id
+                  left join mst_worker aw on aw.worker_id = pa.approver_worker_id
+                  <include refid="cond"/>
+            </otherwise>
+        </choose>
+    </sql>
+
+    <sql id="order">
+        <choose>
+            <when test="q.view == 'WO'">order by wo_no, item_cd, unit_cd</when>
+            <when test="q.view == 'PROC'">order by wo_no, op_seq, unit_cd</when>
+            <when test="q.view == 'WORKER'">order by worker_cd nulls last, unit_cd</when>
+            <when test="q.view == 'SHIFT'">order by work_day desc, shift_cd nulls last, unit_cd</when>
+            <otherwise>order by work_day desc, result_id desc</otherwise>
+        </choose>
+        <if test="limit != null">limit #{limit}</if>
+    </sql>
+
+    <select id="rows" resultType="io.smarthappy.module.production.ResultViewDtos$ResultLine">
+        select * from (<include refid="select"/>) x <include refid="order"/>
+    </select>
+
+    <!-- 그리드 한 쪽 (docs/40 §10.2 D1) — 같은 select 조각 + PageQuery 정렬(서비스가 보기별로 허용한 enum 만 오므로 그 보기의 칸만 나온다).
+         마지막 고정 키 = 보기의 묶음 키(상세는 result_id) → 쪽 경계에서 중복·누락 없음. 기본 정렬이면 기존 목록과 같은 순서 -->
+    <select id="page" resultType="io.smarthappy.module.production.ResultViewDtos$ResultLine">
+        select * from (<include refid="select"/>) x
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'WORK_DAY'">work_day</when>
+                <when test="s.key == 'SHIFT_CD'">shift_cd</when>
+                <when test="s.key == 'WO_NO'">wo_no</when>
+                <when test="s.key == 'OP_SEQ'">op_seq</when>
+                <when test="s.key == 'PROC_CD'">proc_cd</when>
+                <when test="s.key == 'ITEM_CD'">item_cd</when>
+                <when test="s.key == 'EQUIP_CD'">equip_cd</when>
+                <when test="s.key == 'WORKER_CD'">worker_cd</when>
+                <when test="s.key == 'LOT_NO'">lot_no</when>
+                <when test="s.key == 'OCCURRED_AT'">occurred_at</when>
+                <when test="s.key == 'CNT'">cnt</when>
+                <when test="s.key == 'GOOD_QTY'">good_qty</when>
+                <when test="s.key == 'SCRAP_QTY'">scrap_qty</when>
+                <when test="s.key == 'REWORK_QTY'">rework_qty</when>
+                <when test="s.key == 'REPAIR_QTY'">repair_qty</when>
+                <when test="s.key == 'DEFECT_RATE'">defect_rate</when>
+                <otherwise>unit_cd</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if> nulls last,
+        </foreach>
+        <choose>
+            <when test="q.view == 'WO'">wo_no, item_cd, unit_cd</when>
+            <when test="q.view == 'PROC'">wo_no, op_seq, unit_cd</when>
+            <when test="q.view == 'WORKER'">worker_cd nulls last, unit_cd</when>
+            <when test="q.view == 'SHIFT'">work_day desc, shift_cd nulls last, unit_cd</when>
+            <otherwise>result_id desc</otherwise>
+        </choose>
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.production.ResultViewDtos$ResultLine" fetchSize="500">
+        select * from (<include refid="select"/>) x <include refid="order"/>
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) from (<include refid="select"/>) x
+    </select>
+
+    <select id="defects" resultType="io.smarthappy.module.production.ResultViewDtos$DefectSum">
+        select d.kind, qd.defect_cd, qd.defect_nm, r.unit_cd, trim_scale(sum(d.qty)) as qty
+          from prd_result r
+          join prd_result_defect d on d.result_id = r.result_id
+          join qms_defect qd on qd.defect_id = d.defect_id
+          <include refid="joins"/>
+          <include refid="cond"/> and v.result_id is null
+         group by d.kind, qd.defect_cd, qd.defect_nm, r.unit_cd
+         order by d.kind, sum(d.qty) desc, qd.defect_cd
+    </select>
+
+    <select id="findWorkerId" resultType="long">
+        select worker_id from mst_worker where worker_cd = #{workerCd}
+    </select>
+</mapper>

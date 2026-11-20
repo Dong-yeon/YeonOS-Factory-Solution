@@ -1,0 +1,24 @@
+# /etc/pgbackrest/pgbackrest.conf 예시 (YeonOS) — 01 7.2
+# repo1 = 로컬 디스크(빠른 복구), repo2 = S3 호환 + Object Lock(Compliance)·다른 계정(불변 사본)
+# 키·비밀은 이 파일에 쓰지 말고 환경변수(PGBACKREST_REPO2_S3_KEY 등)나 별도 권한 파일로.
+
+[global]
+repo1-path=/var/lib/pgbackrest
+repo1-retention-full=2
+repo1-cipher-type=aes-256-cbc
+# repo1-cipher-pass 는 환경변수 PGBACKREST_REPO1_CIPHER_PASS 로
+
+# repo2-type=s3
+# repo2-s3-bucket=yeonos-backup-immutable
+# repo2-s3-endpoint=s3.ap-northeast-2.amazonaws.com
+# repo2-s3-region=ap-northeast-2
+# repo2-retention-full=4
+# repo2-cipher-type=aes-256-cbc
+
+start-fast=y
+compress-type=zst
+log-level-console=info
+
+[yeonos]
+pg1-path=/var/lib/postgresql/16/main
+pg1-port=5432

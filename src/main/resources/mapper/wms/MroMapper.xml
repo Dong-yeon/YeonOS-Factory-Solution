@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 예비품 출고·반납 (docs/30 12.8, CMS 계약 SpareIssueLink) — 회사 범위는 RLS -->
+<mapper namespace="io.smarthappy.module.wms.inv.MroMapper">
+
+    <select id="itemTracked" resultType="boolean">
+        select exists (select 1 from inv_trx t where t.item_id = #{itemId})
+    </select>
+
+    <select id="issueCells" resultType="io.smarthappy.module.wms.inv.MroMapper$Cell">
+        select s.stock_id, s.plant_cd, s.item_id, s.node_id, s.lot_id, s.stock_status, s.qty
+          from inv_stock s
+          left join wms_loc_attr a on a.node_id = s.node_id
+          left join lot_master l on l.lot_id = s.lot_id
+         where s.plant_cd = #{plantCd} and s.item_id = #{itemId} and s.qty &gt; 0
+           and <include refid="io.smarthappy.module.wms.inv.AvailSql.available"/>
+           and coalesce(l.hold_yn, 'N') = 'N'
+         order by s.lot_id nulls first, coalesce(a.pick_seq, 0), s.node_id
+    </select>
+
+    <select id="lockCells" resultType="io.smarthappy.module.wms.inv.MroMapper$Cell">
+        select s.stock_id, s.plant_cd, s.item_id, s.node_id, s.lot_id, s.stock_status, s.qty
+          from inv_stock s
+         where s.stock_id in <foreach collection="stockIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by s.item_id, s.node_id, s.lot_id nulls first, s.stock_status   -- InventoryService.CELL_ORDER 와 같은 순서(docs/30 11.6)
+           for update
+    </select>
+
+    <select id="issuedOf" resultType="io.smarthappy.module.wms.inv.MroMapper$Issued">
+        select (select s.stock_id from inv_stock s
+                 where s.item_id = t.item_id and s.node_id = t.node_id and s.lot_id is not distinct from t.lot_id
+                   and s.stock_status = t.stock_status) as stock_id,
+               t.plant_cd, t.item_id, t.node_id, t.lot_id, t.stock_status,
+               -sum(t.qty) filter (where t.trx_type = 'ISSUE_MRO') as issued,
+               coalesce(sum(t.qty) filter (where t.trx_type = 'MRO_RTN'), 0) as returned
+          from inv_trx t
+         where t.src_type = 'CMS_PART' and t.src_id = #{partId}
+         group by t.plant_cd, t.item_id, t.node_id, t.lot_id, t.stock_status
+        having coalesce(-sum(t.qty) filter (where t.trx_type = 'ISSUE_MRO'), 0) &gt; 0
+         order by min(t.trx_id)
+    </select>
+
+    <!-- 반납 누계(C18, docs/33 11.15.2) — 출고 원장이 있는 줄만(반납 없으면 0), 역분개 포함 합은 음수가 될 수 없지만 0 아래면 0 -->
+    <select id="returnedOf" resultType="io.smarthappy.module.wms.inv.MroMapper$Returned">
+        select t.src_id as part_id,
+               greatest(coalesce(sum(t.qty) filter (where t.trx_type = 'MRO_RTN'), 0), 0) as returned
+          from inv_trx t
+         where t.src_type = 'CMS_PART'
+           and t.src_id in
+        <foreach collection="partIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         group by t.src_id
+        having count(*) filter (where t.trx_type = 'ISSUE_MRO') &gt; 0
+    </select>
+</mapper>

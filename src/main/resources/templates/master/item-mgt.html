@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  품목관리 (mst-item) — P1 1단계 (docs/17 3장). 구조는 거래처관리(표준 참조 화면)와 같다.
+  사용성 체크(docs/11 4.3): 주 사용자 = 생산관리·구매·품질 담당(WEB, 마우스·키보드), 처음 이관은 엑셀(P1 2단계).
+  직접 치는 값 = 품번·품명·규격·유형·조달·단위·순질량·HS 코드(외부·설계 정보라 서버가 채울 수 없음). 회사·작성자·일시는 서버가.
+  예외 = 단종(사용 중지 — 삭제 아님, 과거 BOM·LOT 기록 유지), 같은 품명 다른 품번, 순질량 모름(비워 둠).
+  버튼 노출은 편의, 판정은 API 의 @ProgAuth.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">품목관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{mstItem.col.itemCd}">품목코드</span>
+        <input name="itemCd" maxlength="100" data-help-key="mst-item.searchItemCd"></label>
+    <label><span th:text="#{mstItem.col.itemNm}">품목명</span>
+        <input name="itemNm" maxlength="200" data-help-key="mst-item.searchItemNm"></label>
+    <label><span th:text="#{mstItem.col.itemType}">품목 유형</span>
+        <select name="itemType" data-hb="select" data-code="ITEM_TYPE" data-blank="all"></select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{mstItem.col.procType}">조달</legend>
+        <label><input type="radio" name="procType" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="procType" value="MAKE"><span th:text="#{code.PROC_TYPE.MAKE}">자체 생산</span></label>
+        <label><input type="radio" name="procType" value="BUY"><span th:text="#{code.PROC_TYPE.BUY}">구매</span></label>
+        <label><input type="radio" name="procType" value="OUTSRC"><span th:text="#{code.PROC_TYPE.OUTSRC}">외주 가공</span></label>
+    </fieldset>
+    <fieldset class="hb-seg">
+        <legend th:text="#{mstItem.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y" checked><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <!-- 목록 도구: 엑셀 올리기(P1 2단계) · 서랍 모드 신규(docs/15 R3) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:text="#{import.button}">엑셀 올리기</button>
+        </div>
+        <div id="itemGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <div class="hb-danger-zone">
+                <button type="button" id="disableBtn" class="hb-btn-danger-outline" th:if="${actions.contains('DELETE')}" th:text="#{mstItem.disable}">사용 중지</button>
+            </div>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{mstItem.selectOrNew}">왼쪽에서 품목을 고르거나 신규를 누르세요.</p>
+        <p id="erpHint" class="hb-hint hb-erp-hint" hidden th:text="#{mstItem.erpHint}">ERP 가 품목의 주인입니다. 코드·이름·규격·유형·조달·단위·표준단가는 ERP 에서 바꿉니다.</p>
+
+        <form id="itemForm" class="hb-form" autocomplete="off">
+            <!-- 품목코드 = 시스템 코드(docs/17 9장): 만든 뒤 고정, 정책 ITEM_CD_MODE=AUTO 면 저장 때 채번 -->
+            <label><span th:text="#{mstItem.col.itemCd}">품목코드</span>
+                <input data-field="itemCd" maxlength="40" required data-help-key="mst-item.itemCd" aria-describedby="cdFixedHint cdAutoHint">
+                <small id="cdFixedHint" class="hb-hint" hidden th:text="#{mstItem.cdFixedHint}">품목코드는 만든 뒤 바꿀 수 없습니다.</small>
+                <small id="cdAutoHint" class="hb-hint" hidden th:text="#{mstItem.autoCd}">저장할 때 자동으로 정해집니다</small></label>
+            <!-- ERP 품번 = mst_ext_id_map(사용 중 ERP 시스템). 신규 때 함께 저장, 뒤로는 아래 "외부 품번" 칸에서 -->
+            <label><span th:text="#{mstItem.col.erpItemCd}">ERP 품번</span>
+                <input id="erpItemCd" data-field="erpItemCd" maxlength="100" data-help-key="mst-item.erpItemCd"></label>
+            <label class="hb-wide-2"><span th:text="#{mstItem.col.itemNm}">품목명</span>
+                <input data-field="itemNm" maxlength="200" required data-help-key="mst-item.itemNm"></label>
+            <label class="hb-wide"><span th:text="#{mstItem.col.spec}">규격</span>
+                <input data-field="spec" maxlength="200"></label>
+            <label><span th:text="#{mstItem.col.itemType}">품목 유형</span>
+                <select data-field="itemType" data-hb="select" data-code="ITEM_TYPE" data-blank="select" required></select></label>
+            <label><span th:text="#{mstItem.col.unitCd}">단위</span>
+                <select data-field="unitCd" data-hb="select" data-code="UNIT" data-blank="select" required data-help-key="mst-item.unitCd"></select></label>
+            <fieldset class="hb-seg hb-wide hb-form-seg">
+                <legend th:text="#{mstItem.col.procType}">조달</legend>
+                <label><input type="radio" name="formProcType" data-field="procType" value="MAKE"><span th:text="#{code.PROC_TYPE.MAKE}">자체 생산</span></label>
+                <label><input type="radio" name="formProcType" data-field="procType" value="BUY"><span th:text="#{code.PROC_TYPE.BUY}">구매</span></label>
+                <label><input type="radio" name="formProcType" data-field="procType" value="OUTSRC"><span th:text="#{code.PROC_TYPE.OUTSRC}">외주 가공</span></label>
+            </fieldset>
+            <label><span th:text="#{mstItem.col.netMassKg}">순질량(kg)</span>
+                <input data-field="netMassKg" data-hb="number" data-scale="6" data-pad="false" data-min="0.000001" data-max="999999999.999999"
+                       aria-describedby="massHint" data-help-key="mst-item.netMassKg">
+                <small id="massHint" class="hb-hint" th:text="#{mstItem.massHint}">기본 단위 1개당 kg, 소수 6자리까지</small></label>
+            <label><span th:text="#{mstItem.col.hsCd}">HS 코드</span>
+                <input data-field="hsCd" maxlength="13" inputmode="numeric" aria-describedby="hsHint" data-help-key="mst-item.hsCd">
+                <small id="hsHint" class="hb-hint" th:text="#{mstItem.hsHint}">숫자 6~10자리</small></label>
+            <label><span th:text="#{mstItem.col.stdPrice}">표준단가</span>
+                <input data-field="stdPrice" data-hb="number" data-scale="4" data-pad="false" data-min="0" data-max="99999999999999.9999"
+                       aria-describedby="priceHint" data-help-key="mst-item.stdPrice">
+                <small id="priceHint" class="hb-hint" th:text="#{mstItem.priceHint}">기본 단위 1개당, 비우면 단가 없음</small></label>
+            <label class="hb-switch hb-form-switch"><input type="checkbox" role="switch" data-field="lotCtrlYn"><span th:text="#{mstItem.col.lotCtrlYn}">LOT 관리</span></label>
+            <label class="hb-wide"><span th:text="#{mstItem.col.remark}">비고</span>
+                <textarea data-field="remark" maxlength="1000" rows="2"></textarea></label>
+            <label><span th:text="#{mstItem.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+        </form>
+
+        <!-- 단위 환산 (P1 3a): 1 [다른 단위] = n [기본 단위]. BOM 행 단위가 기본 단위와 다르면 확정할 때 이 환산이 있어야 한다 -->
+        <section class="hb-sub" id="convSection" hidden>
+            <h2 th:text="#{mstItem.conv}">단위 환산</h2>
+            <p class="hb-muted" th:text="#{mstItem.convHint}">BOM·구매에서 기본 단위가 아닌 단위를 쓸 때의 환산입니다.</p>
+            <div id="convs" class="hb-rows"></div>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="addConvBtn" class="hb-btn-secondary" th:text="#{mstItem.addConv}">환산 추가</button>
+                <button type="button" id="saveConvsBtn" th:text="#{mstItem.saveConvs}">환산 저장</button>
+            </div>
+        </section>
+
+        <!-- 클래스 속성 (P1 7b, docs/22 5b): 회사별 품목 클래스 + 그 클래스의 속성 값(attrs). 품목 저장과 따로 저장 -->
+        <section class="hb-sub" id="attrSection" hidden>
+            <h2 th:text="#{mstItem.attrs}">클래스 속성</h2>
+            <form id="attrForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{mstItem.itemClass}">품목 클래스</span>
+                    <select data-field="classId" id="itemClass" data-help-key="mst-item.itemClass"></select></label>
+                <div id="attrBox" class="hb-form hb-wide hb-attr-box"></div>
+            </form>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="saveAttrsBtn" th:text="#{mstItem.saveAttrs}">속성 저장</button>
+            </div>
+        </section>
+
+        <!-- 외부 품번 (P1 7a, docs/22): ERP·고객사별 코드. 업무 테이블에 외부 코드 컬럼을 두지 않고 mst_ext_id_map 에만 -->
+        <section class="hb-sub" id="extSection" hidden>
+            <h2 th:text="#{mstItem.extIds}">외부 품번</h2>
+            <p class="hb-muted" th:text="#{mstItem.extHint}">ERP·고객사가 이 품목을 부르는 코드입니다. 시스템마다 하나씩입니다.</p>
+            <table class="hb-cmp-table" id="extIds">
+                <thead><tr>
+                    <th th:text="#{mstItem.ext.system}">시스템</th>
+                    <th th:text="#{mstItem.ext.externalId}">외부 코드</th>
+                    <th th:text="#{mstItem.ext.externalNm}">외부 이름</th>
+                    <th th:text="#{mstItem.col.useYn}">사용</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <form id="extForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{mstItem.ext.system}">시스템</span>
+                    <select data-field="systemCd" id="extSystem"></select></label>
+                <label><span th:text="#{mstItem.ext.externalId}">외부 코드</span>
+                    <input data-field="externalId" maxlength="100" data-help-key="mst-item.externalId"></label>
+                <label><span th:text="#{mstItem.ext.externalNm}">외부 이름</span>
+                    <input data-field="externalNm" maxlength="200"></label>
+                <div class="hb-toolbar"><button type="submit" id="addExtBtn" class="hb-btn-secondary" th:text="#{mstItem.ext.add}">외부 품번 추가</button></div>
+            </form>
+        </section>
+
+        <section class="hb-sub" id="fileSection" hidden>
+            <h2 th:text="#{mstItem.files}">첨부</h2>
+            <ul id="files" class="hb-files"></ul>
+            <input type="file" id="fileInput" th:if="${actions.contains('SAVE')}" th:aria-label="#{mstItem.files}">
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/common/hb.attrs.js}"></script>
+<script th:src="@{/js/views/master/item-mgt.js}"></script>
+</body>
+</html>

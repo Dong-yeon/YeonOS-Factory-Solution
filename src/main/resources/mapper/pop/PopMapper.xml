@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- POP 단말·배지·작업장 홈 (P2 5a, docs/25 4.6). 회사 조건은 RLS — 인증 조회도 회사 범위를 연 뒤에 부른다 -->
+<mapper namespace="io.smarthappy.module.pop.PopMapper">
+
+    <!-- ================================================================ 단말 관리 -->
+
+    <sql id="terminalCols">
+        t.terminal_id, t.terminal_cd, t.terminal_nm, t.plant_cd, p.plant_nm, t.node_id, h.node_cd, h.node_nm, t.terminal_type,
+        t.activation_expires_at, (t.key_hash is not null) as key_issued, t.activated_at, t.last_seen_at, t.revoked_at,
+        t.revoke_reason, t.remark, t.row_ver, t.updated_at, t.updated_by,
+        <!-- 상태(grid 상태 칸) — 화면 state() 와 같은 순서: 폐기 → 키 있음 → 수집 장치 키 없음 → 등록 코드 기한 -->
+        case when t.revoked_at is not null then 'REVOKED' when t.key_hash is not null then 'ACTIVE'
+             when t.terminal_type = 'COLLECTOR' then 'KEY_MISSING'
+             when t.activation_expires_at &gt; now() then 'WAITING' else 'EXPIRED' end as state
+    </sql>
+
+    <sql id="terminalFrom">
+        from sys_terminal t
+        join sys_plant p on p.comp_cd = t.comp_cd and p.plant_cd = t.plant_cd
+        left join mst_equip_hier h on h.node_id = t.node_id
+    </sql>
+
+    <select id="findTerminals" resultType="io.smarthappy.module.pop.PopDtos$TerminalRow">
+        select <include refid="terminalCols"/> <include refid="terminalFrom"/>
+         order by (t.revoked_at is not null), t.plant_cd, t.terminal_cd
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 폐기 단말은 정렬과 관계없이 늘 끝(목록과 같게), 정렬은 허용 목록 enum 이름으로만, 마지막에 PK -->
+    <select id="findTerminalPage" resultType="io.smarthappy.module.pop.PopDtos$TerminalRow">
+        select <include refid="terminalCols"/> <include refid="terminalFrom"/>
+         order by (t.revoked_at is not null),
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'TERMINAL_NM'">t.terminal_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PLANT_CD'">t.plant_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TERMINAL_TYPE'">t.terminal_type<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'LAST_SEEN_AT'">t.last_seen_at<if test="s.desc"> desc</if> nulls last</when>
+                <otherwise>t.terminal_cd<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         t.terminal_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countTerminals" resultType="long">
+        select count(*) from sys_terminal t
+    </select>
+
+    <select id="findTerminal" resultType="io.smarthappy.module.pop.PopDtos$TerminalRow">
+        select <include refid="terminalCols"/> <include refid="terminalFrom"/> where t.terminal_id = #{id}
+    </select>
+
+    <select id="plantOptions" resultType="io.smarthappy.module.pop.PopDtos$PlantOption">
+        select plant_cd, plant_nm from sys_plant where use_yn = 'Y' order by plant_cd
+    </select>
+
+    <select id="nodeOptions" resultType="io.smarthappy.module.pop.PopDtos$NodeOption">
+        select h.node_id, h.plant_cd, h.node_cd, h.node_nm, h.node_type from mst_equip_hier h
+         where h.plant_cd = #{plantCd} and h.node_type in ('LINE', 'CELL') and h.use_yn = 'Y'
+         order by h.node_cd
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="insertTerminal" resultType="long" flushCache="true">
+        insert into sys_terminal (comp_cd, terminal_cd, terminal_nm, plant_cd, node_id, terminal_type, activation_hash,
+                                  activation_expires_at, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.terminalCd}, #{f.terminalNm}, #{f.plantCd}, #{f.nodeId}, #{f.terminalType},
+                #{activationHash}, #{expiresAt}, #{f.remark}, #{by}, #{by})
+        returning terminal_id
+    </select>
+
+    <update id="updateTerminal">
+        update sys_terminal
+           set terminal_nm = #{f.terminalNm}, plant_cd = #{f.plantCd}, node_id = #{f.nodeId}, terminal_type = #{f.terminalType},
+               remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where terminal_id = #{id} and row_ver = #{f.rowVer} and revoked_at is null
+    </update>
+
+    <update id="reissue">
+        update sys_terminal
+           set activation_hash = #{activationHash}, activation_expires_at = #{expiresAt}, key_hash = null, activated_at = null,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where terminal_id = #{id} and row_ver = #{rowVer} and revoked_at is null
+    </update>
+
+    <update id="setKey">
+        update sys_terminal
+           set key_hash = #{keyHash}, activated_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where terminal_id = #{id} and revoked_at is null and terminal_type = 'COLLECTOR'
+    </update>
+
+    <update id="revoke">
+        update sys_terminal
+           set revoked_at = now(), revoke_reason = #{reason}, key_hash = null, activation_hash = null, activation_expires_at = null,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where terminal_id = #{id} and row_ver = #{rowVer} and revoked_at is null
+    </update>
+
+    <!-- ================================================================ 단말 인증 -->
+
+    <select id="findByActivation" resultType="long" flushCache="true" useCache="false">
+        select terminal_id from sys_terminal
+         where activation_hash = #{activationHash} and activation_expires_at &gt; now() and revoked_at is null
+         for update
+    </select>
+
+    <update id="activate">
+        update sys_terminal
+           set key_hash = #{keyHash}, activation_hash = null, activation_expires_at = null, activated_at = now(),
+               last_seen_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = 'POP'
+         where terminal_id = #{id} and revoked_at is null and activation_hash is not null
+    </update>
+
+    <select id="findAuth" resultType="io.smarthappy.module.pop.PopDtos$TerminalAuthRow">
+        select t.terminal_id, t.terminal_cd, t.terminal_nm, t.plant_cd, t.node_id, h.node_cd, h.node_nm, t.terminal_type,
+               t.key_hash, t.last_seen_at, p.use_yn as plant_use_yn, c.status_cd as comp_status
+          from sys_terminal t
+          join sys_plant p on p.comp_cd = t.comp_cd and p.plant_cd = t.plant_cd
+          join sys_comp c on c.comp_cd = t.comp_cd
+          left join mst_equip_hier h on h.node_id = t.node_id
+         where t.terminal_id = #{id} and t.revoked_at is null
+    </select>
+
+    <!-- 마지막 사용 시각 — 1분에 한 번만(감사 트리거는 이 칸을 무시) -->
+    <update id="touch">
+        update sys_terminal set last_seen_at = now()
+         where terminal_id = #{id} and (last_seen_at is null or last_seen_at &lt; now() - interval '1 minute')
+    </update>
+
+    <!-- ================================================================ 작업자 -->
+
+    <sql id="workerCols">
+        w.worker_id, w.worker_cd, w.worker_nm, w.use_yn, w.pin_hash, w.pin_fail_cnt, w.pin_locked_until
+    </sql>
+
+    <select id="findWorkerByBadge" resultType="io.smarthappy.module.pop.PopDtos$WorkerAuthRow">
+        select <include refid="workerCols"/> from mst_worker w where w.badge_hash = #{badgeHash}
+    </select>
+
+    <!-- KS9: 같은 단말이 받은 exitRef 만(다른 단말 = 행위자 다름, 다른 회사 = RLS). LIKE 대신 끝 일치(right) — exitRef 의 '_' 가 와일드카드가 되지 않게 -->
+    <select id="findKioskExitDetail" resultType="string">
+        select l.detail from sys_access_log l
+         where l.event_cd = 'POP_KIOSK_EXIT' and l.result_cd = 'OK' and l.login_id = #{actor}
+           and l.occurred_at > now() - interval '1 hour'
+           and right(l.detail, length(#{needle})) = #{needle}
+         order by l.log_id desc
+         limit 1
+    </select>
+
+    <select id="approverQualified" resultType="boolean">
+        select exists (
+            select 1 from mst_worker_qual h join mst_qual q on q.qual_id = h.qual_id
+             where h.worker_id = #{workerId} and q.qual_cd = #{qualCd} and q.use_yn = 'Y'
+               and h.acquired_on &lt;= #{today} and (h.expires_on is null or h.expires_on &gt;= #{today})
+               and (h.revoked_on is null or h.revoked_on &gt; #{today}))
+    </select>
+
+    <select id="findWorker" resultType="io.smarthappy.module.pop.PopDtos$WorkerAuthRow">
+        select <include refid="workerCols"/> from mst_worker w where w.worker_id = #{id}
+    </select>
+
+    <!-- PIN 시도 선점(docs/25 4.42) — 비교 전에 이번 시도를 실패로 먼저 센다. 조건부 UPDATE 한 문장이라 잠금 확인·증가가 원자적:
+         동시 시도는 행 잠금으로 한 줄로 서고, 잠긴 동안 온 것은 0건(null). 잠금이 끝난 행은 1부터(해제 직후 한 번 틀려 다시 잠기지 않게).
+         lockAt 번째 시도가 잠금 시각을 건다(맞으면 pinOk 가 푼다). 시각은 서비스 시계(잠금 확인과 같은 시계). 돌려주는 값 = 이번까지의 실패 수 -->
+    <select id="pinClaim" resultType="java.lang.Integer" flushCache="true">
+        update mst_worker
+           set pin_fail_cnt = case when pin_locked_until is not null then 1 else pin_fail_cnt + 1 end,
+               pin_locked_until = case when (case when pin_locked_until is not null then 1 else pin_fail_cnt + 1 end) &gt;= #{lockAt}
+                                       then #{lockEnd} else null end
+         where worker_id = #{id} and (pin_locked_until is null or pin_locked_until &lt;= #{now})
+        returning pin_fail_cnt
+    </select>
+
+    <!-- 맞는 PIN(docs/25 4.42, QA O-1) — 선점 뒤 비교하는 사이 아무도 끼어들지 않았으면(실패 수 = 이번 선점이 돌려준 수 claimed) 0·잠금 해제.
+         끼어들었으면(다른 단말의 틀린 시도가 선점됨) 자기 선점분만 되돌린다(실패 수 − 1, 0 아래 없음) — 남의 실패를 지우거나 그사이 걸린 잠금을 풀지 않는다.
+         claimed = lockAt 이면 이번 선점이 건 자기 잠금이라(잠긴 동안 온 시도는 선점 0건 — 수가 안 바뀜) 0·해제. SET 의 오른쪽은 모두 갱신 전 값 -->
+    <update id="pinOk">
+        update mst_worker
+           set pin_fail_cnt = case when pin_fail_cnt = #{claimed} then 0 else greatest(pin_fail_cnt - 1, 0) end,
+               pin_locked_until = case when pin_fail_cnt = #{claimed} then null else pin_locked_until end
+         where worker_id = #{id} and (pin_fail_cnt &lt;&gt; 0 or pin_locked_until is not null)
+    </update>
+
+    <!-- ================================================================ 작업장 홈 -->
+
+    <!-- 단말 작업장(라인이면 아래 셀 포함)의 발행·진행 지시 공정(완료 아님). 작업장이 없으면 공장 전체 -->
+    <select id="findTasks" resultType="io.smarthappy.module.pop.PopDtos$TaskRow">
+        select wp.wo_proc_id, w.wo_id, w.wo_no, i.item_cd, i.item_nm, trim_scale(w.plan_qty)::text as plan_qty, w.unit_cd,
+               w.priority, w.plan_start, w.status as wo_status, wp.op_seq, wp.proc_id, wp.proc_cd, wp.proc_nm, h.node_cd,
+               wp.status as proc_status, e.equip_cd, e.equip_nm
+          from prd_wo_proc wp
+          join prd_wo w on w.wo_id = wp.wo_id
+          join mst_item i on i.item_id = w.item_id
+          left join mst_equip_hier h on h.node_id = wp.node_id
+          left join mst_equip e on e.equip_id = wp.equip_id
+         where w.plant_cd = #{plantCd} and w.status in ('RELEASED', 'IN_PROGRESS') and wp.status &lt;&gt; 'DONE'
+           <if test="nodeId != null">
+           and (wp.node_id = #{nodeId} or wp.node_id in (select c.node_id from mst_equip_hier c where c.parent_id = #{nodeId}))
+           </if>
+         order by w.priority, w.plan_start, w.wo_no, wp.op_seq
+         limit #{limit}
+    </select>
+</mapper>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 업무 흐름 지도 (docs/46 12장). sys_prog 는 전역 표(회사 조건 없음) — 권한 판정은 서비스가 AuthMapper.findSearchableProgs 로 -->
+<mapper namespace="io.smarthappy.module.home.FlowMapMapper">
+
+    <select id="findProgs" resultType="io.smarthappy.module.home.FlowMapMapper$ProgRow">
+        select prog_cd, prog_nm_key
+          from sys_prog
+         where use_yn = 'Y'
+         order by prog_cd
+    </select>
+</mapper>

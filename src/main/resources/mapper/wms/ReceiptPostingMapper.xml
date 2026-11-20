@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 생산 입고 → 재고 원장 (P4 2부 B1, docs/30 11장). prd_receipt 는 읽기만 -->
+<mapper namespace="io.smarthappy.module.wms.inv.ReceiptPostingMapper">
+
+    <select id="findReceipt" resultType="io.smarthappy.module.wms.inv.ReceiptPostingMapper$SrcReceipt">
+        select r.receipt_id, r.plant_cd, r.item_id, r.unit_cd, i.unit_cd as item_unit_cd, i.lot_ctrl_yn, r.lot_id, r.node_id, r.qty,
+               r.occurred_at, r.entry_method, r.recorded_by, r.performed_by, r.reversal_of_id, r.reason, a.default_status,
+               n.use_yn as node_use_yn, coalesce(a.stock_yn, 'Y') as stock_yn, a.loc_usage
+          from prd_receipt r
+          join mst_item i on i.item_id = r.item_id
+          left join mst_equip_hier n on n.node_id = r.node_id
+          left join wms_loc_attr a on a.node_id = r.node_id
+         where r.receipt_id = #{id}
+    </select>
+
+    <!-- 이 공장 WH·LOC(원장 트리거 ck_inv_trx_node_type 과 같은 칸) — 받을지는 ProductionReceiptPosting.nodeReason 이 정한다 -->
+    <select id="receiptNodes" resultType="io.smarthappy.module.wms.inv.ReceiptPostingMapper$RcvNode">
+        select n.node_id, n.node_cd, wms_node_path(n.node_id) as path, n.use_yn, coalesce(a.stock_yn, 'Y') as stock_yn, a.loc_usage,
+               a.default_status
+          from mst_equip_hier n
+          left join wms_loc_attr a on a.node_id = n.node_id
+         where n.plant_cd = #{plantCd} and n.node_type in ('WH', 'LOC')
+         order by 3, n.node_id
+    </select>
+
+    <select id="lotCtrlOf" resultType="string">select lot_ctrl_yn from mst_item where item_id = #{itemId}</select>
+
+    <select id="allReceiptIds" resultType="long">
+        select receipt_id from prd_receipt order by receipt_id
+    </select>
+
+    <select id="trxOf" resultType="long">
+        select trx_id from inv_trx where client_req_id = #{reqId} and req_seq = 1
+    </select>
+
+    <select id="countReceipts" resultType="int">select count(*) from prd_receipt</select>
+
+    <select id="countPosted" resultType="int">
+        select count(*) from prd_receipt r
+         where exists (select 1 from inv_trx t where t.client_req_id = 'PRD_RECEIPT:' || r.receipt_id and t.req_seq = 1)
+    </select>
+
+    <select id="countMissing" resultType="int">
+        select count(*) from prd_receipt r
+         where not exists (select 1 from inv_trx t where t.client_req_id = 'PRD_RECEIPT:' || r.receipt_id and t.req_seq = 1)
+    </select>
+
+    <select id="backfillDone" resultType="boolean">
+        select exists (select 1 from inv_backfill_run where kind = 'PRD_RECEIPT')
+    </select>
+
+    <select id="insertRun" resultType="long" flushCache="true">
+        insert into inv_backfill_run (comp_cd, kind, run_by, total, posted, existed, failed, detail)
+        values (hb_current_comp(), 'PRD_RECEIPT', #{by}, #{total}, #{posted}, #{existed}, #{failed}, #{detail}::jsonb)
+        returning run_id
+    </select>
+
+    <select id="lastRun" resultType="io.smarthappy.module.wms.inv.ReceiptPostingMapper$BackfillRun">
+        select run_id, run_at, run_by, total, posted, existed, failed, detail::text as detail
+          from inv_backfill_run where kind = 'PRD_RECEIPT' order by run_id desc limit 1
+    </select>
+</mapper>

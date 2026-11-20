@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  초품 확인 (qms-setup) — P3 QMS 2부 Q7 (docs/29_P3 12.3). 설계·4M 변경 뒤 첫 LOT 의 셋업 검증 판정.
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 담당(WEB). 변경 하나에 첫 LOT 몇 개, 판정은 한 번.
+  직접 치는 값 = 근거 검사(그 LOT 의 판정 확정 검사 중 고름)·메모, 무효 사유.
+  서버가 채우는 값 = 첫 LOT 목록(PLM 변경 표시), 판정 결과(근거 검사 결과 복사), OK·NG·미판정 수.
+  예외 = 첫 LOT 이 아닌 LOT, 판정 확정 안 된 검사·다른 LOT 검사, 이미 판정한 LOT(무효 뒤 다시).
+-->
+<body data-table-menu="" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">초품 확인</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main hb-qms-scroll">
+        <form id="openForm" class="hb-qms-inline" autocomplete="off">
+            <label><span th:text="#{qms.change.openNo}">ECO 번호로 열기</span><input id="openNo" maxlength="50" data-help-key="qms-setup.openNo"></label>
+            <button type="submit" class="hb-btn-secondary" th:text="#{qms.change.open}">열기</button>
+        </form>
+        <h2 class="hb-qms-sub-h" th:text="#{qms.setup.recent}">최근 판정</h2>
+        <div class="hb-qms-table-wrap">
+            <table class="hb-cmp-table" id="recentTable">
+                <thead><tr>
+                    <th th:text="#{qms.change.col.ecoNo}">ECO 번호</th>
+                    <th th:text="#{qms.insp.col.lotNo}">LOT</th>
+                    <th th:text="#{qms.setup.col.insp}">근거 검사</th>
+                    <th th:text="#{qms.insp.col.result}">결과</th>
+                    <th th:text="#{qms.setup.col.status}">상태</th>
+                    <th th:text="#{qms.setup.col.by}">판정</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.setup.select}">ECO 를 여세요.</p>
+        <p id="headLine" class="hb-qms-status" role="status" hidden></p>
+        <div id="lots"></div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/setup-verif.js}"></script>
+</body>
+</html>

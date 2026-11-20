@@ -1,0 +1,47 @@
+# 경보 규칙 예시 (docs/52 Y2) — 기준값은 출발점이다. 고객 공장의 작업 주기·전송량에 맞게 고친다.
+groups:
+  - name: yeonos
+    rules:
+      - alert: YeonOSOutboxFailed
+        # 아웃박스 실패는 화면 오류 없이 조용히 ERP·메일에 안 간다 — 연계 현황 화면에서 재전송·종결
+        expr: sum by (topic) (hb_outbox_failed) > 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "아웃박스 실패로 멈춘 메시지 {{ $value }}건 (토픽 {{ $labels.topic }})"
+
+      - alert: YeonOSOutboxStuck
+        # 릴레이가 멈추면 이것이 먼저 오른다(릴레이 주기 5초)
+        expr: max by (topic) (hb_outbox_oldest_pending_seconds) > 900
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "아웃박스가 15분 넘게 나가지 않음 (토픽 {{ $labels.topic }})"
+
+      - alert: YeonOSTenantForbidden
+        # RLS 가 다른 회사 행 쓰기를 막았다 — 공격 또는 코드 결함. 1건이라도 본다(docs/05 #8)
+        expr: increase(hb_tenant_forbidden_total[5m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "회사 격리 위반 시도 차단 {{ $value }}건 — 접속 로그 TENANT_FORBIDDEN 확인"
+
+      - alert: YeonOSLoginFailBurst
+        expr: increase(hb_login_fail_total[5m]) > 50
+        labels: {severity: warning}
+        annotations:
+          summary: "5분 로그인 실패 {{ $value }}건 — 대입 공격 의심, 시도 제한(hb_login_throttled_total) 함께 확인"
+
+      - alert: YeonOSBackupStale
+        expr: hb_backup_age_hours > 26 or absent(hb_backup_age_hours)
+        for: 30m
+        labels: {severity: critical}
+        annotations:
+          summary: "마지막 백업 성공이 26시간을 넘었거나 기록이 없음"
+
+      - alert: YeonOSJobLag
+        # 매시 작업(로그 다이제스트·활용 집계) 기준 3시간. 작업마다 주기가 다르면 job 별로 나눈다
+        expr: hb_job_lag_seconds{job=~"log-digest|usage-daily"} > 3 * 3600
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "정기 작업 {{ $labels.job }} 이 3시간 넘게 성공하지 않음"

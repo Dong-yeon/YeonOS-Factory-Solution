@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  고장 신고 (cms-breakdown) — CMS 1부 C1 (docs/33 5장). 작업자·반장용 좁은 화면 우선(390 폭).
+  설비 찾기(또는 ?equip=설비코드 — QR 은 이 주소만 담는다) → 현상 타일·글 → 정지 여부 → 사진 → 신고.
+  신고는 REQ 로 들어가고, 보전 담당이 작업지시 화면에서 접수한다. 완료되면 여기서 "확인" 한다.
+-->
+<body data-table-menu="" class="hb-page hb-page-scroll" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">고장 신고</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<section class="hb-sub" th:if="${actions.contains('SAVE')}">
+    <form id="findForm" class="hb-form" autocomplete="off">
+        <label class="hb-wide-2"><span th:text="#{cms.bd.find}">설비·금형 찾기(코드·이름)</span>
+            <input id="findInput" maxlength="100" data-help-key="cms-breakdown.find"></label>
+        <div class="hb-toolbar">
+            <button type="submit" id="findBtn" class="hb-btn-secondary" th:text="#{cms.bd.findBtn}">찾기</button>
+        </div>
+    </form>
+    <ul id="targets" class="hb-files"></ul>
+
+    <div id="reportBox" hidden>
+    <form id="reportForm" class="hb-form" autocomplete="off">
+        <p id="targetLabel" class="hb-wide"></p>
+        <fieldset class="hb-wide" id="symptomTiles">
+            <legend th:text="#{cms.mwo.col.symptom}">현상</legend>
+        </fieldset>
+        <label class="hb-wide"><span th:text="#{cms.bd.symptomText}">현상 설명(코드가 없으면 글로)</span>
+            <textarea data-field="symptomText" maxlength="1000" rows="3"></textarea></label>
+        <fieldset class="hb-seg">
+            <legend th:text="#{cms.mwo.col.priority}">우선순위</legend>
+            <label><input type="radio" name="priority" value="1"><span th:text="#{cms.prio.1}">긴급</span></label>
+            <label><input type="radio" name="priority" value="2" checked><span th:text="#{cms.prio.2}">보통</span></label>
+            <label><input type="radio" name="priority" value="3"><span th:text="#{cms.prio.3}">낮음</span></label>
+        </fieldset>
+        <fieldset class="hb-seg">
+            <legend th:text="#{cms.mwo.col.down}">설비 정지</legend>
+            <label><input type="radio" name="downYn" value="N" checked><span th:text="#{cms.bd.running}">돌고 있음</span></label>
+            <label><input type="radio" name="downYn" value="Y"><span th:text="#{cms.bd.stopped}">멈춤</span></label>
+        </fieldset>
+        <label id="downStartLabel" hidden><span th:text="#{cms.mwo.col.downStartAt}">정지 시작(비우면 지금)</span>
+            <input type="datetime-local" data-field="downStartAt"></label>
+        <label class="hb-wide"><span th:text="#{cms.bd.photo}">사진(선택, 신고 뒤 올라갑니다)</span>
+            <input type="file" id="photo" accept="image/*"></label>
+        <div class="hb-toolbar hb-wide">
+            <button type="button" id="reportBtn" th:text="#{cms.bd.report}">신고</button>
+            <button type="button" id="resetBtn" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        </div>
+    </form>
+    </div>
+</section>
+
+<h2 th:text="#{cms.bd.mine}">내 신고(최근 30일)</h2>
+<table class="hb-cmp-table hb-plant-table" id="mine">
+    <thead><tr>
+        <th th:text="#{cms.mwo.col.mwoNo}">번호</th>
+        <th th:text="#{cms.mwo.col.target}">대상</th>
+        <th th:text="#{cms.mwo.col.title}">제목</th>
+        <th th:text="#{cms.mwo.col.status}">상태</th>
+        <th th:text="#{cms.mwo.col.reportedAt}">신고</th>
+        <th></th>
+    </tr></thead>
+    <tbody></tbody>
+</table>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/breakdown.js}"></script>
+</body>
+</html>

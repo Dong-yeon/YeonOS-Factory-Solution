@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{portal/layout :: head(#{portal.srm.menu.claim})}"></head>
+<!--
+  협력사 포털 — 클레임 회신 (docs/31 4.13.1 P-4 · 4.15). 내게 보낸 클레임만(작성 중은 안 보임, 서버가 로그인 소속으로 거름).
+  회신 = 원인·대책 글(파일 없음) → 보냄 상태에서만(회신 받음·종결·취소는 서버 409). 고칠 일은 거래 회사가 반려하면 다시.
+-->
+<body data-table-menu="" class="pt-page sp-page">
+<header th:replace="~{portal/layout :: header}"></header>
+<div class="pt-body">
+    <nav th:replace="~{portal/layout :: nav}"></nav>
+    <main class="pt-main">
+        <link rel="stylesheet" th:href="@{/css/views/srm-portal.css}">
+        <h1 th:text="#{portal.srm.menu.claim}">클레임 회신</h1>
+        <p class="pt-muted" th:text="#{portal.srm.claim.sub}">거래 회사가 보낸 품질 클레임을 보고 원인과 대책을 회신합니다.</p>
+
+        <form id="search" class="sp-search" autocomplete="off">
+            <label><span th:text="#{portal.srm.claim.from}">보낸 날 시작</span><input type="date" name="from" required></label>
+            <label><span th:text="#{portal.srm.claim.to}">보낸 날 끝</span><input type="date" name="to" required></label>
+            <label><span th:text="#{portal.srm.col.status}">상태</span>
+                <select name="status" id="statusSel"><option value="" th:text="#{portal.srm.all}">전체</option></select></label>
+            <button type="submit" th:text="#{common.search}">조회</button>
+        </form>
+        <p id="listMsg" class="sp-msg" role="alert" hidden></p>
+        <div class="sp-scroll">
+            <table class="sp-table" id="claimTable">
+                <thead><tr>
+                    <th th:text="#{portal.srm.claim.col.no}">클레임 번호</th>
+                    <th th:text="#{portal.srm.claim.col.title}">제목</th>
+                    <th th:text="#{portal.srm.claim.col.sent}">받은 날</th>
+                    <th th:text="#{portal.srm.claim.col.due}">회신 기한</th>
+                    <th th:text="#{portal.srm.col.status}">상태</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <section id="detail" class="sp-detail" hidden>
+            <h2 id="detailTitle">클레임</h2>
+            <p id="detailInfo" class="pt-muted"></p>
+            <dl class="pt-info" id="claimInfo"></dl>
+            <h2 th:text="#{portal.srm.claim.ncrs}">근거 부적합</h2>
+            <div class="sp-scroll">
+                <table class="sp-table" id="ncrTable">
+                    <thead><tr>
+                        <th th:text="#{portal.srm.claim.col.ncr}">NCR</th>
+                        <th th:text="#{portal.srm.col.item}">품목</th>
+                        <th th:text="#{portal.srm.claim.col.ncQty}">부적합 수량</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div id="answerShown" hidden>
+                <h2 th:text="#{portal.srm.claim.answer}">회신</h2>
+                <dl class="pt-info" id="answerInfo"></dl>
+            </div>
+
+            <div id="answerBox" hidden>
+                <h2 th:text="#{portal.srm.claim.answerTitle}">원인·대책 회신</h2>
+                <form id="answerForm" autocomplete="off">
+                    <div class="sp-fields">
+                        <label class="sp-span"><span th:text="#{portal.srm.claim.cause}">원인(최대 2000자)</span>
+                            <textarea data-field="answerCause" maxlength="2000" rows="4"></textarea></label>
+                        <label class="sp-span"><span th:text="#{portal.srm.claim.action}">대책(최대 2000자)</span>
+                            <textarea data-field="answerAction" maxlength="2000" rows="4"></textarea></label>
+                    </div>
+                    <ul id="answerMsg" class="sp-msg" role="alert" hidden></ul>
+                    <div class="sp-actions"><button type="submit" id="answerBtn" th:text="#{portal.srm.claim.submit}">회신 보내기</button></div>
+                </form>
+            </div>
+            <p id="answerOk" class="sp-ok" role="status" hidden th:text="#{portal.srm.claim.saved}">회신을 보냈습니다.</p>
+        </section>
+    </main>
+</div>
+<th:block th:replace="~{portal/layout :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/views/srm/portal-claim.js}"></script>
+</body>
+</html>

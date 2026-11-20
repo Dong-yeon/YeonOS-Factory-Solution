@@ -1,0 +1,396 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 1부 C1 — 고장 코드·설비 프로필·보전 작업지시 (docs/33). P1 설비·자산·클래스·계층은 읽기만 -->
+<mapper namespace="io.smarthappy.module.cms.CmsMapper">
+
+    <!-- ================================================================ 공통 선택지 -->
+
+    <select id="findPlants" resultType="io.smarthappy.module.cms.CmsDtos$Option">
+        select plant_cd as code, plant_nm as name from sys_plant where use_yn = 'Y' order by sort_no, plant_cd
+    </select>
+
+    <select id="findEquipClasses" resultType="io.smarthappy.module.cms.CmsDtos$IdOption">
+        select class_id as id, class_cd as code, class_nm as name from mst_equip_class where use_yn = 'Y'
+         order by sort_no, class_cd
+    </select>
+
+    <select id="findClassId" resultType="java.lang.Long">
+        select class_id from mst_equip_class where class_cd = #{classCd} <if test="activeOnly">and use_yn = 'Y'</if>
+    </select>
+
+    <select id="codeUsable" resultType="boolean">
+        select hb_code_usable(hb_current_comp(), #{grp}, #{code})
+    </select>
+
+    <select id="ruleExists" resultType="boolean">
+        select exists (select 1 from sys_numbering_rule where rule_cd = #{ruleCd})
+    </select>
+
+    <!-- ================================================================ 고장 코드 -->
+
+    <sql id="failCols">
+        f.fail_id, f.code_type, f.fail_cd, f.fail_nm, f.fail_cat, f.equip_class_id, c.class_cd as equip_class_cd,
+        c.class_nm as equip_class_nm, f.sort_no, f.use_yn, f.remark, f.row_ver, f.updated_at, f.updated_by
+    </sql>
+
+    <!-- 목록·grid 공통 FROM·조건 -->
+    <sql id="failFromWhere">
+          from cms_fail_code f left join mst_equip_class c on c.class_id = f.equip_class_id
+        <where>
+            <if test="codeType != null">f.code_type = #{codeType}</if>
+            <if test="useYn != null">and f.use_yn = #{useYn}</if>
+            <if test="keyword != null">and (f.fail_cd like #{keyword} escape '\' or f.fail_nm ilike #{keyword} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findFailCodes" resultType="io.smarthappy.module.cms.CmsDtos$FailCodeRow">
+        select <include refid="failCols"/>
+        <include refid="failFromWhere"/>
+         order by f.code_type, f.sort_no, f.fail_cd
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findFailCodePage" resultType="io.smarthappy.module.cms.CmsDtos$FailCodeRow">
+        select <include refid="failCols"/>
+        <include refid="failFromWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'FAIL_CD'">f.fail_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'FAIL_NM'">f.fail_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'FAIL_CAT'">f.fail_cat<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'EQUIP_CLASS'">c.class_cd<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'SORT_NO'">f.sort_no<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'USE_YN'">f.use_yn<if test="s.desc"> desc</if></when>
+                <otherwise>f.code_type<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         f.fail_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countFailCodes" resultType="long">
+        select count(*) <include refid="failFromWhere"/>
+    </select>
+
+    <select id="findFailCode" resultType="io.smarthappy.module.cms.CmsDtos$FailCodeRow">
+        select <include refid="failCols"/>
+          from cms_fail_code f left join mst_equip_class c on c.class_id = f.equip_class_id
+         where f.fail_id = #{id}
+    </select>
+
+    <select id="findFailCodeByCd" resultType="io.smarthappy.module.cms.CmsDtos$FailCodeRow">
+        select <include refid="failCols"/>
+          from cms_fail_code f left join mst_equip_class c on c.class_id = f.equip_class_id
+         where f.code_type = #{codeType} and f.fail_cd = #{failCd}
+    </select>
+
+    <select id="insertFailCode" resultType="long" flushCache="true">
+        insert into cms_fail_code (comp_cd, code_type, fail_cd, fail_nm, fail_cat, equip_class_id, sort_no, use_yn, remark,
+                                   created_by, updated_by)
+        values (hb_current_comp(), #{f.codeType}, #{f.failCd}, #{f.failNm}, #{f.failCat}, #{f.equipClassId}, #{f.sortNo},
+                #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning fail_id
+    </select>
+
+    <!-- 유형·코드는 바꾸지 않는다 -->
+    <update id="updateFailCode">
+        update cms_fail_code
+           set fail_nm = #{f.failNm}, fail_cat = #{f.failCat}, equip_class_id = #{f.equipClassId}, sort_no = #{f.sortNo},
+               use_yn = #{f.useYn}, remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where fail_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 설비 프로필 -->
+
+    <sql id="profileCols">
+        e.equip_id, e.equip_cd, e.equip_nm, e.plant_cd, c.class_cd, c.class_nm, h.node_cd as location_cd, e.use_yn as equip_use_yn,
+        p.row_ver, coalesce(p.criticality, 'C') as criticality, coalesce(p.key_equip_yn, 'N') as key_equip_yn,
+        p.owner_user_id, u.login_id as owner_login_id, u.user_nm as owner_nm, p.ideal_ct_sec, p.remark, p.updated_at, p.updated_by,
+        (select count(*) from cms_mwo m where m.equip_id = e.equip_id and m.status in ('REQ', 'OPEN', 'WIP')) as open_mwo_cnt
+    </sql>
+    <sql id="profileFrom">
+        from mst_equip e
+        join mst_equip_class c on c.class_id = e.class_id
+        left join mst_equip_hier h on h.node_id = e.node_id
+        left join cms_equip_profile p on p.equip_id = e.equip_id
+        left join sys_user u on u.user_id = p.owner_user_id
+    </sql>
+
+    <!-- 목록·grid 공통 조건 -->
+    <sql id="profileWhere">
+         where e.use_yn = 'Y'
+           <if test="plantCd != null">and e.plant_cd = #{plantCd}</if>
+           <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\')</if>
+           <if test="criticality != null">and coalesce(p.criticality, 'C') = #{criticality}</if>
+           <if test="keyOnly">and p.key_equip_yn = 'Y'</if>
+    </sql>
+
+    <select id="findProfiles" resultType="io.smarthappy.module.cms.CmsDtos$ProfileRow">
+        select <include refid="profileCols"/> <include refid="profileFrom"/>
+        <include refid="profileWhere"/>
+         order by e.plant_cd, e.equip_cd
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findProfilePage" resultType="io.smarthappy.module.cms.CmsDtos$ProfileRow">
+        select <include refid="profileCols"/> <include refid="profileFrom"/>
+        <include refid="profileWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'EQUIP_CD'">e.equip_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'EQUIP_NM'">e.equip_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'CLASS_CD'">c.class_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'LOCATION_CD'">h.node_cd<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'CRITICALITY'">coalesce(p.criticality, 'C')<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'KEY_EQUIP'">coalesce(p.key_equip_yn, 'N')<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'OWNER_NM'">u.user_nm<if test="s.desc"> desc nulls last</if></when>
+                <otherwise>e.plant_cd<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         e.equip_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countProfiles" resultType="long">
+        select count(*) <include refid="profileFrom"/> <include refid="profileWhere"/>
+    </select>
+
+    <select id="findProfile" resultType="io.smarthappy.module.cms.CmsDtos$ProfileRow">
+        select <include refid="profileCols"/> <include refid="profileFrom"/> where e.equip_id = #{equipId}
+    </select>
+
+    <insert id="insertProfile">
+        insert into cms_equip_profile (equip_id, comp_cd, criticality, key_equip_yn, owner_user_id, ideal_ct_sec, remark, created_by, updated_by)
+        values (#{equipId}, hb_current_comp(), #{criticality}, #{keyEquipYn}, #{ownerUserId}, #{idealCtSec}, #{remark}, #{by}, #{by})
+    </insert>
+
+    <update id="updateProfile">
+        update cms_equip_profile
+           set criticality = #{criticality}, key_equip_yn = #{keyEquipYn}, owner_user_id = #{ownerUserId}, ideal_ct_sec = #{idealCtSec},
+               remark = #{remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where equip_id = #{equipId} and row_ver = #{rowVer}
+    </update>
+
+    <select id="findInstalledAssets" resultType="io.smarthappy.module.cms.CmsDtos$InstalledAsset">
+        select a.asset_cd, a.asset_nm, a.asset_type, i.installed_at
+          from mst_asset_install i join mst_phys_asset a on a.asset_id = i.asset_id
+         where i.equip_id = #{equipId} and i.removed_at is null and i.void_yn = 'N'
+         order by a.asset_type, a.asset_cd
+    </select>
+
+    <!-- ================================================================ 작업지시 대상 -->
+
+    <sql id="equipTarget">
+        select 'EQUIP' as target_type, e.equip_id as id, e.equip_cd as code, e.equip_nm as name, e.plant_cd, e.class_id,
+               c.class_nm, null as asset_type, h.node_cd as location_cd, h.node_nm as location_nm, e.use_yn
+          from mst_equip e join mst_equip_class c on c.class_id = e.class_id left join mst_equip_hier h on h.node_id = e.node_id
+    </sql>
+    <!-- 금형·지그의 공장 = 지금 설치된 설비의 공장(설치 안 됐으면 없음) -->
+    <sql id="assetTarget">
+        select 'ASSET' as target_type, a.asset_id as id, a.asset_cd as code, a.asset_nm as name,
+               (select e.plant_cd from mst_asset_install i join mst_equip e on e.equip_id = i.equip_id
+                 where i.asset_id = a.asset_id and i.removed_at is null and i.void_yn = 'N' limit 1) as plant_cd,
+               null::bigint as class_id, null as class_nm, a.asset_type, null as location_cd, null as location_nm, a.use_yn
+          from mst_phys_asset a
+    </sql>
+
+    <select id="findTargets" resultType="io.smarthappy.module.cms.CmsDtos$TargetRow">
+        select * from (
+            <include refid="equipTarget"/> where e.use_yn = 'Y'
+              <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\')</if>
+              <if test="plantCd != null">and e.plant_cd = #{plantCd}</if>
+            <if test="withAssets">
+            union all
+            <include refid="assetTarget"/> where a.use_yn = 'Y' and a.asset_type in ('MOLD', 'JIG')
+              <if test="keyword != null">and (a.asset_cd like #{keyword} escape '\' or a.asset_nm ilike #{keyword} escape '\')</if>
+            </if>
+        ) t order by t.target_type desc, t.code limit #{limit}
+    </select>
+
+    <!-- POP 고장 신고(C20) — 설비 id 로 대상, 현상 선택지, 작업자·단말 확인, 요청 id 로 처음 번호 -->
+    <select id="findEquipTargetById" resultType="io.smarthappy.module.cms.CmsDtos$TargetRow">
+        <include refid="equipTarget"/> where e.equip_id = #{id}
+    </select>
+
+    <select id="findPopSymptoms" resultType="io.smarthappy.module.cms.link.BreakdownReport$Symptom">
+        select f.fail_cd as symptom_cd, f.fail_nm as symptom_nm
+          from cms_fail_code f
+         where f.code_type = 'SYMPTOM' and f.use_yn = 'Y'
+           and (f.equip_class_id is null or f.equip_class_id = (select e.class_id from mst_equip e where e.equip_id = #{equipId}))
+           and exists (select 1 from mst_equip e where e.equip_id = #{equipId} and e.use_yn = 'Y')
+         order by f.sort_no, f.fail_cd
+    </select>
+
+    <select id="popWorkerActive" resultType="boolean">
+        select exists (select 1 from mst_worker w where w.worker_id = #{workerId} and w.use_yn = 'Y')
+    </select>
+
+    <select id="findPopTerminal" resultType="io.smarthappy.module.cms.CmsDtos$Option">
+        select t.terminal_cd as code, t.plant_cd as name from sys_terminal t where t.terminal_id = #{terminalId}
+    </select>
+
+    <select id="findMwoNoByReportReq" resultType="string">
+        select m.mwo_no from cms_mwo m where m.report_req_id = #{reqId}
+    </select>
+
+    <!-- POP 사진 대상(C25) — 행 잠금. 다른 회사 = RLS 로 없음 -->
+    <select id="lockPopPhotoTarget" resultType="io.smarthappy.module.cms.CmsDtos$PopPhotoTarget">
+        select m.mwo_id, m.mwo_type, m.status, m.reported_terminal_id, m.report_req_id
+          from cms_mwo m
+         where m.mwo_no = #{mwoNo}
+           for update
+    </select>
+
+    <select id="findEquipTarget" resultType="io.smarthappy.module.cms.CmsDtos$TargetRow">
+        <include refid="equipTarget"/> where e.equip_cd = #{code}
+    </select>
+
+    <select id="findAssetTarget" resultType="io.smarthappy.module.cms.CmsDtos$TargetRow">
+        <include refid="assetTarget"/> where a.asset_cd = #{code}
+    </select>
+
+    <!-- ================================================================ 보전 작업지시 -->
+
+    <sql id="mwoCols">
+        m.mwo_id, m.mwo_no, m.mwo_type, m.plant_cd, m.target_type, m.equip_id, m.asset_id,
+        coalesce(e.equip_cd, a.asset_cd) as target_cd, coalesce(e.equip_nm, a.asset_nm) as target_nm, e.class_id as target_class_id,
+        m.title, m.priority, m.status, m.reported_at, m.requested_by, ru.login_id as requested_login_id, ru.user_nm as requested_nm,
+        m.reported_worker_id, rw.worker_cd as reported_worker_cd, rw.worker_nm as reported_worker_nm,
+        m.reported_terminal_id, rt.terminal_cd as reported_terminal_cd, m.report_req_id,
+        m.symptom_id, fs.fail_cd as symptom_cd, fs.fail_nm as symptom_nm, m.symptom_text,
+        m.assignee_id, au.login_id as assignee_login_id, au.user_nm as assignee_nm, m.due_date, m.started_at, m.finished_at,
+        m.down_yn, m.down_start_at, m.down_end_at, m.cause_id, fc.fail_cd as cause_cd, fc.fail_nm as cause_nm,
+        m.action_id, fa.fail_cd as action_cd, fa.fail_nm as action_nm, m.work_text, m.cancel_reason, m.closed_at,
+        m.fail_mech_cd, m.fail_detect_cd, m.fail_impact_cd,
+        cu.login_id as closed_login_id, m.parent_mwo_id, pm.mwo_no as parent_mwo_no, m.pm_plan_id, m.due_ref_date, m.due_ref_usage, m.src_run_id,
+        (select coalesce(sum(l.minutes), 0) from cms_mwo_labor l where l.mwo_id = m.mwo_id) as labor_min,
+        m.row_ver, m.updated_at, m.updated_by
+    </sql>
+    <sql id="mwoFrom">
+        from cms_mwo m
+        left join mst_equip e on e.equip_id = m.equip_id
+        left join mst_phys_asset a on a.asset_id = m.asset_id
+        left join sys_user ru on ru.user_id = m.requested_by
+        left join mst_worker rw on rw.worker_id = m.reported_worker_id
+        left join sys_terminal rt on rt.terminal_id = m.reported_terminal_id
+        left join sys_user au on au.user_id = m.assignee_id
+        left join sys_user cu on cu.user_id = m.closed_by
+        left join cms_fail_code fs on fs.fail_id = m.symptom_id
+        left join cms_fail_code fc on fc.fail_id = m.cause_id
+        left join cms_fail_code fa on fa.fail_id = m.action_id
+        left join cms_mwo pm on pm.mwo_id = m.parent_mwo_id
+    </sql>
+
+    <!-- 기간(신고 시각) 필수 + 건수 상한(limit + 1 로 넘침 판정은 서비스) -->
+    <!-- 목록·grid 공통 조건(c = MwoCrit) -->
+    <sql id="mwoWhere">
+         where m.reported_at &gt;= #{c.from} and m.reported_at &lt; #{c.to}
+           <if test="c.statuses != null">and m.status in <foreach collection="c.statuses" item="s" open="(" separator="," close=")">#{s}</foreach></if>
+           <if test="c.mwoType != null">and m.mwo_type = #{c.mwoType}</if>
+           <if test="c.plantCd != null">and m.plant_cd = #{c.plantCd}</if>
+           <if test="c.equipId != null">and m.equip_id = #{c.equipId}</if>
+           <if test="c.assigneeId != null">and m.assignee_id = #{c.assigneeId}</if>
+           <if test="c.requestedBy != null">and m.requested_by = #{c.requestedBy}</if>
+           <if test="c.popOnly">and m.report_req_id is not null</if>
+           <if test="c.keyword != null">and (m.mwo_no like #{c.keyword} escape '\' or m.title ilike #{c.keyword} escape '\'
+                or e.equip_cd like #{c.keyword} escape '\' or a.asset_cd like #{c.keyword} escape '\')</if>
+    </sql>
+
+    <select id="findMwos" resultType="io.smarthappy.module.cms.CmsDtos$MwoRow">
+        select <include refid="mwoCols"/> <include refid="mwoFrom"/>
+        <include refid="mwoWhere"/>
+         order by m.reported_at desc, m.mwo_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ①, docs/33 15.1) — 정렬은 허용 목록 enum 이름으로만 고른다(문자열 치환 없이), 마지막에 PK -->
+    <select id="findMwoPage" resultType="io.smarthappy.module.cms.CmsDtos$MwoRow">
+        select <include refid="mwoCols"/> <include refid="mwoFrom"/>
+        <include refid="mwoWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'MWO_NO'">m.mwo_no<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'MWO_TYPE'">m.mwo_type<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TARGET_CD'">coalesce(e.equip_cd, a.asset_cd)<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'TITLE'">m.title<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PRIORITY'">m.priority<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'STATUS'">m.status<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'DUE_DATE'">m.due_date<if test="s.desc"> desc nulls last</if></when>
+                <otherwise>m.reported_at<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         m.mwo_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countMwos" resultType="long">
+        select count(*) <include refid="mwoFrom"/> <include refid="mwoWhere"/>
+    </select>
+
+    <select id="findMwo" resultType="io.smarthappy.module.cms.CmsDtos$MwoRow">
+        select <include refid="mwoCols"/> <include refid="mwoFrom"/> where m.mwo_id = #{id}
+    </select>
+
+    <select id="lockMwo" resultType="java.lang.Long">
+        select mwo_id from cms_mwo where mwo_id = #{id} for update
+    </select>
+
+    <!-- 첨부 잠금(C13, docs/33 13장) — 유형:상태, 없으면(다른 회사 포함) null -->
+    <select id="mwoTypeStatus" resultType="java.lang.String">
+        select mwo_type || ':' || status from cms_mwo where mwo_id = #{id}
+    </select>
+
+    <!-- 예비품 반납(WMS 계약 docs/33 11.15) — 완료 뒤 작업지시는 바뀌지 않으므로 공유 잠금으로 상태만 붙잡는다 -->
+    <select id="lockMwoShare" resultType="java.lang.Long">
+        select mwo_id from cms_mwo where mwo_id = #{id} for share
+    </select>
+
+    <select id="insertMwo" resultType="long" flushCache="true">
+        insert into cms_mwo (comp_cd, mwo_no, mwo_type, plant_cd, target_type, equip_id, asset_id, title, priority, status,
+                             reported_at, requested_by, symptom_id, symptom_text, assignee_id, due_date, down_yn, down_start_at,
+                             down_end_at, parent_mwo_id, pm_plan_id, due_ref_date, due_ref_usage, src_run_id,
+                             reported_worker_id, reported_terminal_id, report_req_id, fail_mech_cd, fail_detect_cd, fail_impact_cd,
+                             created_by, updated_by)
+        values (hb_current_comp(), #{m.mwoNo}, #{m.mwoType}, #{m.plantCd}, #{m.targetType}, #{m.equipId}, #{m.assetId}, #{m.title},
+                #{m.priority}, #{m.status}, #{m.reportedAt}, #{m.requestedBy}, #{m.symptomId}, #{m.symptomText}, #{m.assigneeId},
+                #{m.dueDate}, #{m.downYn}, #{m.downStartAt}, #{m.downEndAt}, #{m.parentMwoId}, #{m.pmPlanId}, #{m.dueRefDate},
+                #{m.dueRefUsage}, #{m.srcRunId}, #{m.reportedWorkerId}, #{m.reportedTerminalId}, #{m.reportReqId}, #{m.failMechCd},
+                #{m.failDetectCd}, #{m.failImpactCd}, #{by}, #{by})
+        returning mwo_id
+    </select>
+
+    <!-- 바뀔 수 있는 칸 전부 + 상태 (키 칸은 트리거가 고정) -->
+    <update id="updateMwo">
+        update cms_mwo
+           set title = #{m.title}, priority = #{m.priority}, status = #{m.status}, reported_at = #{m.reportedAt},
+               symptom_id = #{m.symptomId}, symptom_text = #{m.symptomText}, assignee_id = #{m.assigneeId}, due_date = #{m.dueDate},
+               started_at = #{m.startedAt}, finished_at = #{m.finishedAt}, down_yn = #{m.downYn}, down_start_at = #{m.downStartAt},
+               down_end_at = #{m.downEndAt}, cause_id = #{m.causeId}, action_id = #{m.actionId}, work_text = #{m.workText},
+               cancel_reason = #{m.cancelReason}, closed_at = #{m.closedAt}, closed_by = #{closedBy},
+               fail_mech_cd = #{m.failMechCd}, fail_detect_cd = #{m.failDetectCd}, fail_impact_cd = #{m.failImpactCd},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where mwo_id = #{m.mwoId} and row_ver = #{m.rowVer}
+    </update>
+
+    <select id="findLabor" resultType="io.smarthappy.module.cms.CmsDtos$LaborRow">
+        select l.labor_id, l.user_id, u.login_id, u.user_nm, l.work_date, l.minutes, l.remark, l.created_by
+          from cms_mwo_labor l join sys_user u on u.user_id = l.user_id
+         where l.mwo_id = #{mwoId}
+         order by l.work_date, l.labor_id
+    </select>
+
+    <select id="insertLabor" resultType="long" flushCache="true">
+        insert into cms_mwo_labor (comp_cd, mwo_id, user_id, work_date, minutes, remark, created_by, updated_by)
+        values (hb_current_comp(), #{mwoId}, #{userId}, #{workDate}, #{minutes}, #{remark}, #{by}, #{by})
+        returning labor_id
+    </select>
+
+    <delete id="deleteLabor">
+        delete from cms_mwo_labor where labor_id = #{laborId} and mwo_id = #{mwoId}
+    </delete>
+</mapper>

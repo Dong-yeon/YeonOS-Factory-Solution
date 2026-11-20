@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- SPC 위반 이벤트 원장 (docs/29_P3 19장) — 원장·처리 기록은 추가만. 상태·마지막 처리는 투영 표 qms_spc_event_state(트리거, 22장 H3) -->
+<mapper namespace="io.smarthappy.module.qms.SpcEventMapper">
+
+    <select id="findJudgedLines" resultType="io.smarthappy.module.qms.SpcEventDtos$JudgedLine">
+        select x.insp_line_id, x.char_id, h.item_id, h.insp_type, h.proc_id, h.insp_no, h.judged_at, h.lot_id, x.data_type
+          from qms_insp h
+          join qms_insp_line x on x.insp_id = h.insp_id and x.data_type in ('VARIABLE', 'ATTRIBUTE')
+         where h.insp_id = #{inspId} and h.status = 'JUDGED'
+         order by x.line_no, x.insp_line_id
+    </select>
+
+    <select id="lockUnit" resultType="int">
+        select 1 from (select pg_advisory_xact_lock(hashtext(#{key}))) x
+    </select>
+
+    <!-- SpcMapper.findSubgroups 와 같은 부분군(판정 확정·살아 있는 값) — 그 검사 행 자신까지 -->
+    <select id="findSubgroupsUpTo" resultType="io.smarthappy.module.qms.SpcDtos$SubgroupHead">
+        with g as (
+            select x.insp_line_id, h.insp_id, h.insp_no, l.lot_no, x.lsl, x.usl, min(m.occurred_at) as first_at
+              from qms_insp h
+              join qms_insp_line x on x.insp_id = h.insp_id and x.char_id = #{charId} and x.data_type = 'VARIABLE'
+              join lot_master l on l.lot_id = h.lot_id
+              join qms_insp_meas m on m.insp_line_id = x.insp_line_id and m.void_of_id is null and m.value is not null
+                   and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+             where h.item_id = #{itemId} and h.insp_type = #{inspType} and h.status = 'JUDGED'
+               and h.proc_id is not distinct from #{procId}::bigint
+             group by x.insp_line_id, h.insp_id, h.insp_no, l.lot_no, x.lsl, x.usl
+        )
+        select g.* from g
+         where (g.first_at, g.insp_line_id) &lt;= (select t.first_at, t.insp_line_id from g t where t.insp_line_id = #{lineId})
+         order by g.first_at desc, g.insp_line_id desc
+         limit #{limit}
+    </select>
+
+    <select id="insertEvent" resultType="java.lang.Long" flushCache="true">
+        insert into qms_spc_event (comp_cd, limit_id, item_id, char_id, insp_type, proc_id, insp_id, insp_line_id, rule_cd, n, point_mean,
+                                   point_range, z, center, sigma, chart_type, occurred_at, created_by)
+        values (hb_current_comp(), #{limitId}, #{line.itemId}, #{line.charId}, #{line.inspType}, #{line.procId}, #{insp}, #{line.inspLineId},
+                #{rule}, #{n}, #{mean}, #{range}, #{z}, #{center}, #{sigma}, #{chartType}, #{line.judgedAt}, #{by})
+        on conflict (insp_line_id, rule_cd) do nothing
+        returning event_id
+    </select>
+
+    <!-- findPSubgroupsUpTo: SpcMapper.findPSubgroups 와 같은 p 부분군 — 그 검사 행 자신까지 -->
+    <select id="findPSubgroupsUpTo" resultType="io.smarthappy.module.qms.SpcDtos$SubgroupHead">
+        with g as (
+            select x.insp_line_id, h.insp_id, h.insp_no, l.lot_no, min(m.occurred_at) as first_at,
+                   count(*)::integer as n, (count(*) filter (where m.ok_yn = 'N'))::integer as d
+              from qms_insp h
+              join qms_insp_line x on x.insp_id = h.insp_id and x.char_id = #{charId} and x.data_type = 'ATTRIBUTE'
+              join lot_master l on l.lot_id = h.lot_id
+              join qms_insp_meas m on m.insp_line_id = x.insp_line_id and m.void_of_id is null and m.ok_yn is not null
+                   and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+             where h.item_id = #{itemId} and h.insp_type = #{inspType} and h.status = 'JUDGED'
+               and h.proc_id is not distinct from #{procId}::bigint
+             group by x.insp_line_id, h.insp_id, h.insp_no, l.lot_no
+        )
+        select g.* from g
+         where (g.first_at, g.insp_line_id) &lt;= (select t.first_at, t.insp_line_id from g t where t.insp_line_id = #{lineId})
+         order by g.first_at desc, g.insp_line_id desc
+         limit #{limit}
+    </select>
+
+    <!-- 무효로 닫은 이벤트 id(그 근거 LOT 보류를 풀려고 — SV-6) -->
+    <select id="voidOpenOfInsp" resultType="long" flushCache="true" useCache="false">
+        insert into qms_spc_event_act (comp_cd, event_id, act_type, note, acted_by)
+        select e.comp_cd, e.event_id, 'VOID', #{note}, #{by}
+          from qms_spc_event e
+         where e.insp_id = #{inspId}
+           and not exists (select 1 from qms_spc_event_act a where a.event_id = e.event_id and a.act_type in ('CLOSE', 'VOID'))
+         order by e.event_id
+        returning event_id
+    </select>
+
+    <select id="findInspLot" resultType="long">
+        select lot_id from qms_insp where insp_id = #{inspId}
+    </select>
+
+    <!-- 상태·마지막 처리 = 투영 표(원장에서 다시 계산 = hb_qms_spc_event_state_calc, 시험으로 같음을 고정) -->
+    <sql id="eventCols">
+        e.event_id, e.limit_id, e.item_id, i.item_cd, i.item_nm, e.char_id, c.char_no, c.char_nm, e.insp_type, e.proc_id, p.proc_cd,
+        e.insp_id, h.insp_no, h.lot_id, l.lot_no, e.insp_line_id, e.rule_cd, e.n, e.point_mean, e.point_range, e.chart_type, e.z, e.center, e.sigma,
+        e.occurred_at, e.recorded_at, s.status, s.last_by, s.last_at
+    </sql>
+
+    <sql id="eventFrom">
+        from qms_spc_event e
+        join qms_spc_event_state s on s.event_id = e.event_id
+        join mst_item i on i.item_id = e.item_id
+        join qms_char c on c.char_id = e.char_id
+        join qms_insp h on h.insp_id = e.insp_id
+        join lot_master l on l.lot_id = h.lot_id
+        left join mst_proc p on p.proc_id = e.proc_id
+    </sql>
+
+    <!-- 거름: 상태·단위·규칙은 투영 표만으로. 품목 코드는 그 정렬·검색어일 때만, 나머지 표시 칸은 검색어일 때만 조인(지연 조인 안쪽, 행마다 부질의 없음) -->
+    <sql id="gridFrom">
+        from qms_spc_event_state s
+        <if test="q.keywordLike != null or q.joinItem">
+        join mst_item i on i.item_id = s.item_id
+        </if>
+        <if test="q.keywordLike != null">
+        join qms_spc_event e on e.event_id = s.event_id
+        join qms_char c on c.char_id = s.char_id
+        join qms_insp h on h.insp_id = e.insp_id
+        join lot_master l on l.lot_id = h.lot_id
+        </if>
+        <where>
+            <if test="q.statuses != null">and s.status in <foreach collection="q.statuses" item="st" open="(" separator="," close=")">#{st}</foreach></if>
+            <if test="q.unit">and s.item_id = #{q.itemId} and s.char_id = #{q.charId} and s.insp_type = #{q.inspType}
+                and s.proc_id is not distinct from #{q.procId}::bigint</if>
+            <if test="q.keywordLike != null">and (i.item_cd ilike #{q.keywordLike} escape '\' or i.item_nm ilike #{q.keywordLike} escape '\'
+                or c.char_no ilike #{q.keywordLike} escape '\' or c.char_nm ilike #{q.keywordLike} escape '\'
+                or h.insp_no ilike #{q.keywordLike} escape '\' or l.lot_no ilike #{q.keywordLike} escape '\')</if>
+        </where>
+    </sql>
+
+    <sql id="gridOrder">
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'ITEM_CD'">k.item_cd</when>
+                <when test="o.key == 'RULE_CD'">k.rule_cd</when>
+                <when test="o.key == 'STATUS'">k.status</when>
+                <otherwise>k.occurred_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        k.event_id desc
+    </sql>
+
+    <!-- 그리드: 지연 조인 — 안쪽 = 투영 표(+ 정렬 칸)에서 id 50개, 바깥 = 그 50행만 표시 칸 조인. 정렬은 허용 enum 키만(choose) + 마지막 = 이벤트 id -->
+    <select id="findGrid" resultType="io.smarthappy.module.qms.SpcEventDtos$EventRow">
+        select <include refid="eventCols"/>
+          from (select k.* from (select s.event_id, s.occurred_at, s.status, s.rule_cd<if test="q.keywordLike != null or q.joinItem">, i.item_cd</if>
+                                 <include refid="gridFrom"/>) k
+                 order by <include refid="gridOrder"/>
+                 limit #{page.size} offset #{page.offset}) k
+          join qms_spc_event e on e.event_id = k.event_id
+          join qms_spc_event_state s on s.event_id = k.event_id
+          join mst_item i on i.item_id = e.item_id
+          join qms_char c on c.char_id = e.char_id
+          join qms_insp h on h.insp_id = e.insp_id
+          join lot_master l on l.lot_id = h.lot_id
+          left join mst_proc p on p.proc_id = e.proc_id
+         order by <include refid="gridOrder"/>
+    </select>
+
+    <select id="countGrid" resultType="long">
+        select count(*) <include refid="gridFrom"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.SpcEventDtos$EventRow">
+        select <include refid="eventCols"/> <include refid="eventFrom"/> where e.event_id = #{id}
+    </select>
+
+    <select id="findActs" resultType="io.smarthappy.module.qms.SpcEventDtos$ActRow">
+        select act_id, act_type, note, link_type, link_no, acted_at, acted_by from qms_spc_event_act where event_id = #{id} order by act_seq
+    </select>
+
+    <select id="insertAct" resultType="long" flushCache="true">
+        insert into qms_spc_event_act (comp_cd, event_id, act_type, note, link_type, link_no, acted_by)
+        values (hb_current_comp(), #{id}, #{type}, #{note}, #{linkType}, #{linkNo}, #{by})
+        returning act_id
+    </select>
+
+    <select id="findOpenOfItemProc" resultType="io.smarthappy.module.qms.SpcEventDtos$EventRow">
+        select <include refid="eventCols"/> <include refid="eventFrom"/>
+         where s.item_id = #{itemId} and s.proc_id = #{procId} and s.status in ('OPEN', 'ACKED')
+         order by s.occurred_at desc, s.event_id desc
+         limit #{limit}
+    </select>
+</mapper>

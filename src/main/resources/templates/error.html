@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!--/* 공통 오류 화면(docs/40 D12) — Spring Boot 기본 Whitelabel 대신. 상태 코드·시각만 보이고
+       오류 문구·예외·스택은 내보내지 않는다(server.error.include-* 와 무관하게 이 화면은 ${message}·${trace} 를 읽지 않음).
+       정적 CSS·문구 파일만 쓰므로 DB 가 내려가 있어도 뜬다. */-->
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{page.error.title}">오류</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+</head>
+<body class="hb-page hb-error-page">
+<main class="hb-error-box">
+    <p class="hb-error-code" th:text="${status}">500</p>
+    <h1 th:text="#{page.error.title}">오류</h1>
+    <p th:if="${status != null and status >= 500}" th:text="#{page.error.server}">일시적인 문제로 요청을 처리하지 못했습니다.</p>
+    <p th:unless="${status != null and status >= 500}" th:text="#{page.error.client}">요청한 주소를 처리할 수 없습니다.</p>
+    <p class="hb-error-time" th:if="${timestamp != null}">
+        <span th:text="#{page.error.time}">발생 시각</span>
+        <span th:text="${#dates.format(timestamp, 'yyyy-MM-dd HH:mm:ss')}">2026-10-26 13:00:00</span>
+    </p>
+    <p><a class="hb-btn" th:href="@{/main}" th:text="#{page.error.home}">처음으로</a></p>
+</main>
+</body>
+</html>

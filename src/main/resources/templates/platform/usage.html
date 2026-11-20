@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!-- 활용 현황 (sys-usage) — 회사 관리자: 일별 사용자 수·로그인·화면 열람·기능 실행, 많이 쓰는 화면 (docs/11 D2) -->
+<!-- 조회 조건은 hb.searchPanel, 기간은 hb.dateRange (docs/16 I1) — 어제까지(max), 기본 지난 30일, 상한은 서버 UsageApiController.MAX_DAYS 와 같게 -->
+<body data-table-menu="" class="hb-page hb-page-scroll" th:data-prog="${prog.progCd}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">활용 현황</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{usage.period}" data-from-name="from" data-to-name="to"
+         data-presets="yesterday,thisWeek,last7,last30,thisMonth,lastMonth" data-default="last30"
+         data-max="yesterday" data-max-days="366"></div>
+    <div class="hb-sp-actions">
+        <button type="submit" id="searchBtn" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+<p class="hb-muted" th:text="#{usage.guide}">전날까지의 기록을 매시간 집계합니다. 사용자 이름은 담지 않습니다.</p>
+<div id="days"></div>
+<h2 th:text="#{usage.programs}">많이 쓰는 화면</h2>
+<div id="programs"></div>
+<p id="msg" class="hb-msg" role="status"></p>
+
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/platform/usage.js}"></script>
+</body>
+</html>

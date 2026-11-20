@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  자재 입고 (wms-rcv) — P4 2부 B4a·B4b (docs/30 12.3·12.6). 들어오는 자재를 위치와 함께 원장에(발주 없으면 RCV_MAT, 발주 행을 고르면 RCV_PO —
+  SRM PoReceiptGate 가 열린 수량·초과율·환산을 판정, 발주 칸은 SRM 없는 설치본에서 숨김), LOT 은 P2 가 만든다.
+  사용성 체크(docs/11 4.3): 주 사용자 = 자재 창고 담당(WEB, 키보드 웨지 스캐너 — PDA 는 B7). 스캔 칸이 먼저 — 위치 라벨 → 입고 위치,
+  품목 라벨 → 품번, 공급사 GS1 라벨 → (01) 품목(품목 속성 GTIN)·(10) 공급사 LOT·(17) 유통기한·(30)(37) 수량.
+  직접 치는 값 = 수량·공급사·비고·발생 시각(늦게 입력할 때만). 확정은 누른 순간 만든 요청 id 로 한 번만(다시 눌러도 LOT 이 두 개 생기지 않음).
+  예외 = SCRAP 위치·재고 안 두는 노드, 구매처 아닌 거래처, 미래 시각·마감 달, 혼적 금지 위치.
+  같은 공급사 LOT 이 나눠 들어오면 입고마다 새 내부 LOT(docs/29 결정 #43, V135 — 공급사 LOT 은 속성).
+  유통기한은 라벨 글자로만 쓰고 저장하지 않는다(D-B9). 정정은 수불 원장 화면의 역분개.
+-->
+<body data-table-menu="" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">자재 입고</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="scanForm" class="hb-search" autocomplete="off">
+    <label><span th:text="#{wmsRcv.plant}">공장</span><select id="plantSel"></select></label>
+    <label class="hb-wide"><span th:text="#{wmsRcv.scan}">스캔</span>
+        <input id="scanText" maxlength="512" th:placeholder="#{wmsRcv.scanPlaceholder}" data-help-key="wms-rcv.scan"></label>
+    <div class="hb-sp-actions">
+        <button type="submit" id="scanBtn" class="hb-btn-secondary" th:text="#{wmsRcv.scanApply}">채우기</button>
+    </div>
+    <output id="scanResult" class="hb-msg" aria-live="polite"></output>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main" id="entry">
+        <div id="asnBox" hidden>
+            <form id="asnForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{wmsRcv.asnExpected}">도착 예정 ASN</span><select id="asnSel" data-help-key="wms-rcv.asn"></select></label>
+                <label><span th:text="#{wmsRcv.asnKey}">ASN·납품서 번호</span><input id="asnKey" maxlength="80"></label>
+                <div class="hb-toolbar">
+                    <button type="submit" id="asnFindBtn" class="hb-btn-secondary" th:text="#{wmsRcv.asnFind}">찾기</button>
+                </div>
+            </form>
+            <p id="asnInfo" class="hb-muted"></p>
+            <div class="hb-replace-host" id="asnHost" hidden>
+                <table class="hb-cmp-table" id="asnLines">
+                    <thead><tr>
+                        <th th:text="#{wmsRcv.asnCol.po}">발주-행</th>
+                        <th th:text="#{wmsRcv.asnCol.item}">품목</th>
+                        <th class="hb-num" th:text="#{wmsRcv.asnCol.remain}">남은</th>
+                        <th th:text="#{wmsRcv.asnCol.lot}">공급사 LOT</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        <form id="rcvForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{wmsRcv.node}">입고 위치</span><select data-field="nodeId" class="hb-node-sel"></select></label>
+            <label><span th:text="#{wmsRcv.stockStatus}">재고 상태</span>
+                <select data-field="stockStatus" data-code="STOCK_STATUS" data-help-key="wms-rcv.stockStatus"></select>
+                <small id="qcHint" class="hb-hint" hidden th:text="#{wmsRcv.qcHint}">수입검사 대상 — 검사 대기(QC)로 입고합니다. 판정이 끝나야 가용이 됩니다.</small></label>
+            <label><span th:text="#{wmsRcv.itemCd}">품번</span>
+                <input data-field="itemId" id="itemCd" maxlength="40"></label>
+            <label><span th:text="#{wmsRcv.itemNm}">품명·단위</span><input id="itemNm" readonly tabindex="-1"></label>
+            <label id="poWrap" hidden><span th:text="#{wmsRcv.poLine}">발주 행</span>
+                <select data-field="poLineId" data-help-key="wms-rcv.poLine"></select></label>
+            <label><span th:text="#{wmsRcv.qty}">수량</span>
+                <input data-field="qty" data-hb="number" data-scale="6" data-pad="false" data-min="0.000001" data-max="999999999999.999999"
+                       inputmode="decimal"></label>
+            <label><span th:text="#{wmsRcv.supplierCd}">공급사</span>
+                <input data-field="supplierCd" maxlength="40" data-help-key="wms-rcv.supplierCd"></label>
+            <label><span th:text="#{wmsRcv.supplierLotNo}">공급사 LOT</span>
+                <input data-field="supplierLotNo" maxlength="60"></label>
+            <label><span th:text="#{wmsRcv.expiry}">유통기한</span>
+                <input data-field="expiry" type="date" data-help-key="wms-rcv.expiry"></label>
+            <label><span th:text="#{wmsRcv.occurredAt}">발생 시각</span>
+                <input data-field="occurredAt" type="datetime-local"></label>
+            <label class="hb-wide"><span th:text="#{wmsRcv.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+        <form id="labelForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{wmsRcv.printer}">LOT 라벨 프린터</span>
+                <select data-field="printerId" data-help-key="wms-rcv.printer"></select></label>
+            <label><span th:text="#{wmsRcv.tpl}">템플릿</span><select data-field="tplId"></select></label>
+            <label><span th:text="#{wmsRcv.copies}">매수</span>
+                <input data-field="copies" data-hb="number" data-scale="0" data-min="1" data-max="20" inputmode="numeric"></label>
+        </form>
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="saveBtn" th:text="#{wmsRcv.save}">입고 확정</button>
+            <button type="button" id="clearBtn" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        </div>
+        <div class="hb-toolbar hb-drawer-only">
+            <button type="button" id="recentBtn" class="hb-btn-secondary" th:text="#{wmsRcv.recent}">오늘 입고</button>
+        </div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <h2 th:text="#{wmsRcv.recent}">오늘 입고</h2>
+        <div class="hb-replace-host">
+            <table class="hb-cmp-table" id="recent">
+                <thead><tr>
+                    <th th:text="#{wmsTrx.col.occurredAt}">발생 시각</th>
+                    <th th:text="#{wmsTrx.col.itemCd}">품번</th>
+                    <th th:text="#{wmsTrx.col.lotNo}">LOT 번호</th>
+                    <th th:text="#{wmsTrx.col.path}">위치</th>
+                    <th class="hb-num" th:text="#{wmsTrx.col.qty}">수량</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/wms/receipt.js}"></script>
+</body>
+</html>

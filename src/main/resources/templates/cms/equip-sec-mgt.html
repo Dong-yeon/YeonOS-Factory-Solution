@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설비 보안 대장 (cms-equip-sec) — CMS 1부 C5 (docs/33 4.6, D11 · docs/27 M7 SEMI E187 대비). 사용 중 설비마다 한 행.
+  네트워크 연결·OS·지원 종료일·악성코드 검사·보안 등급·USB 통제·원격 접속·검토일. 경고는 저장하지 않고 조회 때 계산(오늘 = 기한이면 아직 아님):
+  미등록 / 지원 종료 OS / 검사 기한 경과(네트워크 연결 설비만, 정책 주기) / 등급 미달 / 미검토(정책 주기). 엑셀은 같은 조건·같은 경고.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설비 보안 대장</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.col.plant}">공장</span><select name="plantCd" id="plantSearch"></select></label>
+    <label><span th:text="#{cms.sec.keyword}">설비·OS</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{cms.sec.col.warn}">경고</span><select name="warn" id="warnSearch"></select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="excelBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" th:text="#{cms.sec.excel}">엑셀 내려받기</button>
+        </div>
+        <div id="secGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.sec.select}">왼쪽에서 설비를 고르세요.</p>
+        <p id="warnLine" class="hb-msg-error"></p>
+        <form id="secForm" class="hb-form" autocomplete="off" hidden>
+            <label><span th:text="#{cms.sec.col.network}">네트워크 연결</span>
+                <select data-field="networkYn" data-help-key="cms-equip-sec.networkYn">
+                    <option value="N" th:text="#{cms.sec.yn.N}">아니오</option>
+                    <option value="Y" th:text="#{cms.sec.yn.Y}">예</option>
+                </select></label>
+            <label><span th:text="#{cms.sec.col.usbCtrl}">USB 통제</span>
+                <select data-field="usbCtrlYn">
+                    <option value="N" th:text="#{cms.sec.yn.N}">아니오</option>
+                    <option value="Y" th:text="#{cms.sec.yn.Y}">예</option>
+                </select></label>
+            <label><span th:text="#{cms.sec.col.osNm}">OS</span><input data-field="osNm" maxlength="100"></label>
+            <label><span th:text="#{cms.sec.col.osVer}">OS 버전</span><input data-field="osVer" maxlength="50"></label>
+            <label class="hb-wide"><span th:text="#{cms.sec.col.osEosDate}">지원 종료일</span>
+                <input type="date" data-field="osEosDate" data-help-key="cms-equip-sec.osEosDate"></label>
+            <label><span th:text="#{cms.sec.col.lastScanDate}">마지막 검사일</span>
+                <input type="date" data-field="lastScanDate" data-help-key="cms-equip-sec.lastScanDate"></label>
+            <label><span th:text="#{cms.sec.col.scanTool}">검사 도구</span><input data-field="scanTool" maxlength="100"></label>
+            <label><span th:text="#{cms.sec.col.currentSl}">현재 등급</span>
+                <select data-field="currentSl" data-hb="select" data-code="CMS_SEC_LEVEL" data-blank="select" data-help-key="cms-equip-sec.currentSl"></select></label>
+            <label><span th:text="#{cms.sec.col.targetSl}">목표 등급</span>
+                <select data-field="targetSl" data-hb="select" data-code="CMS_SEC_LEVEL" data-blank="select"></select></label>
+            <label><span th:text="#{cms.sec.col.remoteAccess}">원격 접속</span>
+                <select data-field="remoteAccess" data-hb="select" data-code="CMS_REMOTE_ACCESS"></select></label>
+            <label><span th:text="#{cms.sec.col.remoteText}">원격 접속 방식</span><input data-field="remoteText" maxlength="200"></label>
+            <label class="hb-wide"><span th:text="#{cms.sec.col.reviewDate}">검토일</span>
+                <input type="date" data-field="reviewDate" data-help-key="cms-equip-sec.reviewDate"></label>
+            <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/equip-sec-mgt.js}"></script>
+</body>
+</html>

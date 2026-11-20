@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="#{pop.activateTitle}">POP 단말 활성화</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/pop.css}">
+</head>
+<!-- POP 단말 활성화 (docs/25 4.6) — 관리자가 처음 한 번. 회사 코드 + 사무 화면 "POP 단말 관리" 의 등록 코드 -->
+<body class="hb-pop" data-surface="pop" data-login-url="/pop/activate">
+<header class="hb-pop-head"><span class="hb-pop-where" th:text="#{pop.activateTitle}">POP 단말 활성화</span></header>
+<main class="hb-pop-main">
+    <form id="actForm" class="hb-pop-activate" autocomplete="off">
+        <p th:text="#{pop.activateGuide}">사무 화면 "POP 단말 관리" 에서 받은 등록 코드를 입력하세요. 코드는 한 번만, 24시간 안에 쓸 수 있습니다.</p>
+        <label><span th:text="#{pop.compCd}">회사 코드</span>
+            <input id="compCd" maxlength="20" autocapitalize="characters" required></label>
+        <label><span th:text="#{pop.code}">등록 코드</span>
+            <input id="code" maxlength="11" autocapitalize="characters" required></label>
+        <button type="submit" class="hb-pop-primary" th:text="#{pop.activate}">활성화</button>
+        <p id="feedback" class="hb-pop-feedback" role="status"></p>
+    </form>
+</main>
+<script th:src="@{/js/common/hb.js}"></script>
+<script th:src="@{/js/common/hb.pop.js}"></script>
+<script th:src="@{/js/pop/activate.js}"></script>
+</body>
+</html>

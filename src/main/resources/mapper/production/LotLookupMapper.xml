@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- LOT 조회 계약 (docs/25 4.21). 회사 조건은 RLS, 잠금 없음. 번호: uq_lot_master_no (comp_cd, lot_no) -->
+<mapper namespace="io.smarthappy.module.production.LotLookupMapper">
+
+    <sql id="cols">
+        m.lot_id, m.lot_no, m.item_id, i.item_cd, i.item_nm, m.wo_id, m.occurred_at
+    </sql>
+
+    <select id="lots" resultType="io.smarthappy.module.production.link.LotLookup$LotView">
+        select <include refid="cols"/>
+          from lot_master m
+          join mst_item i on i.item_id = m.item_id
+         where m.lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by m.lot_id
+    </select>
+
+    <!-- 출처·공급사 — 공급사는 RECEIVED 만 있다(ck_lot_master_received) -->
+    <select id="origins" resultType="io.smarthappy.module.production.link.LotLookup$LotOrigin">
+        select m.lot_id, m.origin, m.supplier_cust_id, c.cust_cd as supplier_cd, c.cust_nm as supplier_nm, m.supplier_lot_no
+          from lot_master m
+          left join mst_cust c on c.cust_id = m.supplier_cust_id
+         where m.lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by m.lot_id
+    </select>
+
+    <select id="byNo" resultType="io.smarthappy.module.production.link.LotLookup$LotView">
+        select <include refid="cols"/>
+          from lot_master m
+          join mst_item i on i.item_id = m.item_id
+         where m.lot_no = #{lotNo}
+    </select>
+
+    <!-- 지시가 만든 LOT(wo_id 있는 행 = PRODUCED) — ix_lot_master_wo(comp_cd, wo_id), lot_id 순·상한 -->
+    <select id="lotsOfWo" resultType="io.smarthappy.module.production.link.LotLookup$LotView">
+        select <include refid="cols"/>
+          from lot_master m
+          join mst_item i on i.item_id = m.item_id
+         where m.wo_id = #{woId}
+         order by m.lot_id
+         limit #{limit}
+    </select>
+</mapper>

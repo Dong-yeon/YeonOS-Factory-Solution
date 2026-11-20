@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설비·생산 대시보드 (cms-dashboard) — docs/51 C2(개요) + docs/33 16.4·16.5(고장 분석 G1·수리 시간 분해 G2). 조회만.
+  조건(공장·기간·설비 글자·설비 클래스)은 두 탭 공용. 개요 = 상태 원장 KPI(설비 KPI 화면과 같은 계산, 31일까지),
+  고장 분석 = 끝난 고장 수리 작업지시(92일까지) — 파레토 막대·표 줄을 누르면 그 작업지시 목록(같은 조건).
+  차트는 hb.chart(라이브러리가 없으면 표만 — 표가 원본). 서버 글자는 textContent 로만.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/cms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설비·생산 대시보드</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="cms-kpi" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{cms.kpi.plant}">공장</span><select name="plantCd" id="plantSel" required></select></label>
+    <div id="period" data-hb="dateRange" th:data-label="#{cms.dash.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,last7,last30,thisMonth,lastMonth" data-default="last30" data-max-days="92"></div>
+    <label><span th:text="#{cms.kpi.keyword}">설비</span><input name="keyword" maxlength="100" data-help-key="cms-dashboard.keyword"></label>
+    <label><span th:text="#{cms.dash.classCd}">설비 클래스</span><input name="classCd" maxlength="30" data-help-key="cms-dashboard.classCd"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-toolbar">
+    <fieldset class="hb-seg" id="tabs">
+        <legend th:text="#{cms.dash.view}">보기</legend>
+        <label><input type="radio" name="tab" value="overview" checked><span th:text="#{cms.dash.tab.overview}">개요</span></label>
+        <label><input type="radio" name="tab" value="fail"><span th:text="#{cms.dash.tab.fail}">고장 분석</span></label>
+    </fieldset>
+    <span id="periodText" class="hb-muted"></span>
+</div>
+
+<!-- 개요 (docs/51 C2) -->
+<section id="overview" aria-labelledby="ovTitle">
+    <h2 id="ovTitle" class="cmsd-sr" th:text="#{cms.dash.tab.overview}">개요</h2>
+    <p id="ovNote" class="hb-muted" hidden></p>
+    <div class="cmsd-tiles" id="tiles"></div>
+    <div class="cmsd-grid">
+        <section class="cmsd-panel" aria-labelledby="trendTitle">
+            <h3 id="trendTitle" th:text="#{cms.dash.trend}">OEE 추이(일별)</h3>
+            <div id="trendChart" class="cmsd-chart"></div>
+        </section>
+        <section class="cmsd-panel" aria-labelledby="lossTitle">
+            <h3 id="lossTitle" th:text="#{cms.dash.loss}">비가동 사유</h3>
+            <div id="lossChart" class="cmsd-chart"></div>
+            <p id="lossUnknown" class="hb-muted"></p>
+        </section>
+    </div>
+    <section class="cmsd-panel" aria-labelledby="woTitle">
+        <h3 id="woTitle" th:text="#{cms.dash.wos}">계획 대비 실적</h3>
+        <div class="hb-replace-host">
+            <table class="hb-cmp-table" id="wos">
+                <thead><tr>
+                    <th th:text="#{cms.dash.col.woNo}">작업지시</th>
+                    <th th:text="#{cms.dash.col.item}">품목</th>
+                    <th th:text="#{cms.dash.col.planStart}">계획 시작</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.planQty}">계획</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.goodQty}">양품</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.attainment}">달성률</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+</section>
+
+<!-- 고장 분석 (G1·G2, docs/33 16.4·16.5) -->
+<section id="fail" aria-labelledby="failTitle" hidden>
+    <h2 id="failTitle" class="cmsd-sr" th:text="#{cms.dash.tab.fail}">고장 분석</h2>
+    <p id="failSummary" class="cmsd-summary"></p>
+    <div class="hb-toolbar">
+        <label><span th:text="#{cms.dash.axis}">기준</span>
+            <select id="axisSel" data-help-key="cms-dashboard.axis">
+                <option value="CAUSE" th:text="#{cms.dash.axis.CAUSE}">원인</option>
+                <option value="SYMPTOM" th:text="#{cms.dash.axis.SYMPTOM}">현상(고장 모드)</option>
+                <option value="CAT" th:text="#{cms.dash.axis.CAT}">원인 분류</option>
+                <option value="EQUIP" th:text="#{cms.dash.axis.EQUIP}">설비</option>
+                <option value="MECH" th:text="#{cms.dash.axis.MECH}">메커니즘</option>
+                <option value="DETECT" th:text="#{cms.dash.axis.DETECT}">탐지 방법</option>
+                <option value="IMPACT" th:text="#{cms.dash.axis.IMPACT}">영향</option>
+            </select></label>
+    </div>
+    <div class="cmsd-grid">
+        <section class="cmsd-panel" aria-labelledby="paretoTitle">
+            <h3 id="paretoTitle" th:text="#{cms.dash.pareto}">고장 파레토</h3>
+            <div id="paretoChart" class="cmsd-chart"></div>
+        </section>
+        <section class="cmsd-panel" aria-labelledby="barsTitle">
+            <h3 id="barsTitle" th:text="#{cms.dash.bars}">기준별 고장</h3>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="bars">
+                    <thead><tr>
+                        <th th:text="#{cms.dash.col.key}">항목</th>
+                        <th class="hb-num" th:text="#{cms.dash.col.failures}">고장</th>
+                        <th class="hb-num" th:text="#{cms.dash.col.cumPct}">누적 %</th>
+                        <th class="hb-num" th:text="#{cms.dash.col.downH}">정지(h)</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+    <section class="cmsd-panel" id="drill" aria-labelledby="drillTitle" hidden>
+        <div class="hb-toolbar">
+            <h3 id="drillTitle"></h3>
+            <button type="button" id="drillClose" class="hb-btn-ghost" th:text="#{common.close}">닫기</button>
+        </div>
+        <div class="hb-replace-host">
+            <table class="hb-cmp-table" id="drillTable">
+                <thead><tr>
+                    <th th:text="#{cms.mwo.col.mwoNo}">작업지시</th>
+                    <th th:text="#{cms.dash.col.failAt}">고장 시각</th>
+                    <th th:text="#{cms.dash.col.equip}">설비</th>
+                    <th th:text="#{cms.dash.col.symptom}">현상</th>
+                    <th th:text="#{cms.dash.col.cause}">원인</th>
+                    <th th:text="#{cms.dash.col.action}">조치</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.downMin}">정지(분)</th>
+                    <th th:text="#{cms.dash.col.assignee}">담당</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+    <section class="cmsd-panel" aria-labelledby="bdTitle">
+        <div class="hb-toolbar">
+            <h3 id="bdTitle" th:text="#{cms.dash.breakdown}">수리 시간 분해</h3>
+            <fieldset class="hb-seg" id="groupSeg">
+                <legend th:text="#{cms.dash.group}">묶음</legend>
+                <label><input type="radio" name="group" value="EQUIP" checked><span th:text="#{cms.dash.group.EQUIP}">설비별</span></label>
+                <label><input type="radio" name="group" value="ASSIGNEE"><span th:text="#{cms.dash.group.ASSIGNEE}">담당별</span></label>
+            </fieldset>
+        </div>
+        <div class="hb-replace-host">
+            <table class="hb-cmp-table" id="bd">
+                <thead><tr>
+                    <th th:text="#{cms.dash.col.key}">항목</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.failures}">고장</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.avgWait}" data-help-key="cms-dashboard.wait">평균 대기(분)</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.avgRepair}">평균 수리(분)</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.avgDown}">평균 정지(분)</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.avgLabor}">평균 공수(분)</th>
+                    <th class="hb-num cmsd-eq" th:text="#{cms.dash.col.kpiMtbf}" data-help-key="cms-dashboard.mtbf">MTBF(상태, h)</th>
+                    <th class="hb-num cmsd-eq" th:text="#{cms.dash.col.kpiMttr}">MTTR(상태, 분)</th>
+                    <th class="hb-num cmsd-eq" th:text="#{cms.kpi.col.woMtbf}">MTBF(작업지시, h)</th>
+                    <th class="hb-num cmsd-eq" th:text="#{cms.kpi.col.woMttr}">MTTR(작업지시, 분)</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+    <section class="cmsd-panel" aria-labelledby="repTitle">
+        <h3 id="repTitle"></h3>
+        <div class="hb-replace-host">
+            <table class="hb-cmp-table" id="reps">
+                <thead><tr>
+                    <th th:text="#{cms.dash.col.equip}">설비</th>
+                    <th th:text="#{cms.dash.col.cause}">원인</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.repeats}">반복</th>
+                    <th class="hb-num" th:text="#{cms.dash.col.minGap}">가장 짧은 간격(일)</th>
+                    <th th:text="#{cms.dash.col.lastAt}">마지막 고장</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.chart.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/dashboard.js}"></script>
+</body>
+</html>

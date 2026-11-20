@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 작업지시 기준 고장 (docs/33 16.3~16.6). 고장 한 건 = 고장 수리(BM) · 완료(DONE·CLOSED) · 설비 대상, 고장 시각 = coalesce(정지 시작, 신고) ∈ [from, until).
+     KPI(F3·G2) 와 고장 분석(G1 파레토·설비별·반복·드릴다운)이 이 조각 하나를 쓴다 — 막대 값과 드릴다운 목록 건수가 같다(시험).
+     회사는 RLS. 기간 색인은 ix_cms_mwo_equip(comp_cd, equip_id, reported_at) — 정지 시작 기준이라 완전히 타지는 않는다(설비 수 × 기간이면 충분) -->
+<mapper namespace="io.smarthappy.module.cms.CmsFailMapper">
+
+    <!-- 왼쪽 조인은 행 수를 바꾸지 않는다(고장 코드·담당은 한 행, 공수는 작업지시마다 합 한 행) — 모든 질의가 같은 행 집합을 본다 -->
+    <sql id="failWhere">
+          from cms_mwo m
+          join mst_equip e on e.equip_id = m.equip_id
+          left join cms_fail_code fs on fs.fail_id = m.symptom_id
+          left join cms_fail_code fc on fc.fail_id = m.cause_id
+          left join cms_fail_code fa on fa.fail_id = m.action_id
+          left join sys_user u on u.user_id = m.assignee_id
+          left join lateral (select sum(l.minutes) as minutes from cms_mwo_labor l where l.mwo_id = m.mwo_id) lb on true
+         where m.mwo_type = 'BM' and m.status in ('DONE', 'CLOSED') and e.plant_cd = #{plantCd}
+           and coalesce(m.down_start_at, m.reported_at) &gt;= #{from} and coalesce(m.down_start_at, m.reported_at) &lt; #{until}
+           <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\')</if>
+           <if test="classId != null">and e.class_id = #{classId}</if>
+    </sql>
+
+    <select id="woStats" resultType="io.smarthappy.module.cms.CmsFailMapper$WoStatRow">
+        select m.equip_id,
+               count(*) as failures,
+               coalesce(sum(floor(extract(epoch from m.down_end_at - m.down_start_at))) filter (where m.down_yn = 'Y'), 0)::bigint as down_sec,
+               count(*) filter (where m.down_yn = 'Y') as down_count,
+               coalesce(sum(floor(extract(epoch from m.started_at - m.reported_at))), 0)::bigint as resp_sec,
+               count(m.started_at) as resp_count
+        <include refid="failWhere"/>
+         group by m.equip_id
+    </select>
+
+    <!-- 파레토·드릴다운 축 — 같은 식을 묶기(group by)와 거르기(드릴다운 where)에 쓴다. 별칭은 failWhere 의 조인 -->
+    <sql id="axisKey"><choose>
+        <when test="axis == 'SYMPTOM'">fs.fail_cd</when>
+        <when test="axis == 'CAT'">fc.fail_cat</when>
+        <when test="axis == 'EQUIP'">e.equip_cd</when>
+        <when test="axis == 'MECH'">m.fail_mech_cd</when>
+        <when test="axis == 'DETECT'">m.fail_detect_cd</when>
+        <when test="axis == 'IMPACT'">m.fail_impact_cd</when>
+        <otherwise>fc.fail_cd</otherwise>
+    </choose></sql>
+    <!-- 공통코드 축(CAT·MECH·DETECT·IMPACT)의 이름은 서비스가 CodeService.names 로(보는 사람 언어) -->
+    <sql id="axisName"><choose>
+        <when test="axis == 'SYMPTOM'">fs.fail_nm</when>
+        <when test="axis == 'EQUIP'">e.equip_nm</when>
+        <when test="axis == 'CAUSE'">fc.fail_nm</when>
+        <otherwise>null::varchar</otherwise>
+    </choose></sql>
+    <sql id="downSec">case when m.down_yn = 'Y' then floor(extract(epoch from m.down_end_at - m.down_start_at))::bigint end</sql>
+
+    <!-- 파레토 — 건수 큰 순(같으면 정지 시간 큰 순). 키 없음(CAT 이 비었거나 G3 선택 칸이 빈 것)은 key = null 한 줄 -->
+    <select id="pareto" resultType="io.smarthappy.module.cms.CmsFailMapper$BarRow">
+        select <include refid="axisKey"/> as key_cd, max(<include refid="axisName"/>) as key_nm, count(*) as failures,
+               coalesce(sum(<include refid="downSec"/>), 0) as down_sec
+        <include refid="failWhere"/>
+        group by <include refid="axisKey"/>
+        order by count(*) desc, coalesce(sum(<include refid="downSec"/>), 0) desc, <include refid="axisKey"/> nulls last
+    </select>
+
+    <!-- 수리 시간 분해(G2) — 묶음 = 설비 또는 담당. 평균은 서비스가 합 ÷ 그 값이 있는 건수로 -->
+    <select id="breakdown" resultType="io.smarthappy.module.cms.CmsFailMapper$GroupRow">
+        select <choose><when test="group == 'ASSIGNEE'">u.login_id</when><otherwise>e.equip_cd</otherwise></choose> as key_cd,
+               max(<choose><when test="group == 'ASSIGNEE'">u.user_nm</when><otherwise>e.equip_nm</otherwise></choose>) as key_nm,
+               <choose><when test="group == 'ASSIGNEE'">null::bigint</when><otherwise>max(e.equip_id)</otherwise></choose> as equip_id,
+               count(*) as failures,
+               coalesce(sum(<include refid="downSec"/>), 0) as down_sec, count(*) filter (where m.down_yn = 'Y') as down_count,
+               coalesce(sum(floor(extract(epoch from m.started_at - m.reported_at))), 0)::bigint as wait_sec, count(m.started_at) as wait_count,
+               coalesce(sum(floor(extract(epoch from m.finished_at - m.started_at))), 0)::bigint as repair_sec,
+               count(m.started_at) filter (where m.finished_at is not null) as repair_count,
+               coalesce(sum(lb.minutes), 0) as labor_min, count(lb.minutes) as labor_count
+        <include refid="failWhere"/>
+        group by 1
+        order by count(*) desc, 1 nulls last
+    </select>
+
+    <!-- 반복 고장(G1) — 같은 설비 × 같은 원인. 서비스가 from = 기간 시작 − N일로 넘겨 기간 첫 고장의 바로 앞 고장도 본다.
+         기간 [periodFrom, until) 안 고장 중 앞 고장과의 간격 ≤ N일인 것을 센다 -->
+    <select id="repeats" resultType="io.smarthappy.module.cms.CmsFailMapper$RepeatRow">
+        with f as (
+            select m.mwo_id, m.equip_id, e.equip_cd, e.equip_nm, m.cause_id, fc.fail_cd as cause_cd, fc.fail_nm as cause_nm,
+                   coalesce(m.down_start_at, m.reported_at) as fail_at
+            <include refid="failWhere"/>
+               and m.cause_id is not null
+        ), l as (
+            select f.*, lag(f.fail_at) over (partition by f.equip_id, f.cause_id order by f.fail_at, f.mwo_id) as prev_at from f
+        )
+        select equip_cd, max(equip_nm) as equip_nm, cause_cd, max(cause_nm) as cause_nm, count(*) as repeats,
+               max(fail_at) as last_at, floor(extract(epoch from min(fail_at - prev_at)))::bigint as min_gap_sec
+          from l
+         where fail_at &gt;= #{periodFrom} and prev_at is not null and fail_at - prev_at &lt;= make_interval(days => #{days})
+         group by equip_cd, cause_cd
+         order by count(*) desc, max(fail_at) desc, equip_cd, cause_cd
+         limit 200
+    </select>
+
+    <!-- 드릴다운 — 파레토 막대 하나(같은 failWhere + 축 키). keyNone = 키 없는 줄 -->
+    <select id="mwos" resultType="io.smarthappy.module.cms.CmsFailMapper$FailMwoRow">
+        select m.mwo_id, m.mwo_no, m.status, m.title, e.equip_cd, e.equip_nm, coalesce(m.down_start_at, m.reported_at) as fail_at,
+               fs.fail_cd as symptom_cd, fs.fail_nm as symptom_nm, fc.fail_cd as cause_cd, fc.fail_nm as cause_nm,
+               fa.fail_cd as action_cd, fa.fail_nm as action_nm, <include refid="downSec"/> as down_sec,
+               floor(extract(epoch from m.started_at - m.reported_at))::bigint as wait_sec,
+               floor(extract(epoch from m.finished_at - m.started_at))::bigint as repair_sec, u.user_nm as assignee_nm
+        <include refid="failWhere"/>
+           and <choose><when test="keyNone"><include refid="axisKey"/> is null</when><otherwise><include refid="axisKey"/> = #{key}</otherwise></choose>
+         order by coalesce(m.down_start_at, m.reported_at) desc, m.mwo_id desc
+         limit #{limit}
+    </select>
+</mapper>

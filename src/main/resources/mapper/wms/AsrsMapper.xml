@@ -1,0 +1,490 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 자동창고 보관 용기 (docs/65 23장) — 자동창고·용기·내용 사본·요청·라인·사건 원장 -->
+<mapper namespace="io.smarthappy.module.wms.asrs.AsrsMapper">
+
+    <!-- ================================================================ 자동창고 -->
+    <sql id="asrsCols">
+        a.asrs_id, a.plant_cd, a.asrs_cd, a.asrs_nm, a.store_node_id, s.node_cd as store_node_cd, a.in_node_id, i.node_cd as in_node_cd,
+        a.out_node_id, o.node_cd as out_node_cd, a.terminal_id, t.terminal_cd, a.conn_mode, a.wes_url, a.use_yn, a.remark, a.row_ver
+    </sql>
+    <sql id="asrsFrom">
+        from wms_asrs a
+        join mst_equip_hier s on s.node_id = a.store_node_id
+        join mst_equip_hier i on i.node_id = a.in_node_id
+        join mst_equip_hier o on o.node_id = a.out_node_id
+        join sys_terminal t on t.terminal_id = a.terminal_id
+    </sql>
+
+    <select id="findAsrs" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$AsrsRow">
+        select <include refid="asrsCols"/> <include refid="asrsFrom"/>
+        <where><if test="plantCd != null">a.plant_cd = #{plantCd}</if></where>
+        order by a.plant_cd, a.asrs_cd
+    </select>
+
+    <select id="findAsrsById" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$AsrsRow" flushCache="true" useCache="false">
+        select <include refid="asrsCols"/> <include refid="asrsFrom"/> where a.asrs_id = #{id}
+    </select>
+
+    <select id="findByTerminal" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$AsrsRow" flushCache="true" useCache="false">
+        select <include refid="asrsCols"/> <include refid="asrsFrom"/>
+         where a.terminal_id = #{terminalId} and a.use_yn = 'Y' and t.revoked_at is null
+    </select>
+
+    <select id="insertAsrs" resultType="long" flushCache="true">
+        insert into wms_asrs (comp_cd, plant_cd, asrs_cd, asrs_nm, store_node_id, in_node_id, out_node_id, terminal_id, conn_mode, wes_url,
+                              use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.plantCd}, #{f.asrsCd}, #{f.asrsNm}, #{f.storeNodeId}, #{f.inNodeId}, #{f.outNodeId}, #{f.terminalId},
+                #{f.connMode}, #{f.wesUrl}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning asrs_id
+    </select>
+
+    <update id="updateAsrs">
+        update wms_asrs
+           set asrs_nm = #{f.asrsNm}, in_node_id = #{f.inNodeId}, out_node_id = #{f.outNodeId}, terminal_id = #{f.terminalId},
+               conn_mode = #{f.connMode}, wes_url = #{f.wesUrl}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where asrs_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="nodeInfo" resultType="map">
+        select h.node_id as "nodeId", h.plant_cd as "plantCd", h.use_yn as "useYn", coalesce(a.loc_usage, 'STORAGE') as "usage"
+          from mst_equip_hier h
+          left join wms_loc_attr a on a.node_id = h.node_id
+         where h.node_id = #{nodeId}
+    </select>
+
+    <select id="deviceActive" resultType="boolean">
+        select exists (select 1 from sys_terminal where terminal_id = #{id} and terminal_type = 'COLLECTOR' and revoked_at is null)
+    </select>
+
+    <!-- ================================================================ 용기 유형·용기 -->
+    <select id="findTypes" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$CtrTypeRow">
+        select type_id, type_cd, type_nm, length_mm, width_mm, height_mm, slot_cnt, use_yn, row_ver from wms_ctr_type order by type_cd
+    </select>
+
+    <select id="findType" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$CtrTypeRow">
+        select type_id, type_cd, type_nm, length_mm, width_mm, height_mm, slot_cnt, use_yn, row_ver from wms_ctr_type where type_id = #{id}
+    </select>
+
+    <select id="insertType" resultType="long" flushCache="true">
+        insert into wms_ctr_type (comp_cd, type_cd, type_nm, length_mm, width_mm, height_mm, slot_cnt, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.typeCd}, #{f.typeNm}, #{f.lengthMm}, #{f.widthMm}, #{f.heightMm}, #{f.slotCnt}, #{f.useYn}, #{by}, #{by})
+        returning type_id
+    </select>
+
+    <update id="updateType">
+        update wms_ctr_type
+           set type_nm = #{f.typeNm}, length_mm = #{f.lengthMm}, width_mm = #{f.widthMm}, height_mm = #{f.heightMm}, slot_cnt = #{f.slotCnt},
+               use_yn = #{f.useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where type_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <sql id="ctrCols">
+        c.ctr_id, c.asrs_id, a.asrs_cd, c.ctr_cd, c.type_id, t.type_cd, t.slot_cnt, c.status, c.exc_reason, c.use_yn, c.row_ver,
+        exists (select 1 from wms_ctr_content x where x.ctr_id = c.ctr_id
+                 group by x.slot_no, x.item_id having count(distinct coalesce(x.lot_id, 0)) &gt; 1) as mixed_lot,
+        (select count(*) from wms_ctr_content x where x.ctr_id = c.ctr_id)::int as content_rows
+    </sql>
+    <sql id="ctrFrom">
+        from wms_ctr c
+        join wms_asrs a on a.asrs_id = c.asrs_id
+        join wms_ctr_type t on t.type_id = c.type_id
+    </sql>
+
+    <select id="findCtrs" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$CtrRow" flushCache="true" useCache="false">
+        select <include refid="ctrCols"/> <include refid="ctrFrom"/>
+        <where>
+            <if test="asrsId != null">and c.asrs_id = #{asrsId}</if>
+            <if test="status != null">and c.status = #{status}</if>
+            <if test="like != null">and c.ctr_cd like #{like} escape '\'</if>
+        </where>
+        order by c.ctr_cd
+        limit 500
+    </select>
+
+    <select id="findCtr" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$CtrRow" flushCache="true" useCache="false">
+        select <include refid="ctrCols"/> <include refid="ctrFrom"/> where c.ctr_id = #{id}
+    </select>
+
+    <select id="lockCtr" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$CtrRow" flushCache="true" useCache="false">
+        select c.ctr_id, c.asrs_id, c.ctr_cd, c.type_id, c.status, c.exc_reason, c.use_yn, c.row_ver from wms_ctr c where c.ctr_id = #{id}
+           for update
+    </select>
+
+    <select id="lockCtrByCd" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$CtrRow" flushCache="true" useCache="false">
+        select c.ctr_id, c.asrs_id, c.ctr_cd, c.type_id, c.status, c.exc_reason, c.use_yn, c.row_ver from wms_ctr c where c.ctr_cd = #{ctrCd}
+           for update
+    </select>
+
+    <select id="insertCtr" resultType="long" flushCache="true">
+        insert into wms_ctr (comp_cd, asrs_id, ctr_cd, type_id, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.asrsId}, #{f.ctrCd}, #{f.typeId}, #{f.useYn}, #{by}, #{by})
+        returning ctr_id
+    </select>
+
+    <update id="updateCtr">
+        update wms_ctr set type_id = #{f.typeId}, use_yn = #{f.useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ctr_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="setCtrStatus">
+        update wms_ctr set status = #{status}, exc_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ctr_id = #{id}
+    </update>
+
+    <select id="contents" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ContentRow" flushCache="true" useCache="false">
+        select x.content_id, x.ctr_id, x.slot_no, x.item_id, i.item_cd, i.item_nm, x.lot_id, l.lot_no, x.stock_status, x.qty
+          from wms_ctr_content x
+          join mst_item i on i.item_id = x.item_id
+          left join lot_master l on l.lot_id = x.lot_id
+         where x.ctr_id = #{ctrId}
+         order by x.slot_no, i.item_cd, l.lot_no nulls first
+    </select>
+
+    <delete id="deleteContents">delete from wms_ctr_content where ctr_id = #{ctrId}</delete>
+
+    <insert id="insertContent">
+        insert into wms_ctr_content (comp_cd, ctr_id, slot_no, item_id, lot_id, stock_status, qty, updated_by)
+        values (hb_current_comp(), #{ctrId}, #{slotNo}, #{itemId}, #{lotId}, #{status}, #{qty}, #{by})
+    </insert>
+
+    <select id="itemIdByCd" resultType="java.lang.Long">
+        select item_id from mst_item where item_cd = #{itemCd} and use_yn = 'Y'
+    </select>
+
+    <select id="lotIdByNo" resultType="java.lang.Long">
+        select lot_id from lot_master where item_id = #{itemId} and lot_no = #{lotNo}
+    </select>
+
+    <select id="stockAt" resultType="java.math.BigDecimal" flushCache="true" useCache="false">
+        select coalesce((select qty from inv_stock where item_id = #{itemId} and node_id = #{nodeId}
+                            and lot_id is not distinct from #{lotId}::bigint and stock_status = #{status}), 0)
+    </select>
+
+    <!-- ================================================================ 요청 -->
+    <select id="insertReq" resultType="long" flushCache="true">
+        insert into wms_asrs_req (comp_cd, asrs_id, req_type, req_key, remark, created_by, updated_by)
+        values (hb_current_comp(), #{asrsId}, #{type}, #{reqKey}, #{remark}, #{by}, #{by})
+        returning req_id
+    </select>
+
+    <insert id="insertLine">
+        insert into wms_asrs_req_line (comp_cd, req_id, line_no, ctr_id, item_id, lot_id, qty, updated_by)
+        values (hb_current_comp(), #{reqId}, #{lineNo}, #{ctrId}, #{itemId}, #{lotId}, #{qty}, #{by})
+    </insert>
+
+    <!-- 진행 상태 = 라인 집계(직접 저장하지 않는다, docs/65 8.2) -->
+    <sql id="reqCols">
+        r.req_id, r.asrs_id, a.asrs_cd, r.req_type, r.req_key, r.send_state, r.sent_at, r.created_at, r.created_by, r.remark, r.row_ver, r.urgent_yn, r.urgent_reason,
+        g.line_cnt, g.done_cnt,
+        case when r.send_state = 'CANCELLED' then 'CANCELLED'
+             when g.line_cnt = 0 then 'NOT_STARTED'
+             when g.done_cnt = g.line_cnt then 'DONE'
+             when g.done_cnt = 0 and g.short_cnt = 0 and g.fail_cnt &gt; 0 and g.open_cnt = 0 then 'FAILED'
+             when g.started_cnt = 0 then 'NOT_STARTED'
+             when g.open_cnt = 0 then 'PARTIAL'
+             else 'IN_PROGRESS' end as progress
+    </sql>
+    <sql id="reqFrom">
+        from wms_asrs_req r
+        join wms_asrs a on a.asrs_id = r.asrs_id
+        join lateral (select count(*)::int as line_cnt,
+                             count(*) filter (where l.status = 'DONE')::int as done_cnt,
+                             count(*) filter (where l.status = 'FAILED')::int as fail_cnt,
+                             count(*) filter (where l.status = 'SHORT')::int as short_cnt,
+                             count(*) filter (where l.status in ('NOT_STARTED', 'IN_PROGRESS'))::int as open_cnt,
+                             count(*) filter (where l.status &lt;&gt; 'NOT_STARTED')::int as started_cnt
+                        from wms_asrs_req_line l where l.req_id = r.req_id) g on true
+    </sql>
+
+    <select id="findReqs" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ReqRow" flushCache="true" useCache="false">
+        select <include refid="reqCols"/> <include refid="reqFrom"/>
+        <where>
+            <if test="asrsId != null">and r.asrs_id = #{asrsId}</if>
+            <if test="sendState != null">and r.send_state = #{sendState}</if>
+        </where>
+        order by r.req_id desc
+        limit #{limit}
+    </select>
+
+    <select id="findReq" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ReqRow" flushCache="true" useCache="false">
+        select <include refid="reqCols"/> <include refid="reqFrom"/> where r.req_id = #{id}
+    </select>
+
+    <select id="lockReq" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ReqRow" flushCache="true" useCache="false">
+        select r.req_id, r.asrs_id, r.req_type, r.req_key, r.send_state, r.row_ver, r.urgent_yn, r.urgent_reason from wms_asrs_req r where r.req_id = #{id} for update
+    </select>
+
+    <select id="lockReqByKey" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ReqRow" flushCache="true" useCache="false">
+        select r.req_id, r.asrs_id, r.req_type, r.req_key, r.send_state, r.row_ver, r.urgent_yn, r.urgent_reason from wms_asrs_req r
+         where r.asrs_id = #{asrsId} and r.req_key = #{reqKey}
+           for update
+    </select>
+
+    <update id="setSendState">
+        update wms_asrs_req
+           set send_state = #{state}, outbox_message_id = coalesce(#{messageId}, outbox_message_id),
+               sent_at = case when #{state}::varchar = 'SENT' then coalesce(sent_at, now()) else sent_at end,
+               claimed_at = case when #{state}::varchar = 'SENT' and #{messageId}::uuid is null then now() else claimed_at end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where req_id = #{id}
+    </update>
+
+    <sql id="lineCols">
+        l.line_id, l.req_id, l.line_no, l.ctr_id, c.ctr_cd, l.item_id, i.item_cd, l.lot_id, lm.lot_no, l.qty, l.done_qty, l.status, l.wes_status, l.last_reason,
+        l.started_at, l.finished_at
+    </sql>
+
+    <select id="lines" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$LineRow" flushCache="true" useCache="false">
+        select <include refid="lineCols"/>
+          from wms_asrs_req_line l left join wms_ctr c on c.ctr_id = l.ctr_id left join mst_item i on i.item_id = l.item_id left join lot_master lm on lm.lot_id = l.lot_id
+         where l.req_id = #{reqId} order by l.line_no
+    </select>
+
+    <select id="lockLine" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$LineRow" flushCache="true" useCache="false">
+        select <include refid="lineCols"/>
+          from wms_asrs_req_line l left join wms_ctr c on c.ctr_id = l.ctr_id left join mst_item i on i.item_id = l.item_id left join lot_master lm on lm.lot_id = l.lot_id
+         where l.req_id = #{reqId} and l.line_no = #{lineNo}
+           for update of l
+    </select>
+
+    <update id="setLine">
+        update wms_asrs_req_line
+           set status = #{status}, wes_status = #{wesStatus}, done_qty = coalesce(#{doneQty}, done_qty), last_reason = #{reason},
+               started_at = case when #{status}::varchar &lt;&gt; 'NOT_STARTED' then coalesce(started_at, now()) else started_at end,
+               finished_at = case when #{status}::varchar in ('DONE', 'FAILED', 'CANCELLED', 'SHORT') then coalesce(finished_at, now()) end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where line_id = #{lineId}
+    </update>
+
+    <update id="cancelLines">
+        update wms_asrs_req_line set status = 'CANCELLED', finished_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where req_id = #{reqId} and status = 'NOT_STARTED'
+    </update>
+
+    <select id="claimable" resultType="long" flushCache="true" useCache="false">
+        select req_id from wms_asrs_req where asrs_id = #{asrsId} and send_state = 'QUEUED'
+         order by req_id limit #{max}
+           for update skip locked
+    </select>
+
+    <select id="pendingInLine" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$LineRow" flushCache="true" useCache="false">
+        select <include refid="lineCols"/>
+          from wms_asrs_req_line l
+          join wms_asrs_req r on r.req_id = l.req_id
+          left join wms_ctr c on c.ctr_id = l.ctr_id left join mst_item i on i.item_id = l.item_id left join lot_master lm on lm.lot_id = l.lot_id
+         where l.ctr_id = #{ctrId} and r.req_type = 'IN' and r.send_state = 'SENT' and l.status in ('NOT_STARTED', 'IN_PROGRESS')
+         order by l.line_id limit 1
+    </select>
+
+    <select id="hasActiveLine" resultType="boolean" flushCache="true" useCache="false">
+        select exists (select 1 from wms_asrs_req_line where ctr_id = #{ctrId} and status in ('NOT_STARTED', 'IN_PROGRESS'))
+    </select>
+
+    <select id="staleReqs" resultType="long" flushCache="true" useCache="false">
+        select r.req_id from wms_asrs_req r
+         where r.send_state = 'SENT' and r.sent_at &lt; now() - make_interval(mins => #{minutes})
+           and exists (select 1 from wms_asrs_req_line l where l.req_id = r.req_id and l.status in ('NOT_STARTED', 'IN_PROGRESS'))
+           and not exists (select 1 from wms_asrs_event e where e.req_id = r.req_id and e.event_cd = 'STALE_REQ')
+         order by r.req_id limit 200
+           for update of r skip locked
+    </select>
+
+    <!-- ================================================================ 원장 -->
+    <insert id="insertEvent">
+        insert into wms_asrs_event (comp_cd, asrs_id, req_id, line_id, ctr_id, event_cd, wes_status, reason_cd, detail, inbound_id, move_grp_id,
+                                    src, occurred_at, entry_method, recorded_by)
+        values (hb_current_comp(), #{asrsId}, #{reqId}, #{lineId}, #{ctrId}, #{eventCd}, #{wesStatus}, #{reasonCd}, #{detail}, #{inboundId},
+                #{moveGrpId}, #{src}, #{occurredAt}, #{method}, #{by})
+    </insert>
+
+    <sql id="eventCols">
+        e.event_id, e.req_id, e.line_id, e.ctr_id, c.ctr_cd, e.event_cd, e.wes_status, e.reason_cd, e.detail, e.src, e.occurred_at, e.recorded_by
+    </sql>
+
+    <select id="eventsOfReq" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$EventRow" flushCache="true" useCache="false">
+        select <include refid="eventCols"/> from wms_asrs_event e left join wms_ctr c on c.ctr_id = e.ctr_id
+         where e.req_id = #{reqId} order by e.event_id limit 500
+    </select>
+
+    <select id="eventsOfCtr" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$EventRow" flushCache="true" useCache="false">
+        select <include refid="eventCols"/> from wms_asrs_event e left join wms_ctr c on c.ctr_id = e.ctr_id
+         where e.ctr_id = #{ctrId} order by e.event_id desc limit 200
+    </select>
+
+    <select id="codeUsable" resultType="boolean">
+        select exists (select 1 from sys_code where grp_cd = #{grpCd} and code = #{code} and use_yn = 'Y')
+            or exists (select 1 from sys_comp_code where grp_cd = #{grpCd} and code = #{code} and use_yn = 'Y')
+    </select>
+
+    <!-- ================================================================ 출고 (docs/65 25.1) -->
+    <select id="outFree" resultType="java.math.BigDecimal" flushCache="true" useCache="false">
+        select coalesce((select sum(s.qty) from inv_stock s where s.item_id = #{itemId} and s.node_id = #{nodeId} and s.stock_status = 'AVAILABLE'
+                            and (#{lotId}::bigint is null or s.lot_id = #{lotId}::bigint)), 0)
+             - coalesce((select sum(x.qty) from wms_ctr_content x join wms_ctr c on c.ctr_id = x.ctr_id
+                          where c.asrs_id = #{asrsId} and c.status = 'QUARANTINE' and x.item_id = #{itemId} and x.stock_status = 'AVAILABLE'
+                            and (#{lotId}::bigint is null or x.lot_id = #{lotId}::bigint)), 0)
+             - coalesce((select sum(l.qty - l.done_qty) from wms_asrs_req_line l join wms_asrs_req r on r.req_id = l.req_id
+                          where r.asrs_id = #{asrsId} and r.req_type = 'OUT' and r.send_state &lt;&gt; 'CANCELLED'
+                            and l.status in ('NOT_STARTED', 'IN_PROGRESS') and l.item_id = #{itemId}
+                            and (#{lotId}::bigint is null or l.lot_id is null or l.lot_id = #{lotId}::bigint)), 0)
+    </select>
+
+    <select id="pickable" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ContentRow" flushCache="true" useCache="false">
+        select x.content_id, x.ctr_id, x.slot_no, x.item_id, i.item_cd, i.item_nm, x.lot_id, l.lot_no, x.stock_status, x.qty
+          from wms_ctr_content x
+          join mst_item i on i.item_id = x.item_id
+          left join lot_master l on l.lot_id = x.lot_id
+         where x.ctr_id = #{ctrId} and x.item_id = #{itemId} and x.stock_status = 'AVAILABLE'
+           and (#{lotId}::bigint is null or x.lot_id = #{lotId}::bigint)
+           and (#{slot}::int is null or x.slot_no = #{slot}::int)
+         order by x.slot_no, x.content_id
+           for update of x
+    </select>
+
+    <update id="setContentQty">
+        update wms_ctr_content set qty = #{qty}, updated_at = now(), updated_by = #{by} where content_id = #{contentId}
+    </update>
+
+    <delete id="deleteContent">delete from wms_ctr_content where content_id = #{contentId}</delete>
+
+    <update id="markUrgent">
+        update wms_asrs_req set urgent_yn = 'Y', urgent_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where req_id = #{id} and urgent_yn = 'N'
+    </update>
+
+    <select id="outCount" resultType="int">
+        select count(*)::int from wms_asrs_req where req_type = 'OUT' and created_at &gt;= now() - make_interval(days => #{days})
+    </select>
+
+    <select id="urgentCount" resultType="int">
+        select count(*)::int from wms_asrs_event where event_cd = 'URGENT' and occurred_at &gt;= now() - make_interval(days => #{days})
+    </select>
+
+    <select id="urgentByUser" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$UrgentBy">
+        select recorded_by as marked_by, count(*)::int as cnt from wms_asrs_event
+         where event_cd = 'URGENT' and occurred_at &gt;= now() - make_interval(days => #{days})
+         group by recorded_by order by count(*) desc, recorded_by
+         limit 50
+    </select>
+
+    <!-- ================================================================ 대사 (docs/65 25.3) -->
+    <sql id="reconCols">
+        r.recon_id, r.asrs_id, a.asrs_cd, r.snap_key, r.status, r.part_cnt, r.expected_parts, r.ctr_cnt, r.skipped_cnt, r.diff_cnt,
+        (select count(*) from wms_asrs_recon_diff d where d.recon_id = r.recon_id and d.status = 'OPEN')::int as open_cnt,
+        r.started_at, r.finished_at
+    </sql>
+
+    <select id="lockRecon" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ReconRow" flushCache="true" useCache="false">
+        select r.recon_id, r.asrs_id, r.snap_key, r.status, r.part_cnt, r.expected_parts from wms_asrs_recon r
+         where r.asrs_id = #{asrsId} and r.snap_key = #{snapKey}
+           for update
+    </select>
+
+    <select id="insertRecon" resultType="java.lang.Long" flushCache="true">
+        insert into wms_asrs_recon (comp_cd, asrs_id, snap_key, created_by) values (hb_current_comp(), #{asrsId}, #{snapKey}, #{by})
+        on conflict (comp_cd, asrs_id, snap_key) do nothing
+        returning recon_id
+    </select>
+
+    <select id="partExists" resultType="boolean" flushCache="true" useCache="false">
+        select exists (select 1 from wms_asrs_recon_part where recon_id = #{reconId} and part_no = #{partNo})
+    </select>
+
+    <insert id="insertPart">
+        insert into wms_asrs_recon_part (comp_cd, recon_id, part_no, body) values (hb_current_comp(), #{reconId}, #{partNo}, #{body}::jsonb)
+    </insert>
+
+    <select id="parts" resultType="string" flushCache="true" useCache="false">
+        select body::text from wms_asrs_recon_part where recon_id = #{reconId} order by part_no
+    </select>
+
+    <update id="setReconParts">
+        update wms_asrs_recon
+           set part_cnt = (select count(*) from wms_asrs_recon_part p where p.recon_id = #{reconId}),
+               expected_parts = coalesce(#{expected}::int, expected_parts)
+         where recon_id = #{reconId}
+    </update>
+
+    <update id="finishRecon">
+        update wms_asrs_recon set status = 'DONE', ctr_cnt = #{ctrCnt}, skipped_cnt = #{skipped}, diff_cnt = #{diffCnt}, finished_at = now()
+         where recon_id = #{reconId}
+    </update>
+
+    <select id="ourContents" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$OurContent" flushCache="true" useCache="false">
+        select c.ctr_id, c.ctr_cd, x.slot_no, x.item_id, i.item_cd, x.lot_id, l.lot_no, x.stock_status, x.qty
+          from wms_ctr c
+          join wms_ctr_content x on x.ctr_id = c.ctr_id
+          join mst_item i on i.item_id = x.item_id
+          left join lot_master l on l.lot_id = x.lot_id
+         where c.asrs_id = #{asrsId} and c.status in ('IN_SYSTEM', 'QUARANTINE')
+         order by c.ctr_cd, x.slot_no, x.content_id
+    </select>
+
+    <select id="ctrsOf" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$CtrRow" flushCache="true" useCache="false">
+        select c.ctr_id, c.asrs_id, c.ctr_cd, c.type_id, c.status, c.exc_reason, c.use_yn, c.row_ver from wms_ctr c where c.asrs_id = #{asrsId}
+    </select>
+
+    <select id="movingCtrs" resultType="long" flushCache="true" useCache="false">
+        select l.ctr_id from wms_asrs_req_line l join wms_asrs_req r on r.req_id = l.req_id
+         where r.asrs_id = #{asrsId} and l.ctr_id is not null and l.status in ('NOT_STARTED', 'IN_PROGRESS') and r.send_state &lt;&gt; 'DRAFT'
+        union
+        select e.ctr_id from wms_asrs_event e join wms_asrs_req_line l on l.line_id = e.line_id
+         where e.asrs_id = #{asrsId} and e.ctr_id is not null and l.status in ('NOT_STARTED', 'IN_PROGRESS')
+    </select>
+
+    <insert id="insertDiff">
+        insert into wms_asrs_recon_diff (comp_cd, recon_id, asrs_id, ctr_id, ctr_cd, slot_no, item_id, item_cd, lot_id, lot_no, stock_status,
+                                         our_qty, wes_qty, diff_kind)
+        values (hb_current_comp(), #{d.reconId}, #{d.asrsId}, #{d.ctrId}, #{d.ctrCd}, #{d.slotNo}, #{d.itemId}, #{d.itemCd}, #{d.lotId},
+                #{d.lotNo}, #{d.stockStatus}, #{d.ourQty}, #{d.wesQty}, #{d.diffKind})
+    </insert>
+
+    <select id="recons" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ReconRow" flushCache="true" useCache="false">
+        select <include refid="reconCols"/> from wms_asrs_recon r join wms_asrs a on a.asrs_id = r.asrs_id
+        <where><if test="asrsId != null">r.asrs_id = #{asrsId}</if></where>
+         order by r.recon_id desc limit #{limit}
+    </select>
+
+    <select id="recon" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ReconRow" flushCache="true" useCache="false">
+        select <include refid="reconCols"/> from wms_asrs_recon r join wms_asrs a on a.asrs_id = r.asrs_id where r.recon_id = #{id}
+    </select>
+
+    <sql id="diffCols">
+        d.diff_id, d.recon_id, d.asrs_id, d.ctr_id, d.ctr_cd, d.slot_no, d.item_id, d.item_cd, d.lot_id, d.lot_no, d.stock_status, d.our_qty,
+        d.wes_qty, d.diff_kind, d.status, d.adj_req_id, d.reason_cd, d.remark, d.resolved_by, d.resolved_at, d.row_ver
+    </sql>
+
+    <select id="diffs" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$DiffRow" flushCache="true" useCache="false">
+        select <include refid="diffCols"/> from wms_asrs_recon_diff d where d.recon_id = #{reconId} order by d.ctr_cd, d.slot_no, d.item_cd, d.diff_id
+         limit 2000
+    </select>
+
+    <select id="lockDiff" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$DiffRow" flushCache="true" useCache="false">
+        select <include refid="diffCols"/> from wms_asrs_recon_diff d where d.diff_id = #{id} for update
+    </select>
+
+    <update id="resolveDiff">
+        update wms_asrs_recon_diff
+           set status = #{status}, adj_req_id = #{adjReqId}, reason_cd = #{reason}, remark = #{remark}, resolved_by = #{by}, resolved_at = now(),
+               row_ver = row_ver + 1
+         where diff_id = #{id} and status = 'OPEN' and row_ver = #{rowVer}
+    </update>
+
+    <select id="openDiffCnt" resultType="int" flushCache="true" useCache="false">
+        select count(*)::int from wms_asrs_recon_diff where ctr_id = #{ctrId} and status = 'OPEN'
+    </select>
+
+    <select id="contentQty" resultType="java.math.BigDecimal" flushCache="true" useCache="false">
+        select coalesce(sum(qty), 0) from wms_ctr_content
+         where ctr_id = #{ctrId} and slot_no = #{slot} and item_id = #{itemId} and lot_id is not distinct from #{lotId}::bigint
+    </select>
+
+    <select id="contentOf" resultType="io.smarthappy.module.wms.asrs.AsrsDtos$ContentRow" flushCache="true" useCache="false">
+        select x.content_id, x.ctr_id, x.slot_no, x.item_id, x.lot_id, x.stock_status, x.qty from wms_ctr_content x
+         where x.ctr_id = #{ctrId} and x.slot_no = #{slot} and x.item_id = #{itemId} and x.lot_id is not distinct from #{lotId}::bigint
+           and x.stock_status = #{status}
+           for update
+    </select>
+</mapper>

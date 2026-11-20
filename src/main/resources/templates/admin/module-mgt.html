@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  사용 모듈 (sys-module) — docs/80 5장. 회사가 쓸 업무 모듈을 켜고 끈다.
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자(PC). 직접 치는 칸 없음(스위치만).
+  끄기 = 숨김 — 메뉴·화면·API·현장 단말에서 막을 뿐 데이터는 그대로, 다시 켜면 보인다.
+  필수 짝 검사는 화면이 미리 보여 주고(안내) 서버가 저장 때 다시 한다(MODULE_DEPENDENCY). 자동으로 함께 켜지 않는다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">사용 모듈</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<section>
+    <p th:text="#{sysModule.intro}">이 회사가 쓸 업무 모듈을 고릅니다. 끈 모듈은 메뉴·화면·현장 단말에서 숨고, 데이터는 그대로 남아 다시 켜면 보입니다.</p>
+    <table class="hb-table" id="moduleTable">
+        <thead><tr>
+            <th th:text="#{sysModule.col.name}">모듈</th>
+            <th th:text="#{sysModule.col.on}">사용</th>
+            <th th:text="#{sysModule.col.progCount}">화면 수</th>
+            <th th:text="#{sysModule.col.requires}">필수 짝</th>
+            <th th:text="#{sysModule.col.recommends}">함께 쓰면 좋음</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+    <ul class="hb-plain-list hb-msg-error" id="depMsg" role="alert" hidden></ul>
+    <div class="hb-toolbar">
+        <button type="button" id="reloadBtn" class="hb-btn-secondary" th:text="#{sysModule.reload}">다시 읽기</button>
+        <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+    </div>
+    <p class="hb-msg" id="saveMsg" role="status" hidden></p>
+    <p class="hb-msg" th:text="#{sysModule.note}">시스템(사용자·권한·결재·알림·홈)은 항상 켜져 있습니다. 저장한 뒤 왼쪽 메뉴는 새로 고침하면 바뀝니다.</p>
+</section>
+
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/module-mgt.js}"></script>
+</body>
+</html>

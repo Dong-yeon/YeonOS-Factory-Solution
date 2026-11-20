@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  고객 반품 입고 (docs/59). 회사 조건은 RLS.
+  순 출하 = 피킹 → SHIP 원장(출처 SHIP_PICK, 역분개 행도 같은 출처) 합의 부호 반대 — 출하 추적(WmsLinkMapper.shipsByLots)과 같은 계산.
+  받을 수 있는 양 = 순 출하 − 살아 있는(RECEIVED) 반품 합. 출하 행 × LOT(비관리 품목은 LOT null) 단위.
+-->
+<mapper namespace="io.smarthappy.module.wms.inv.CustRtnMapper">
+
+    <!-- 출하 행 × LOT 순 출하 + 반품 합 -->
+    <sql id="sourceSelect">
+        select s.ship_id, s.ship_no, s.shipped_at, l.ship_line_id, s.plant_cd, s.cust_id, c.cust_cd, c.cust_nm,
+               l.item_id, i.item_cd, i.item_nm, i.unit_cd, i.lot_ctrl_yn, x.lot_id, lm.lot_no,
+               x.shipped as shipped_qty,
+               coalesce(r.returned, 0) as returned_qty,
+               greatest(x.shipped - coalesce(r.returned, 0), 0) as open_qty
+          from (select p.ship_line_id, p.lot_id, -sum(t.qty) as shipped
+                  from wms_ship_pick p
+                  join inv_trx t on t.comp_cd = p.comp_cd and t.src_type = 'SHIP_PICK' and t.src_id = p.pick_id and t.trx_type = 'SHIP'
+                 where <include refid="pickScope"/>
+                 group by p.ship_line_id, p.lot_id
+                having sum(t.qty) &lt;&gt; 0) x
+          join wms_ship_line l on l.ship_line_id = x.ship_line_id
+          join wms_ship s on s.ship_id = l.ship_id
+          join mst_cust c on c.cust_id = s.cust_id
+          join mst_item i on i.item_id = l.item_id
+          left join lot_master lm on lm.lot_id = x.lot_id
+          left join lateral (select sum(q.qty) as returned from wms_cust_rtn q
+                              where q.ship_line_id = x.ship_line_id and q.lot_id is not distinct from x.lot_id
+                                and q.status = 'RECEIVED') r on true
+         where s.plant_cd = #{plantCd}
+    </sql>
+
+    <select id="sources" resultType="io.smarthappy.module.wms.inv.CustRtnDtos$Source">
+        <bind name="one" value="false"/>
+        select * from (<include refid="sourceSelect"/>) z
+         where z.open_qty &gt; 0
+         order by z.shipped_at desc, z.ship_id desc, z.ship_line_id, z.lot_id nulls first
+         limit #{limit}
+    </select>
+
+    <select id="source" resultType="io.smarthappy.module.wms.inv.CustRtnDtos$Source" flushCache="true">
+        <bind name="one" value="true"/>
+        <include refid="sourceSelect"/>
+           and x.lot_id is not distinct from #{lotId}
+    </select>
+
+    <!-- 피킹 범위 — 한 줄(source) 또는 찾기 조건(sources). 찾기 조건은 출하 머리·LOT·고객으로 좁힌 뒤 피킹 -->
+    <sql id="pickScope">
+        <choose>
+            <when test="one">p.ship_line_id = #{shipLineId}</when>
+            <otherwise>
+                p.ship_line_id in (select sl.ship_line_id from wms_ship_line sl join wms_ship sh on sh.ship_id = sl.ship_id
+                                    where sh.plant_cd = #{plantCd}
+                    <if test="shipNo != null"> and sh.ship_no = #{shipNo}</if>
+                    <if test="custCd != null"> and sh.cust_id in (select cu.cust_id from mst_cust cu where cu.cust_cd = #{custCd})</if>
+                    <if test="fromAt != null"> and sh.shipped_at &gt;= #{fromAt}</if>
+                    <if test="toAt != null"> and sh.shipped_at &lt; #{toAt}</if>)
+                <if test="lotNo != null"> and p.lot_id in (select lo.lot_id from lot_master lo where lo.lot_no = #{lotNo})</if>
+            </otherwise>
+        </choose>
+    </sql>
+
+    <select id="lockShipShare" resultType="string" flushCache="true">
+        select s.status from wms_ship s where s.ship_id = #{shipId} for share
+    </select>
+
+    <select id="lockShipLine" resultType="string" flushCache="true">
+        select pg_advisory_xact_lock(hashtext('WMS_CRTN:' || #{key}))::text
+    </select>
+
+    <sql id="rtnCols">
+        r.rtn_id, r.rtn_no, r.plant_cd, r.status, r.ship_id, s.ship_no, r.ship_line_id, c.cust_cd, c.cust_nm, r.item_id, i.item_cd, i.item_nm,
+        r.unit_cd, r.lot_id, lm.lot_no, r.qty, r.reason_cd, r.node_id, wms_node_path(r.node_id) as node_path, r.remark, r.capa_no,
+        r.ncr_id, r.ncr_no, r.client_req_id, r.received_at, r.received_by, r.cancel_reason, r.cancelled_at, r.cancelled_by, r.row_ver
+    </sql>
+    <sql id="rtnFrom">
+          from wms_cust_rtn r
+          join wms_ship s on s.ship_id = r.ship_id
+          join mst_cust c on c.cust_id = r.cust_id
+          join mst_item i on i.item_id = r.item_id
+          left join lot_master lm on lm.lot_id = r.lot_id
+    </sql>
+
+    <select id="findByReq" resultType="io.smarthappy.module.wms.inv.CustRtnDtos$Rtn" flushCache="true">
+        select <include refid="rtnCols"/> <include refid="rtnFrom"/> where r.client_req_id = #{reqId}
+    </select>
+
+    <select id="find" resultType="io.smarthappy.module.wms.inv.CustRtnDtos$Rtn" flushCache="true">
+        select <include refid="rtnCols"/> <include refid="rtnFrom"/> where r.rtn_id = #{rtnId}
+    </select>
+
+    <select id="lock" resultType="io.smarthappy.module.wms.inv.CustRtnDtos$Rtn" flushCache="true">
+        select r.rtn_id, r.status, r.row_ver, r.ncr_id, r.rtn_no from wms_cust_rtn r where r.rtn_id = #{rtnId} for update
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into wms_cust_rtn (comp_cd, rtn_no, plant_cd, cust_id, ship_id, ship_line_id, item_id, lot_id, qty, unit_cd, reason_cd, node_id,
+                                  remark, capa_no, client_req_id, received_at, received_by, performed_by, created_by, updated_by)
+        values (hb_current_comp(), #{rtnNo}, #{s.plantCd}, #{s.custId}, #{s.shipId}, #{s.shipLineId}, #{s.itemId}, #{s.lotId}, #{qty},
+                #{s.unitCd}, #{reasonCd}, #{nodeId}, #{remark}, #{capaNo}, #{reqId}, now(), #{by}, #{performedBy}, #{by}, #{by})
+        returning rtn_id
+    </select>
+
+    <update id="setNcr">
+        update wms_cust_rtn set ncr_id = #{ncrId}, ncr_no = #{ncrNo}, updated_at = now() where rtn_id = #{rtnId}
+    </update>
+
+    <update id="markCancelled">
+        update wms_cust_rtn
+           set status = 'CANCELLED', cancel_reason = #{reason}, cancelled_at = now(), cancelled_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where rtn_id = #{rtnId} and status = 'RECEIVED'
+    </update>
+
+    <select id="liveTrxOf" resultType="long" flushCache="true">
+        select t.trx_id from inv_trx t
+         where t.src_type = 'CUST_RTN' and t.src_id = #{rtnId} and t.trx_type = 'RCV_RTN' and t.reversal_of_id is null
+           and not exists (select 1 from inv_trx b where b.reversal_of_id = t.trx_id)
+         order by t.trx_id
+    </select>
+
+    <select id="list" resultType="io.smarthappy.module.wms.inv.CustRtnDtos$Rtn">
+        select <include refid="rtnCols"/> <include refid="rtnFrom"/>
+         where r.plant_cd = #{plantCd}
+        <if test="status != null"> and r.status = #{status}</if>
+        <if test="fromAt != null"> and r.received_at &gt;= #{fromAt}</if>
+        <if test="toAt != null"> and r.received_at &lt; #{toAt}</if>
+         order by r.received_at desc, r.rtn_id desc
+         limit #{limit}
+    </select>
+</mapper>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 출하 추적 LOT 의 QMS 상태(docs/29_P3 37장) — 이미 처리 중인 LOT 에 NCR·봉쇄를 또 만들지 않게. QMS 표만, RLS -->
+<mapper namespace="io.smarthappy.module.qms.QmsLotWorkMapper">
+
+    <!-- 열린 NCR: status OPEN·PENDING(특채 결재 중) — 홈 "열린 부적합" 과 같은 범위. 봉쇄: 해제 안 된 LOT + 봉쇄 OPEN.
+         ix_qms_ncr_lot·ix_qms_contain_lot_lot(comp_cd, lot_id) -->
+    <select id="findOpenWork" resultType="io.smarthappy.module.qms.QmsLotWorkMapper$LotWork">
+        select w.lot_id, w.kind, w.no from (
+            select n.lot_id, 'NCR' as kind, n.ncr_no as no
+              from qms_ncr n
+             where n.lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+               and n.status in ('OPEN', 'PENDING')
+            union all
+            select l.lot_id, 'CONTAIN', c.contain_no
+              from qms_contain_lot l
+              join qms_contain c on c.contain_id = l.contain_id
+             where l.lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+               and l.released_at is null and c.status = 'OPEN'
+        ) w
+         order by w.lot_id, w.kind, w.no
+    </select>
+</mapper>

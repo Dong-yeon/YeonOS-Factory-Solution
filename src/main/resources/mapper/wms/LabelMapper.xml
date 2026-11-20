@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 라벨 템플릿·프린터·인쇄 작업 (P4 W2, docs/30). 작업 상태는 sys_outbox 를 message_id 로 이어 본다 -->
+<mapper namespace="io.smarthappy.module.wms.label.LabelMapper">
+
+    <!-- ================================================================ 프린터 -->
+    <sql id="printerCols">
+        printer_id, plant_cd, printer_cd, printer_nm, lang, host, port, dpi, usage, use_yn, remark, row_ver, updated_at, updated_by,
+        cjk_font_yn, cjk_font_file, media_width_mm, status_check_yn, conn_mode, agent_terminal_id,
+        (select a.terminal_cd from sys_terminal a where a.terminal_id = wms_printer.agent_terminal_id) as agent_terminal_cd,
+        (select a.last_seen_at from sys_terminal a where a.terminal_id = wms_printer.agent_terminal_id) as agent_seen_at,
+        st.state_cd as printer_state, st.errors as status_errors, st.warnings as status_warnings, st.odometer, st.checked_at
+    </sql>
+    <!-- 프린터 마지막 상태(docs/65 18.1) — 이름 없는 wms_printer 를 그대로 쓰는 쿼리에 붙인다 -->
+    <sql id="printerStatusJoin">
+        left join lateral (select s.state_cd, s.errors, s.warnings, s.odometer, s.checked_at
+                             from wms_printer_status s where s.printer_id = wms_printer.printer_id) st on true
+    </sql>
+
+    <select id="findPrinters" resultType="io.smarthappy.module.wms.label.LabelDtos$PrinterRow">
+        select <include refid="printerCols"/> from wms_printer <include refid="printerStatusJoin"/>
+        <where>
+            <if test="plantCd != null">and plant_cd = #{plantCd}</if>
+            <if test="useYn != null">and use_yn = #{useYn}</if>
+        </where>
+        order by plant_cd, printer_cd
+    </select>
+
+    <!-- 프린터 목록 그리드(UI 단계 3 ①) — 조건은 findPrinters 와 같다, 페이징·정렬(허용 열 enum)·마지막에 printer_id -->
+    <sql id="printerGridWhere">
+          from wms_printer <include refid="printerStatusJoin"/>
+        <where>
+            <if test="plantCd != null">and plant_cd = #{plantCd}</if>
+            <if test="useYn != null">and use_yn = #{useYn}</if>
+        </where>
+    </sql>
+
+    <select id="findPrinterPage" resultType="io.smarthappy.module.wms.label.LabelDtos$PrinterRow">
+        select <include refid="printerCols"/> <include refid="printerGridWhere"/>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'PRINTER_CD'">printer_cd</when>
+                <when test="o.key == 'PRINTER_NM'">printer_nm</when>
+                <when test="o.key == 'USAGE'">usage</when>
+                <when test="o.key == 'UPDATED_AT'">updated_at</when>
+                <otherwise>plant_cd</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        printer_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countPrinters" resultType="long">select count(*) <include refid="printerGridWhere"/></select>
+
+    <select id="findPrinter" resultType="io.smarthappy.module.wms.label.LabelDtos$PrinterRow">
+        select <include refid="printerCols"/> from wms_printer <include refid="printerStatusJoin"/> where printer_id = #{id}
+    </select>
+
+    <select id="insertPrinter" resultType="long" flushCache="true">
+        insert into wms_printer (comp_cd, plant_cd, printer_cd, printer_nm, host, port, dpi, usage, use_yn, remark,
+                                 cjk_font_yn, cjk_font_file, media_width_mm, status_check_yn, conn_mode, agent_terminal_id, created_by, updated_by)
+        values (hb_current_comp(), #{f.plantCd}, #{f.printerCd}, #{f.printerNm}, #{f.host}, #{f.port}, #{f.dpi}, #{f.usage},
+                #{f.useYn}, #{f.remark}, #{f.cjkFontYn}, #{f.cjkFontFile}, #{f.mediaWidthMm}, #{f.statusCheckYn}, #{f.connMode},
+                #{f.agentTerminalId}, #{by}, #{by})
+        returning printer_id
+    </select>
+
+    <update id="updatePrinter">
+        update wms_printer
+           set printer_nm = #{f.printerNm}, host = #{f.host}, port = #{f.port}, dpi = #{f.dpi}, usage = #{f.usage},
+               use_yn = #{f.useYn}, remark = #{f.remark}, cjk_font_yn = #{f.cjkFontYn}, cjk_font_file = #{f.cjkFontFile},
+               media_width_mm = #{f.mediaWidthMm}, status_check_yn = #{f.statusCheckYn}, conn_mode = #{f.connMode},
+               agent_terminal_id = #{f.agentTerminalId},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where printer_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- 인쇄 에이전트 = 장치(sys_terminal COLLECTOR, 시스템관리에서 키 발급) — docs/65 19.1 -->
+    <select id="agentOptions" resultType="map">
+        select terminal_id as "terminalId", terminal_cd as "terminalCd", terminal_nm as "terminalNm", plant_cd as "plantCd",
+               last_seen_at as "lastSeenAt",
+               coalesce(last_seen_at &gt; now() - make_interval(secs => #{offlineSec}), false) as "online"
+          from sys_terminal
+         where terminal_type = 'COLLECTOR' and revoked_at is null
+         order by terminal_cd
+    </select>
+
+    <select id="agentActive" resultType="boolean">
+        select exists (select 1 from sys_terminal where terminal_id = #{id} and terminal_type = 'COLLECTOR'
+                         and revoked_at is null)
+    </select>
+
+    <select id="plantActive" resultType="boolean">
+        select exists (select 1 from sys_plant where plant_cd = #{plantCd} and use_yn = 'Y')
+    </select>
+
+    <!-- ================================================================ 템플릿 -->
+    <sql id="tplCols">
+        tpl_id, label_type, tpl_cd, tpl_nm, width_mm, height_mm, size_cd, dpi, body, default_yn, use_yn, remark, row_ver, updated_at,
+        updated_by
+    </sql>
+
+    <select id="findTpls" resultType="io.smarthappy.module.wms.label.LabelDtos$TplRow">
+        select <include refid="tplCols"/> from wms_label_tpl
+        <where>
+            <if test="labelType != null">and label_type = #{labelType}</if>
+            <if test="useYn != null">and use_yn = #{useYn}</if>
+        </where>
+        order by label_type, default_yn desc, tpl_cd
+    </select>
+
+    <!-- 템플릿 목록 그리드(UI 단계 3 ①) — 조건은 findTpls 와 같다, 페이징·정렬·마지막에 tpl_id -->
+    <sql id="tplGridWhere">
+          from wms_label_tpl
+        <where>
+            <if test="labelType != null">and label_type = #{labelType}</if>
+            <if test="useYn != null">and use_yn = #{useYn}</if>
+        </where>
+    </sql>
+
+    <select id="findTplPage" resultType="io.smarthappy.module.wms.label.LabelDtos$TplRow">
+        select <include refid="tplCols"/> <include refid="tplGridWhere"/>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'TPL_CD'">tpl_cd</when>
+                <when test="o.key == 'TPL_NM'">tpl_nm</when>
+                <when test="o.key == 'UPDATED_AT'">updated_at</when>
+                <otherwise>label_type</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        tpl_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countTpls" resultType="long">select count(*) <include refid="tplGridWhere"/></select>
+
+    <select id="findTpl" resultType="io.smarthappy.module.wms.label.LabelDtos$TplRow">
+        select <include refid="tplCols"/> from wms_label_tpl where tpl_id = #{id}
+    </select>
+
+    <select id="findDefaultTpl" resultType="io.smarthappy.module.wms.label.LabelDtos$TplRow">
+        select <include refid="tplCols"/> from wms_label_tpl where label_type = #{labelType} and default_yn = 'Y'
+    </select>
+
+    <select id="insertTpl" resultType="long" flushCache="true">
+        insert into wms_label_tpl (comp_cd, label_type, tpl_cd, tpl_nm, width_mm, height_mm, dpi, body, default_yn, use_yn, remark,
+                                   created_by, updated_by)
+        values (hb_current_comp(), #{f.labelType}, #{f.tplCd}, #{f.tplNm}, #{f.widthMm}, #{f.heightMm}, #{f.dpi}, #{f.body},
+                #{f.defaultYn}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning tpl_id
+    </select>
+
+    <update id="updateTpl">
+        update wms_label_tpl
+           set tpl_nm = #{f.tplNm}, width_mm = #{f.widthMm}, height_mm = #{f.heightMm}, dpi = #{f.dpi}, body = #{f.body},
+               default_yn = #{f.defaultYn}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tpl_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="clearDefault">
+        update wms_label_tpl set default_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where label_type = #{labelType} and default_yn = 'Y'
+           <if test="exceptId != null">and tpl_id &lt;&gt; #{exceptId}</if>
+    </update>
+
+    <!-- ================================================================ 인쇄 작업 -->
+    <select id="insertJob" resultType="long" flushCache="true">
+        insert into wms_print_job (comp_cd, plant_cd, printer_id, tpl_id, label_type, biz_key, label_values, zpl, zpl_sha256, copies,
+                                   test_yn, outbox_message_id, reprint_of_id, reprint_reason, requested_by, conn_mode)
+        values (hb_current_comp(), #{plantCd}, #{printerId}, #{tplId}, #{labelType}, #{bizKey}, #{valuesJson}::jsonb, #{zpl}, #{sha},
+                #{copies}, #{testYn}, #{messageId}, #{reprintOf}, #{reason}, #{by}, #{connMode})
+        returning job_id
+    </select>
+
+    <sql id="jobCols">
+        j.job_id, j.plant_cd, j.label_type, j.biz_key, j.copies, j.test_yn, j.reprint_of_id, j.reprint_reason, j.requested_by,
+        j.requested_at, j.printer_id, p.printer_cd, p.printer_nm, j.tpl_id, t.tpl_cd, j.zpl_sha256,
+        o.status, o.attempts, o.last_error, o.sent_at, j.conn_mode,
+        <include refid="printState"/> as print_state,
+        (select count(*) from wms_print_job_event w where w.job_id = j.job_id and w.event_cd in ('WARN', 'VERIFY_NG'))::int as warn_count
+    </sql>
+
+    <!-- 인쇄 상태 3단(docs/65 18.1) — PrintTrackMapper.stateExpr 와 같은 식 -->
+    <sql id="printState">
+        coalesce((select e.event_cd from wms_print_job_event e
+                   where e.job_id = j.job_id
+                     and e.event_cd in ('CLAIMED', 'SENT', 'PRINTED', 'VERIFIED', 'PRINTER_ERROR', 'FAILED', 'UNKNOWN', 'CANCELLED')
+                   order by e.event_id desc limit 1),
+                 case o.status when 'SENT' then 'SENT' when 'FAIL' then 'FAILED' when 'CLOSED_MANUAL' then 'CANCELLED' else 'QUEUED' end)
+    </sql>
+
+    <sql id="jobFrom">
+        from wms_print_job j
+        join wms_printer p on p.printer_id = j.printer_id
+        join wms_label_tpl t on t.tpl_id = j.tpl_id
+        left join sys_outbox o on o.message_id = j.outbox_message_id and o.comp_cd = j.comp_cd
+    </sql>
+
+    <sql id="jobWhere">
+        <include refid="jobFrom"/>
+        where j.requested_at &gt;= #{q.fromAt} and j.requested_at &lt; #{q.toAt}
+        <if test="q.labelType != null">and j.label_type = #{q.labelType}</if>
+        <if test="q.status != null">and o.status = #{q.status}</if>
+        <if test="q.printState != null">and <include refid="printState"/> = #{q.printState}</if>
+        <if test="q.bizKeyLike != null">and j.biz_key ilike #{q.bizKeyLike} escape '\'</if>
+        <if test="q.plantCd != null">and j.plant_cd = #{q.plantCd}</if>
+    </sql>
+
+    <!-- 지연 조인(docs/30 5.1, OffsetLedgerGuardTest): 안쪽은 id 만 골라 offset, 바깥이 그 쪽 행에만 상태 3단·경고 수를 계산 -->
+    <sql id="jobOrder">
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'JOB_ID'">j.job_id</when>
+                <otherwise>j.requested_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        j.job_id desc
+    </sql>
+
+    <select id="findJobs" resultType="io.smarthappy.module.wms.label.LabelDtos$JobRow">
+        select <include refid="jobCols"/>
+          from (select j.job_id <include refid="jobWhere"/>
+                 order by <include refid="jobOrder"/>
+                 limit #{q.page.size} offset #{q.page.offset}) k
+          join wms_print_job j on j.job_id = k.job_id
+          join wms_printer p on p.printer_id = j.printer_id
+          join wms_label_tpl t on t.tpl_id = j.tpl_id
+          left join sys_outbox o on o.message_id = j.outbox_message_id and o.comp_cd = j.comp_cd
+         order by <include refid="jobOrder"/>
+    </select>
+
+    <select id="countJobs" resultType="long">select count(*) <include refid="jobWhere"/></select>
+
+    <select id="findJob" resultType="io.smarthappy.module.wms.label.LabelDtos$JobRow">
+        select <include refid="jobCols"/>, j.label_values::text as label_values, j.zpl
+        <include refid="jobFrom"/>
+        where j.job_id = #{id}
+    </select>
+
+    <!-- ================================================================ 템플릿 선택 규칙 (docs/65 18.4) -->
+    <sql id="ruleCols">
+        r.rule_id, r.label_type, r.scope_cd, r.cust_id, c.cust_cd, c.cust_nm, r.item_id, i.item_cd, i.item_nm, r.tpl_id, t.tpl_cd,
+        t.tpl_nm, r.use_yn, r.remark, r.row_ver, r.updated_at
+    </sql>
+    <sql id="ruleFrom">
+        from wms_label_tpl_rule r
+        join wms_label_tpl t on t.tpl_id = r.tpl_id
+        left join mst_cust c on c.cust_id = r.cust_id
+        left join mst_item i on i.item_id = r.item_id
+    </sql>
+
+    <select id="findRules" resultType="io.smarthappy.module.wms.label.LabelDtos$RuleRow">
+        select <include refid="ruleCols"/> <include refid="ruleFrom"/>
+        <where>
+            <if test="labelType != null">and r.label_type = #{labelType}</if>
+            <if test="useYn != null">and r.use_yn = #{useYn}</if>
+        </where>
+        order by r.label_type, r.scope_cd, coalesce(c.cust_cd, i.item_cd), r.rule_id
+        limit 1000
+    </select>
+
+    <select id="findRule" resultType="io.smarthappy.module.wms.label.LabelDtos$RuleRow">
+        select <include refid="ruleCols"/> <include refid="ruleFrom"/> where r.rule_id = #{id}
+    </select>
+
+    <select id="insertRule" resultType="long" flushCache="true">
+        insert into wms_label_tpl_rule (comp_cd, label_type, scope_cd, cust_id, item_id, tpl_id, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.labelType}, #{f.scopeCd}, #{f.custId}, #{f.itemId}, #{f.tplId}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning rule_id
+    </select>
+
+    <update id="updateRule">
+        update wms_label_tpl_rule
+           set tpl_id = #{f.tplId}, use_yn = #{f.useYn}, remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where rule_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="custActive" resultType="boolean">
+        select exists (select 1 from mst_cust where cust_id = #{id} and use_yn = 'Y')
+    </select>
+
+    <select id="itemActive" resultType="boolean">
+        select exists (select 1 from mst_item where item_id = #{id} and use_yn = 'Y')
+    </select>
+
+    <!-- 거래처 > 품목 > 유형 기본 — 사용 중 규칙·사용 중 템플릿만. 없으면 null(부른 쪽이 기본 템플릿으로) -->
+    <select id="ruleTplId" resultType="java.lang.Long">
+        select r.tpl_id
+          from wms_label_tpl_rule r
+          join wms_label_tpl t on t.tpl_id = r.tpl_id and t.use_yn = 'Y'
+         where r.label_type = #{labelType} and r.use_yn = 'Y'
+           and ((r.scope_cd = 'CUST' and r.cust_id = #{custId}) or (r.scope_cd = 'ITEM' and r.item_id = #{itemId}))
+         order by case r.scope_cd when 'CUST' then 1 else 2 end
+         limit 1
+    </select>
+</mapper>

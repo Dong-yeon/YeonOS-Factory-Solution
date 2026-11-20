@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<!--
+  화면(iframe 안) 공통 조각. 화면 템플릿은
+    <head th:replace="~{fragments/page :: head}"></head>
+    ... 본문 ...
+    <th:block th:replace="~{fragments/page :: scripts}"></th:block>
+  Kendo 는 8단계(첫 그리드 화면)에서 이 조각에 추가한다 (static/vendor/kendo, 커밋 금지).
+-->
+<head th:fragment="head">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${prog.name}">화면</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/css/icons.css}">
+    <link rel="stylesheet" th:href="@{/css/help.css}">
+    <link rel="stylesheet" th:href="@{/css/tip.css}">
+</head>
+<body>
+<th:block th:fragment="scripts">
+    <script th:src="@{/js/common/hb.js}"></script>
+    <script th:src="@{/js/common/hb.tip.js}"></script>
+    <script th:src="@{/js/common/hb.menu.js}"></script>
+    <script th:src="@{/js/common/hb.gate.js}"></script>
+    <script th:src="@{/js/common/hb.text.js}"></script>
+    <script th:src="@{/js/common/hb.dialog.js}"></script>
+    <script th:src="@{/js/common/hb.help.js}"></script>
+</th:block>
+</body>
+</html>

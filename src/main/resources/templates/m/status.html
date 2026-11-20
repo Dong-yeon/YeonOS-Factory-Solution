@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{m/layout :: head(#{m.tab.status})}"></head>
+<!--
+  모바일 현황 조회 (docs/74 화면 5). 오늘 작업지시 진행(prd-wo 조회 권한)·설비 상태 요약(cms-state 조회 권한) — 읽기 전용, 기존 API 만.
+  "오늘" 은 서버가 준 회사 시간대 날짜(data-today). 설비는 공장마다 그 공장 시간대의 오늘 타임라인.
+-->
+<body class="hb-m" th:data-today="${today}">
+<header th:replace="~{m/layout :: header(#{m.tab.status})}"></header>
+<main class="m-main">
+    <p id="msg" class="m-msg" role="status" aria-live="polite"></p>
+
+    <section th:if="${can.wo}" id="woSec">
+        <h2><span th:text="#{m.status.wo}">오늘 작업지시</span> <span class="m-muted m-small" th:text="${today}">2026-11-12</span></h2>
+        <ul id="woSum" class="m-chips"></ul>
+        <ul id="woList" class="m-list"></ul>
+    </section>
+
+    <section th:if="${can.equip}" id="equipSec">
+        <h2 th:text="#{m.status.equip}">설비 상태</h2>
+        <label class="m-field" id="plantBox" hidden><span th:text="#{m.status.plant}">공장</span>
+            <select id="plantSel"></select></label>
+        <ul id="equipSum" class="m-chips"></ul>
+        <ul id="equipList" class="m-list"></ul>
+    </section>
+
+    <div class="m-btn-row">
+        <button type="button" id="refreshBtn" th:text="#{m.refresh}">새로 고침</button>
+    </div>
+</main>
+<nav th:replace="~{m/layout :: tabs}"></nav>
+<th:block th:replace="~{m/layout :: scripts}"></th:block>
+<script th:src="@{/js/views/m/m-status.js}"></script>
+</body>
+</html>

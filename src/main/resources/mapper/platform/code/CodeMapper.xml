@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 공통코드: 시스템 코드(전역, i18n 키) + 회사 코드(RLS, 회사가 입력한 이름) -->
+<mapper namespace="io.smarthappy.platform.code.CodeMapper">
+
+    <select id="groupExists" resultType="boolean">
+        select exists (select 1 from sys_code_grp where grp_cd = #{grpCd} and use_yn = 'Y')
+    </select>
+
+    <select id="findCodes" resultType="io.smarthappy.platform.code.CodeRow">
+        select code, null as code_nm, code_nm_key, sort_no, true as system_yn, attrs::text as attrs
+          from sys_code c
+         where grp_cd = #{grpCd} and use_yn = 'Y'
+           -- 회사가 숨긴 시스템 코드는 선택 목록에서만 뺀다(docs/68 Q4 — RLS 로 이 회사 숨김만, 이름표·저장 검사는 그대로)
+           and not exists (select 1 from sys_comp_code_hide h where h.grp_cd = c.grp_cd and h.code = c.code)
+        union all
+        select code, code_nm, null, sort_no, false, attrs::text
+          from sys_comp_code
+         where grp_cd = #{grpCd} and use_yn = 'Y'
+         order by sort_no, code
+    </select>
+
+    <!-- 표시용 이름표(docs/36 18.9 X4) — 사용 중지된 코드도(옛 행이 날 코드로 보이지 않게). 선택 목록은 findCodes(사용 중만) -->
+    <select id="findCodeNames" resultType="io.smarthappy.platform.code.CodeRow">
+        select code, null as code_nm, code_nm_key, sort_no, true as system_yn, null as attrs
+          from sys_code
+         where grp_cd = #{grpCd}
+        union all
+        select code, code_nm, null, sort_no, false, null
+          from sys_comp_code
+         where grp_cd = #{grpCd}
+         order by sort_no, code
+    </select>
+
+    <!-- 쓸 수 있는 코드(시스템 + 이 회사, 사용 중) — 업무 표 트리거 hb_check_code_col 과 같은 함수(docs/68) -->
+    <select id="usable" resultType="boolean">
+        select hb_code_usable(hb_current_comp(), #{grpCd}, #{code})
+    </select>
+</mapper>

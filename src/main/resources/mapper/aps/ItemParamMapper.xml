@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 계획 기준정보 (docs/38 17장). 회사 조건은 RLS — comp_cd 를 적지 않는다(INSERT 는 hb_current_comp()). 품목은 읽기만 -->
+<mapper namespace="io.smarthappy.module.aps.ItemParamMapper">
+
+    <sql id="cols">
+        p.param_id, p.plant_cd, p.item_id, i.item_cd, i.item_nm, i.proc_type, i.unit_cd, trim_scale(p.safety_qty)::text as safety_qty,
+        p.lot_rule, trim_scale(p.lot_qty)::text as lot_qty, trim_scale(p.lot_mult)::text as lot_mult, p.make_lead_days, p.fence_days,
+        p.remark, p.use_yn, p.row_ver, p.updated_at, p.updated_by
+    </sql>
+
+    <!-- 목록·count 같은 조건 -->
+    <sql id="from">
+          from aps_item_param p join mst_item i on i.item_id = p.item_id
+        <where>
+            <if test="c.plantCd != null">p.plant_cd = #{c.plantCd}</if>
+            <if test="c.useYn != null">and p.use_yn = #{c.useYn}</if>
+            <if test="c.keyword != null">and (i.item_cd ilike #{c.keyword} escape '\' or i.item_nm ilike #{c.keyword} escape '\')</if>
+        </where>
+    </sql>
+
+    <!-- 정렬은 허용 목록(ParamSort) 키만, 마지막에 param_id 로 순서 고정 -->
+    <select id="findPage" resultType="io.smarthappy.module.aps.ItemParamDtos$ParamRow">
+        select <include refid="cols"/>
+        <include refid="from"/>
+         order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PLANT_CD'">p.plant_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ITEM_NM'">i.item_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PROC_TYPE'">i.proc_type<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'UPDATED_AT'">p.updated_at<if test="s.desc"> desc</if></when>
+                <otherwise>i.item_cd<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+        </foreach>
+         p.param_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="from"/>
+    </select>
+
+    <select id="find" resultType="io.smarthappy.module.aps.ItemParamDtos$ParamRow" flushCache="true" useCache="false">
+        select <include refid="cols"/>
+          from aps_item_param p join mst_item i on i.item_id = p.item_id
+         where p.param_id = #{id}
+    </select>
+
+    <select id="lookupItem" resultType="io.smarthappy.module.aps.MpsDtos$ItemLookup">
+        select item_id, item_cd, unit_cd, proc_type, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="findPlants" resultType="io.smarthappy.module.master.equip.EquipDtos$PlantRow">
+        select p.plant_cd, p.plant_nm, p.time_zone, p.sort_no, p.use_yn, p.row_ver from sys_plant p
+         where p.use_yn = 'Y' order by p.sort_no, p.plant_cd
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into aps_item_param (comp_cd, plant_cd, item_id, safety_qty, lot_rule, lot_qty, lot_mult, make_lead_days, fence_days,
+                                    remark, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{v.plantCd}, #{v.itemId}, #{v.safetyQty}, #{v.lotRule}, #{v.lotQty}, #{v.lotMult}, #{v.makeLeadDays},
+                #{v.fenceDays}, #{v.remark}, #{v.useYn}, #{by}, #{by})
+        returning param_id
+    </select>
+
+    <update id="update">
+        update aps_item_param
+           set safety_qty = #{v.safetyQty}, lot_rule = #{v.lotRule}, lot_qty = #{v.lotQty}, lot_mult = #{v.lotMult},
+               make_lead_days = #{v.makeLeadDays}, fence_days = #{v.fenceDays}, remark = #{v.remark}, use_yn = #{v.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where param_id = #{id} and row_ver = #{rowVer}
+    </update>
+</mapper>

@@ -1,0 +1,32 @@
+# 운영: 모든 접속정보는 환경변수로만 받는다 (기본값 없음 → 빠지면 기동 실패)
+# 앱은 DB 소유자 자격증명을 갖지 않는다 — 마이그레이션은 migrate 프로필 전용 실행으로 (01 7.1, ProdStartupGuard 가 확인)
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_APP_USER}
+    password: ${DB_APP_PASSWORD}
+  flyway:
+    enabled: false
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+        http-only: true
+        same-site: lax
+
+logging:
+  level:
+    root: INFO
+  # 운영 로그는 JSON 한 줄(ECS) — 회사(compCd)·요청 ID(reqId)·사용자(userId, 숫자)가 MDC 로 실린다. 비밀번호·토큰·세션 ID 는 넣지 않는다(docs/52 Y2)
+  structured:
+    format:
+      console: ${LOG_FORMAT:ecs}
+
+management:
+  endpoint:
+    prometheus:
+      # 운영 지표는 기본 닫힘. 열 때(METRICS_ENDPOINT=read-only): MANAGEMENT_SERVER_PORT(앱 포트와 다르게)·MANAGEMENT_SERVER_ADDRESS(내부 주소)·
+      # METRICS_TOKEN(32자 이상)·METRICS_ALLOWED_IPS(수집기) — ProdStartupGuard 가 확인한다 (deploy/monitoring/README.md)
+      access: ${METRICS_ENDPOINT:none}

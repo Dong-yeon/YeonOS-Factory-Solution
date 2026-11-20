@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 품목 클래스·클래스 속성·대상 attrs (P1 7b, docs/22 5b) -->
+<mapper namespace="io.smarthappy.module.master.classprop.ClassPropMapper">
+
+    <!-- ================================================================ 클래스 -->
+
+    <select id="findItemClasses" resultType="io.smarthappy.module.master.classprop.ClassPropDtos$ClassRow">
+        select c.class_id, c.class_cd, c.class_nm, c.sort_no, c.use_yn, c.remark, c.row_ver,
+               (select count(*) from mst_class_prop p where p.class_type = 'ITEM' and p.class_id = c.class_id and p.use_yn = 'Y') as prop_cnt,
+               (select count(*) from mst_item i where i.item_class_id = c.class_id) as target_cnt
+          from mst_item_class c
+        <where><if test="useYn != null">c.use_yn = #{useYn}</if></where>
+         order by c.sort_no, c.class_cd
+    </select>
+
+    <select id="findItemClass" resultType="io.smarthappy.module.master.classprop.ClassPropDtos$ClassRow">
+        select c.class_id, c.class_cd, c.class_nm, c.sort_no, c.use_yn, c.remark, c.row_ver, 0 as prop_cnt, 0 as target_cnt
+          from mst_item_class c where c.class_id = #{id}
+    </select>
+
+    <select id="insertItemClass" resultType="long" flushCache="true">
+        insert into mst_item_class (comp_cd, class_cd, class_nm, sort_no, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.classCd}, #{f.classNm}, #{f.sortNo}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning class_id
+    </select>
+
+    <update id="updateItemClass">
+        update mst_item_class
+           set class_nm = #{f.classNm}, sort_no = #{f.sortNo}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where class_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="findEquipClasses" resultType="io.smarthappy.module.master.classprop.ClassPropDtos$ClassRow">
+        select c.class_id, c.class_cd, c.class_nm, c.sort_no, c.use_yn, c.remark, c.row_ver,
+               (select count(*) from mst_class_prop p where p.class_type = 'EQUIP' and p.class_id = c.class_id and p.use_yn = 'Y') as prop_cnt,
+               (select count(*) from mst_equip e where e.class_id = c.class_id) as target_cnt
+          from mst_equip_class c
+         order by c.sort_no, c.class_cd
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): 기존 목록 두 select 와 같은 칸·조건, 표는 유형으로 고정 분기(이름을 값으로 넣지 않는다).
+         정렬 허용 열은 ClassSort, 끝 키 class_id -->
+    <sql id="classGridFrom">
+        <choose>
+            <when test="classType == 'ITEM'">
+          from (select c.class_id, c.class_cd, c.class_nm, c.sort_no, c.use_yn, c.remark, c.row_ver,
+                       (select count(*) from mst_class_prop p where p.class_type = 'ITEM' and p.class_id = c.class_id and p.use_yn = 'Y') as prop_cnt,
+                       (select count(*) from mst_item i where i.item_class_id = c.class_id) as target_cnt
+                  from mst_item_class c
+                <where><if test="useYn != null">c.use_yn = #{useYn}</if></where>) k
+            </when>
+            <otherwise>
+          from (select c.class_id, c.class_cd, c.class_nm, c.sort_no, c.use_yn, c.remark, c.row_ver,
+                       (select count(*) from mst_class_prop p where p.class_type = 'EQUIP' and p.class_id = c.class_id and p.use_yn = 'Y') as prop_cnt,
+                       (select count(*) from mst_equip e where e.class_id = c.class_id) as target_cnt
+                  from mst_equip_class c) k
+            </otherwise>
+        </choose>
+    </sql>
+
+    <select id="findClassPage" resultType="io.smarthappy.module.master.classprop.ClassPropDtos$ClassRow">
+        select k.* <include refid="classGridFrom"/>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'CLASS_CD'">k.class_cd</when>
+                <when test="o.key == 'CLASS_NM'">k.class_nm</when>
+                <when test="o.key == 'PROP_CNT'">k.prop_cnt</when>
+                <when test="o.key == 'TARGET_CNT'">k.target_cnt</when>
+                <otherwise>k.sort_no</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        k.class_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countClasses" resultType="long">
+        select count(*) <include refid="classGridFrom"/>
+    </select>
+
+    <select id="findEquipClass" resultType="io.smarthappy.module.master.classprop.ClassPropDtos$ClassRow">
+        select c.class_id, c.class_cd, c.class_nm, c.sort_no, c.use_yn, c.remark, c.row_ver, 0 as prop_cnt, 0 as target_cnt
+          from mst_equip_class c where c.class_id = #{id}
+    </select>
+
+    <!-- ================================================================ 속성 정의 -->
+
+    <sql id="propCols">
+        prop_id, class_type, class_id, prop_cd, prop_nm, data_type, unit_nm, scale, options::text as options_json, required_yn,
+        semantic_id, sort_no, use_yn, row_ver, updated_at, updated_by
+    </sql>
+
+    <select id="findProps" resultType="io.smarthappy.module.master.classprop.ClassPropDtos$PropRow">
+        select <include refid="propCols"/> from mst_class_prop
+         where class_type = #{classType} and class_id = #{classId}
+           <if test="activeOnly">and use_yn = 'Y'</if>
+         order by sort_no, prop_cd
+    </select>
+
+    <select id="findProp" resultType="io.smarthappy.module.master.classprop.ClassPropDtos$PropRow">
+        select <include refid="propCols"/> from mst_class_prop where prop_id = #{id}
+    </select>
+
+    <select id="insertProp" resultType="long" flushCache="true">
+        insert into mst_class_prop (comp_cd, class_type, class_id, prop_cd, prop_nm, data_type, unit_nm, scale, options,
+                                    required_yn, semantic_id, sort_no, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.classType}, #{f.classId}, #{f.propCd}, #{f.propNm}, #{f.dataType}, #{f.unitNm},
+                #{f.scale}, cast(#{f.optionsJson} as jsonb), #{f.requiredYn}, #{f.semanticId}, #{f.sortNo}, #{f.useYn}, #{by}, #{by})
+        returning prop_id
+    </select>
+
+    <!-- 유형·클래스·코드·형식은 바꾸지 않는다(트리거도 막는다) -->
+    <update id="updateProp">
+        update mst_class_prop
+           set prop_nm = #{f.propNm}, unit_nm = #{f.unitNm}, scale = #{f.scale}, options = cast(#{f.optionsJson} as jsonb),
+               required_yn = #{f.requiredYn}, semantic_id = #{f.semanticId}, sort_no = #{f.sortNo}, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where prop_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 대상 값 -->
+
+    <select id="findTarget" resultType="io.smarthappy.module.master.classprop.ClassPropMapper$TargetRow">
+        <choose>
+            <when test="classType == 'ITEM'">select item_class_id as class_id, attrs::text as attrs, row_ver from mst_item where item_id = #{id}</when>
+            <otherwise>select class_id, attrs::text as attrs, row_ver from mst_equip where equip_id = #{id}</otherwise>
+        </choose>
+    </select>
+
+    <!-- 설비도 클래스와 값을 함께 저장할 수 있다(7단계 QA 결함 #3) — 서비스가 classId 를 지금 값 또는 새 클래스로 채운다 -->
+    <update id="updateTarget">
+        <choose>
+            <when test="classType == 'ITEM'">
+                update mst_item set item_class_id = #{classId}, attrs = cast(#{attrs} as jsonb),
+                                    row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+                 where item_id = #{id} and row_ver = #{rowVer}
+            </when>
+            <otherwise>
+                update mst_equip set class_id = #{classId}, attrs = cast(#{attrs} as jsonb), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+                 where equip_id = #{id} and row_ver = #{rowVer}
+            </otherwise>
+        </choose>
+    </update>
+</mapper>

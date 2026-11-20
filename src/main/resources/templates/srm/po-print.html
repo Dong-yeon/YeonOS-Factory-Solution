@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  발주서 인쇄 (srm-po-print) — SRM 1부 S4 (docs/31 D7). 발주 화면에서 ?poId=&rev= 로 연다. 서버 PDF 대신 브라우저 인쇄 → "PDF 로 저장".
+  자료는 발행본 스냅샷(협력사에게 간 그대로), 발행 전이면 "초안". 인쇄할 때는 위 도구 막대를 숨긴다(공통 CSS 를 고치지 않으려고 hidden 으로).
+-->
+<body class="hb-page hb-page-scroll" th:data-prog="${prog.progCd}">
+<div class="hb-toolbar" id="printBar">
+    <button type="button" id="printBtn" th:text="#{srm.print.print}">인쇄</button>
+    <button type="button" id="excelBtn" class="hb-btn-secondary" th:text="#{srm.print.excel}">엑셀</button>
+    <span id="msg" class="hb-msg" role="status"></span>
+</div>
+<h1 id="docTitle" th:text="#{srm.print.title}">발주서</h1>
+<!-- .hb-field-error 의 display 가 hidden 속성을 덮어쓰므로 감싸서 숨긴다 -->
+<div id="draftNote" hidden><p class="hb-field-error" th:text="#{srm.print.draft}">초안 — 아직 발행하지 않은 내용입니다.</p></div>
+<dl id="docInfo" class="hb-form"></dl>
+<table class="hb-cmp-table" id="docLines">
+    <thead><tr>
+        <th th:text="#{srm.print.col.no}">행</th>
+        <th th:text="#{srm.print.col.item}">품목</th>
+        <th th:text="#{srm.print.col.supplierItem}">협력사 품번</th>
+        <th th:text="#{srm.print.col.qty}">수량</th>
+        <th th:text="#{srm.print.col.price}">단가</th>
+        <th th:text="#{srm.print.col.amt}">금액</th>
+        <th th:text="#{srm.print.col.due}">요구 납기</th>
+    </tr></thead>
+    <tbody></tbody>
+    <tfoot><tr><td colspan="5" th:text="#{srm.print.total}">합계</td><td id="docTotal"></td><td></td></tr></tfoot>
+</table>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/views/srm/po-print.js}"></script>
+</body>
+</html>

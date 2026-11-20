@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 작업지시 (P2 3단계, docs/25 4.4). 회사 조건은 RLS — comp_cd 를 적지 않는다. 응답 수량은 trim_scale 글자 -->
+<mapper namespace="io.smarthappy.module.production.WoMapper">
+
+    <!-- ================================================================ 선택지 -->
+
+    <select id="findPlants" resultType="io.smarthappy.module.master.equip.EquipDtos$PlantRow">
+        select p.plant_cd, p.plant_nm, p.time_zone, p.sort_no, p.use_yn, p.row_ver from sys_plant p
+         where p.use_yn = 'Y' order by p.sort_no, p.plant_cd
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.sales.SalesDtos$ItemOption">
+        select i.item_id, i.item_cd, i.item_nm, i.unit_cd, i.use_yn from mst_item i where i.item_cd = #{itemCd}
+    </select>
+
+    <select id="routingOptions" resultType="io.smarthappy.module.production.WoDtos$RevOption">
+        select r.routing_id as id, r.rev, r.alt_no, r.valid_from, r.valid_to from mst_routing r
+         where r.item_id = #{itemId} and r.plant_cd = #{plantCd} and r.status = 'RELEASED'
+           and r.valid_from &lt;= #{date} and (r.valid_to is null or #{date} &lt; r.valid_to)
+         order by r.alt_no
+    </select>
+
+    <select id="bomOptions" resultType="io.smarthappy.module.production.WoDtos$RevOption">
+        select b.bom_id as id, b.rev, b.alt_no, b.valid_from, b.valid_to from mst_bom b
+         where b.item_id = #{itemId} and b.status = 'RELEASED'
+           and b.valid_from &lt;= #{date} and (b.valid_to is null or #{date} &lt; b.valid_to)
+         order by b.alt_no
+    </select>
+
+    <select id="orderLineOptions" resultType="io.smarthappy.module.production.WoDtos$OrderLineOption">
+        select l.line_id, o.order_no, l.line_no, c.cust_nm, trim_scale(l.qty)::text as qty, l.due_date
+          from sal_order_line l join sal_order o on o.order_id = l.order_id join mst_cust c on c.cust_id = o.cust_id
+         where l.item_id = #{itemId} and l.status = 'OPEN'
+         order by l.due_date, o.order_no, l.line_no
+         limit 200
+    </select>
+
+    <select id="equipOptions" resultType="io.smarthappy.module.production.WoDtos$EquipOption">
+        select e.equip_id, e.equip_cd, e.equip_nm from mst_equip e
+         where e.plant_cd = #{plantCd} and e.use_yn = 'Y' order by e.equip_cd
+    </select>
+
+    <select id="findEquip" resultType="io.smarthappy.module.production.WoDtos$EquipOption">
+        select e.equip_id, e.equip_cd, e.equip_nm from mst_equip e
+         where e.plant_cd = #{plantCd} and e.equip_cd = #{equipCd} and e.use_yn = 'Y'
+    </select>
+
+    <select id="findRouting" resultType="io.smarthappy.module.production.WoDtos$RefRow">
+        select r.routing_id as id, r.item_id, r.plant_cd, r.status, r.valid_from, r.valid_to from mst_routing r
+         where r.routing_id = #{id}
+    </select>
+
+    <select id="findBom" resultType="io.smarthappy.module.production.WoDtos$RefRow">
+        select b.bom_id as id, b.item_id, b.status, b.valid_from, b.valid_to, b.base_qty from mst_bom b where b.bom_id = #{id}
+    </select>
+
+    <select id="effectiveBom" resultType="io.smarthappy.module.production.WoDtos$RefRow">
+        select b.bom_id as id, b.item_id, b.status, b.valid_from, b.valid_to, b.base_qty from mst_bom b
+         where b.item_id = #{itemId} and b.alt_no = 1 and b.status = 'RELEASED'
+           and b.valid_from &lt;= #{date} and (b.valid_to is null or #{date} &lt; b.valid_to)
+    </select>
+
+    <!-- ================================================================ 지시 -->
+
+    <sql id="woCols">
+        w.wo_id, w.wo_no, w.plant_cd, p.plant_nm, w.item_id, i.item_cd, i.item_nm, trim_scale(w.plan_qty)::text as plan_qty,
+        w.unit_cd, w.plan_start, w.plan_end, w.routing_id, r.rev as routing_rev, w.bom_id, b.rev as bom_rev,
+        w.order_line_id, o.order_no, ol.line_no as order_line_no, c.cust_nm, w.priority, w.status, w.released_at,
+        w.released_by, w.cancel_reason, w.remark,
+        (select count(*) from prd_wo_proc x where x.wo_id = w.wo_id) as proc_cnt,
+        w.row_ver, w.updated_at, w.updated_by
+    </sql>
+
+    <sql id="woFrom">
+        from prd_wo w
+        join sys_plant p on p.comp_cd = w.comp_cd and p.plant_cd = w.plant_cd
+        join mst_item i on i.item_id = w.item_id
+        join mst_routing r on r.routing_id = w.routing_id
+        left join mst_bom b on b.bom_id = w.bom_id
+        left join sal_order_line ol on ol.line_id = w.order_line_id
+        left join sal_order o on o.order_id = ol.order_id
+        left join mst_cust c on c.cust_id = o.cust_id
+    </sql>
+
+    <!-- 목록·grid 공통 조건 -->
+    <sql id="woWhere">
+         where true
+           <if test="from != null">and w.plan_start &gt;= #{from}</if>
+           <if test="to != null">and w.plan_start &lt;= #{to}</if>
+           <if test="plantCd != null">and w.plant_cd = #{plantCd}</if>
+           <!-- ACTIVE = 조회 묶음(발행+진행 중), 부분 인덱스 ix_prd_wo_active 와 같은 조건 -->
+           <if test="status == 'ACTIVE'">and w.status in ('RELEASED', 'IN_PROGRESS')</if>
+           <if test="status != null and status != 'ACTIVE'">and w.status = #{status}</if>
+           <if test="itemId != null">and w.item_id = #{itemId}</if>
+           <if test="orderLineId != null">and w.order_line_id = #{orderLineId}</if>
+           <if test="keyword != null">and w.wo_no like '%' || #{keyword} || '%' escape '\'</if>
+    </sql>
+
+    <select id="findWos" resultType="io.smarthappy.module.production.WoDtos$WoRow">
+        select <include refid="woCols"/>
+        <include refid="woFrom"/>
+        <include refid="woWhere"/>
+         order by w.plan_start desc, w.priority, w.wo_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findWoPage" resultType="io.smarthappy.module.production.WoDtos$WoRow">
+        select <include refid="woCols"/>
+        <include refid="woFrom"/>
+        <include refid="woWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'WO_NO'">w.wo_no<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ITEM_CD'">i.item_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PLAN_END'">w.plan_end<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PRIORITY'">w.priority<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'STATUS'">w.status<if test="s.desc"> desc</if></when>
+                <otherwise>w.plan_start<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         w.wo_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countWos" resultType="long">
+        select count(*) from prd_wo w
+        <include refid="woWhere"/>
+    </select>
+
+    <select id="findWo" resultType="io.smarthappy.module.production.WoDtos$WoRow">
+        select <include refid="woCols"/>
+        <include refid="woFrom"/>
+         where w.wo_id = #{id}
+    </select>
+
+    <select id="lockWo" resultType="string" flushCache="true" useCache="false">
+        select status from prd_wo where wo_id = #{id} for update
+    </select>
+
+    <select id="insertWo" resultType="long" flushCache="true">
+        insert into prd_wo (comp_cd, wo_no, plant_cd, item_id, plan_qty, unit_cd, plan_start, plan_end, routing_id, bom_id,
+                            order_line_id, priority, remark, created_by, updated_by)
+        values (hb_current_comp(), #{woNo}, #{f.plantCd}, #{f.itemId}, #{f.planQty}, #{f.unitCd}, #{f.planStart}, #{f.planEnd},
+                #{f.routingId}, #{f.bomId}, #{f.orderLineId}, #{f.priority}, #{f.remark}, #{by}, #{by})
+        returning wo_id
+    </select>
+
+    <update id="updatePlanned">
+        update prd_wo
+           set plan_qty = #{f.planQty}, plan_start = #{f.planStart}, plan_end = #{f.planEnd}, routing_id = #{f.routingId},
+               bom_id = #{f.bomId}, order_line_id = #{f.orderLineId}, priority = #{f.priority}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_id = #{id} and row_ver = #{rowVer} and status = 'PLANNED'
+    </update>
+
+    <update id="updateSchedule">
+        update prd_wo
+           set plan_start = #{f.planStart}, plan_end = #{f.planEnd}, priority = #{f.priority}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_id = #{id} and row_ver = #{rowVer} and status in ('RELEASED', 'IN_PROGRESS')
+    </update>
+
+    <!-- 두 번 눌러도 한 번(계획 상태·rowVer 조건부). released_at = now() 는 스냅샷 트리거의 "이 트랜잭션" 표식 -->
+    <update id="release">
+        update prd_wo
+           set status = 'RELEASED', released_at = now(), released_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_id = #{id} and row_ver = #{rowVer} and status = 'PLANNED'
+    </update>
+
+    <update id="cancel">
+        update prd_wo
+           set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_id = #{id} and row_ver = #{rowVer} and status in ('PLANNED', 'RELEASED')
+    </update>
+
+    <!-- ================================================================ 스냅샷 -->
+
+    <insert id="insertProcs">
+        insert into prd_wo_proc (comp_cd, wo_id, op_seq, proc_id, proc_cd, proc_nm, node_id, std_ct_sec, units_per_cycle,
+                                 setup_min, src_step_id, created_by, updated_by)
+        select hb_current_comp(), #{woId}, s.op_seq, s.proc_id, p.proc_cd, p.proc_nm, s.node_id, s.std_ct_sec, s.units_per_cycle,
+               s.setup_min, s.step_id, #{by}, #{by}
+          from mst_routing_step s join mst_proc p on p.proc_id = s.proc_id
+         where s.routing_id = #{routingId}
+         order by s.op_seq
+    </insert>
+
+    <insert id="insertParams">
+        insert into prd_wo_param (comp_cd, wo_proc_id, param_cd, param_nm, unit_nm, target_val, lsl, usl, sort_no)
+        select hb_current_comp(), wp.wo_proc_id, m.param_cd, m.param_nm, m.unit_nm, m.target_val, m.lsl, m.usl, m.sort_no
+          from prd_wo_proc wp join mst_routing_param m on m.step_id = wp.src_step_id
+         where wp.wo_id = #{woId}
+    </insert>
+
+    <select id="bomLines" resultType="io.smarthappy.module.production.WoDtos$SrcBomLine">
+        select l.line_id, l.bom_id, l.item_id, i.item_cd, l.line_type, l.qty, l.unit_cd, i.unit_cd as item_unit,
+               coalesce(c.factor, case when l.unit_cd = i.unit_cd then 1 end) as factor,
+               l.scrap_pct, l.fixed_yn, l.issue_method, l.op_seq, l.alt_grp, l.alt_priority, l.alt_pct
+          from mst_bom_line l
+          join mst_item i on i.item_id = l.item_id
+          left join mst_unit_conv c on c.item_id = l.item_id and c.from_unit = l.unit_cd and c.to_unit = i.unit_cd and c.use_yn = 'Y'
+         where l.bom_id = #{bomId}
+         order by l.line_no, l.line_id
+    </select>
+
+    <insert id="insertBoms">
+        insert into prd_wo_bom (comp_cd, wo_id, seq, item_id, line_type, req_qty, unit_cd, op_seq, issue_method, alt_grp,
+                                alt_priority, alt_pct, src_bom_id, src_line_id, src_qty, src_unit_cd, scrap_pct, phantom_path)
+        values
+        <foreach collection="lines" item="l" separator=",">
+            (hb_current_comp(), #{woId}, #{l.seq}, #{l.itemId}, #{l.lineType}, #{l.reqQty}, #{l.unitCd}, #{l.opSeq},
+             #{l.issueMethod}, #{l.altGrp}, #{l.altPriority}, #{l.altPct}, #{l.srcBomId}, #{l.srcLineId}, #{l.srcQty},
+             #{l.srcUnitCd}, #{l.scrapPct}, #{l.phantomPath})
+        </foreach>
+    </insert>
+
+    <sql id="procCols">
+        wp.wo_proc_id, wp.op_seq, wp.proc_cd, wp.proc_nm, wp.node_id, h.node_cd, trim_scale(wp.std_ct_sec)::text as std_ct_sec,
+        wp.units_per_cycle, trim_scale(wp.setup_min)::text as setup_min, wp.status, wp.equip_id, e.equip_cd, e.equip_nm,
+        wp.row_ver
+    </sql>
+
+    <select id="findProcs" resultType="io.smarthappy.module.production.WoDtos$ProcRow">
+        select <include refid="procCols"/>
+          from prd_wo_proc wp
+          left join mst_equip_hier h on h.node_id = wp.node_id
+          left join mst_equip e on e.equip_id = wp.equip_id
+         where wp.wo_id = #{woId}
+         order by wp.op_seq
+    </select>
+
+    <select id="findProc" resultType="io.smarthappy.module.production.WoDtos$ProcRow">
+        select <include refid="procCols"/>
+          from prd_wo_proc wp
+          left join mst_equip_hier h on h.node_id = wp.node_id
+          left join mst_equip e on e.equip_id = wp.equip_id
+         where wp.wo_proc_id = #{id}
+    </select>
+
+    <select id="procWoId" resultType="long">
+        select wo_id from prd_wo_proc where wo_proc_id = #{id}
+    </select>
+
+    <select id="findParams" resultType="io.smarthappy.module.production.WoDtos$ParamRow">
+        select p.wo_proc_id, p.param_cd, p.param_nm, p.unit_nm, trim_scale(p.target_val)::text as target_val,
+               trim_scale(p.lsl)::text as lsl, trim_scale(p.usl)::text as usl
+          from prd_wo_param p join prd_wo_proc wp on wp.wo_proc_id = p.wo_proc_id
+         where wp.wo_id = #{woId}
+         order by wp.op_seq, p.sort_no, p.param_cd
+    </select>
+
+    <select id="findBoms" resultType="io.smarthappy.module.production.WoDtos$BomRow">
+        select b.seq, i.item_cd, i.item_nm, b.line_type, trim_scale(b.req_qty)::text as req_qty, b.unit_cd, b.op_seq,
+               b.issue_method, b.alt_grp, b.alt_priority, trim_scale(b.alt_pct)::text as alt_pct,
+               trim_scale(b.src_qty)::text as src_qty, b.src_unit_cd, trim_scale(b.scrap_pct)::text as scrap_pct, b.phantom_path
+          from prd_wo_bom b join mst_item i on i.item_id = b.item_id
+         where b.wo_id = #{woId}
+         order by b.seq
+    </select>
+
+    <update id="assignEquip">
+        update prd_wo_proc set equip_id = #{equipId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_proc_id = #{id} and row_ver = #{rowVer} and status &lt;&gt; 'DONE'
+    </update>
+</mapper>

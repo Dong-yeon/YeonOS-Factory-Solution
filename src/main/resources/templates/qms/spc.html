@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  SPC 관리도 (qms-spc) — P3 QMS 2부 Q10 (docs/29_P3 12.6). Q6 측정값 원장 위 X̄-R 관리도·공정능력·런 규칙 경보.
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 담당(WEB). 관리도 단위 하나를 골라 최근 25군을 본다.
+  직접 치는 값 = 부분군 수·끝 날짜·활성 규칙, 고정 한계 비고, 무효 사유.
+  서버가 채우는 값 = 부분군(판정 확정 검사, 무효 값 제외)·관리한계·경보·공정능력, 고정 한계 중심·σ̂·구간.
+  예외 = 계수형 특성, 부분군 20개 미만·변동 없음(고정 불가), 이미 고정 한계 있음(무효 뒤 다시).
+  "위반" 보기(docs/29_P3 19장 SV-7): 판정 확정 때 서버가 남긴 SPC 위반 원장(고정 한계 단위만) — 직접 치는 값 = 처리 메모·연결 번호,
+  서버가 채우는 값 = 규칙·점 값·한계 스냅샷·상태(처리 기록에서 파생). 예외 = 종결·무효 뒤 처리 없음, 메모 없는 조치·종결·무효.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">SPC 관리도</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.spc.keyword}">품목·특성</span><input name="keyword" maxlength="100"></label>
+    <label id="statusField" hidden><span th:text="#{qms.spcEvent.col.status}">상태</span>
+        <select name="status" data-help-key="qms-spc.eventStatus">
+            <option value="OPEN_ALL" selected th:text="#{qms.spcEvent.openAll}">미종결</option>
+            <option value="" th:text="#{common.all}">전체</option>
+            <option value="OPEN" th:text="#{code.QMS_SPC_EVENT_STATUS.OPEN}">미확인</option>
+            <option value="ACKED" th:text="#{code.QMS_SPC_EVENT_STATUS.ACKED}">처리 중</option>
+            <option value="CLOSED" th:text="#{code.QMS_SPC_EVENT_STATUS.CLOSED}">종결</option>
+            <option value="VOID" th:text="#{code.QMS_SPC_EVENT_STATUS.VOID}">무효</option>
+        </select>
+    </label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<fieldset class="hb-seg hb-spc-view" id="viewSeg">
+    <legend th:text="#{qms.spcEvent.view}">보기</legend>
+    <label><input type="radio" name="view" value="units" checked><span th:text="#{qms.spcEvent.viewUnits}">관리도 단위</span></label>
+    <label><input type="radio" name="view" value="events"><span th:text="#{qms.spcEvent.viewEvents}">위반</span></label>
+</fieldset>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main hb-qms-scroll">
+        <div id="unitGrid" class="hb-grid-host"></div>
+        <div id="eventGrid" class="hb-grid-host" hidden></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.spc.select}">관리도를 고르세요.</p>
+        <div id="chartBox" hidden>
+            <p id="headLine" class="hb-qms-status" role="status"></p>
+            <form id="optForm" class="hb-qms-inline" autocomplete="off">
+                <label><span th:text="#{qms.spc.n}">최근 부분군 수</span><input id="optN" type="number" min="1" max="200" value="25" data-help-key="qms-spc.n"></label>
+                <label><span th:text="#{qms.spc.to}">끝 날짜</span><input id="optTo" type="date"></label>
+                <fieldset class="hb-qms-rules" data-help-key="qms-spc.rules">
+                    <legend th:text="#{qms.spc.rules}">런 규칙</legend>
+                    <label><input type="checkbox" name="rule" value="WE1"> 1</label>
+                    <label><input type="checkbox" name="rule" value="WE2"> 2</label>
+                    <label><input type="checkbox" name="rule" value="WE3"> 3</label>
+                    <label><input type="checkbox" name="rule" value="WE4"> 4</label>
+                </fieldset>
+                <button type="submit" class="hb-btn-secondary" th:text="#{qms.spc.redraw}">다시 그리기</button>
+            </form>
+            <p id="limitLine" class="hb-muted"></p>
+            <h2 class="hb-qms-sub-h" id="xHead" th:text="#{qms.spc.xbar}">X̄ 관리도</h2>
+            <div class="hb-spc-chart" id="xChart"></div>
+            <h2 class="hb-qms-sub-h" id="rHead" th:text="#{qms.spc.range}">R 관리도</h2>
+            <div class="hb-spc-chart" id="rChart"></div>
+            <p id="capLine"></p>
+            <h2 class="hb-qms-sub-h" th:text="#{qms.spc.points}">부분군</h2>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="pointTable">
+                    <thead><tr>
+                        <th th:text="#{qms.spc.col.idx}">순번</th>
+                        <th th:text="#{qms.spc.col.lot}">LOT</th>
+                        <th th:text="#{qms.spc.col.insp}">검사 번호</th>
+                        <th th:text="#{qms.spc.col.n}">n</th>
+                        <th id="colMean" th:text="#{qms.spc.col.mean}">평균</th>
+                        <th id="colR" th:text="#{qms.spc.col.r}">범위</th>
+                        <th th:text="#{qms.spc.col.rules}">경보</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <h2 class="hb-qms-sub-h" th:text="#{qms.spcEvent.unitEvents}">이 단위의 위반</h2>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="unitEventTable">
+                    <thead><tr>
+                        <th th:text="#{qms.spcEvent.col.occurredAt}">발생</th>
+                        <th th:text="#{qms.spcEvent.col.status}">상태</th>
+                        <th th:text="#{qms.spcEvent.col.rule}">규칙</th>
+                        <th th:text="#{qms.spcEvent.col.inspNo}">검사 번호</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <h2 class="hb-qms-sub-h" th:text="#{qms.spc.limit}">고정 관리한계</h2>
+            <p id="fixedLine" class="hb-muted"></p>
+            <form id="fixForm" class="hb-qms-inline" autocomplete="off" hidden>
+                <label><span th:text="#{qms.spc.remark}">비고</span><input id="fixRemark" maxlength="1000" data-help-key="qms-spc.fix"></label>
+                <button type="submit" class="hb-btn-primary" th:text="#{qms.spc.fix}">이 구간으로 한계 고정</button>
+            </form>
+            <form id="voidForm" class="hb-qms-inline" autocomplete="off" hidden>
+                <label><span th:text="#{qms.spc.voidReason}">무효 사유</span><input id="voidReason" maxlength="500"></label>
+                <button type="submit" class="hb-btn-secondary" th:text="#{qms.spc.void}">한계 무효</button>
+            </form>
+            <h2 class="hb-qms-sub-h" th:text="#{qms.spc.history}">한계 이력</h2>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="historyTable">
+                    <thead><tr>
+                        <th th:text="#{qms.spc.col.status}">상태</th>
+                        <th th:text="#{qms.spc.col.mean}">중심</th>
+                        <th>σ̂</th>
+                        <th th:text="#{qms.spc.col.subgroups}">부분군</th>
+                        <th th:text="#{qms.spc.rules}">규칙</th>
+                        <th th:text="#{qms.spc.col.by}">정한 사람</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        <div id="eventBox" hidden>
+            <button type="button" class="hb-btn-ghost" id="backToChart" hidden th:text="#{qms.spcEvent.backToChart}">관리도로 돌아가기</button>
+            <p id="eventHead" class="hb-qms-status" role="status"></p>
+            <dl class="hb-info" id="eventInfo"></dl>
+            <p class="hb-qms-inline" id="eventLinks" hidden>
+                <a id="evNcrLink" class="hb-btn-secondary hb-link-btn" th:text="#{js.qms.ncr.open}">부적합 등록</a>
+                <a id="evContainLink" class="hb-btn-secondary hb-link-btn" th:text="#{qms.spcEvent.openContain}">봉쇄 열기</a>
+                <a id="evTraceLink" class="hb-btn-secondary hb-link-btn" th:text="#{qms.lotTrace.goForward}">출하 추적</a>
+            </p>
+            <h2 class="hb-qms-sub-h" th:text="#{qms.spcEvent.acts}">처리 이력</h2>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="actTable">
+                    <thead><tr>
+                        <th th:text="#{qms.spcEvent.col.actType}">처리</th>
+                        <th th:text="#{qms.spcEvent.col.note}">메모</th>
+                        <th th:text="#{qms.spcEvent.col.link}">연결</th>
+                        <th th:text="#{qms.spcEvent.col.actedBy}">처리자</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <form id="actForm" class="hb-qms-inline" autocomplete="off" hidden>
+                <label><span th:text="#{qms.spcEvent.col.actType}">처리</span>
+                    <select id="actType" data-help-key="qms-spc.act">
+                        <option value="ACK" th:text="#{code.QMS_SPC_ACT.ACK}">확인</option>
+                        <option value="ACTION" th:text="#{code.QMS_SPC_ACT.ACTION}">조치</option>
+                        <option value="CLOSE" th:text="#{code.QMS_SPC_ACT.CLOSE}">종결</option>
+                        <option value="VOID" th:text="#{code.QMS_SPC_ACT.VOID}">무효</option>
+                    </select>
+                </label>
+                <label><span th:text="#{qms.spcEvent.col.note}">메모</span><input id="actNote" maxlength="1000"></label>
+                <label><span th:text="#{qms.spcEvent.linkType}">연결 유형</span>
+                    <select id="actLinkType">
+                        <option value="" th:text="#{qms.spcEvent.noLink}">없음</option>
+                        <option value="NCR">NCR</option>
+                        <option value="CONTAIN" th:text="#{qms.spcEvent.linkContain}">봉쇄</option>
+                        <option value="CAPA">8D</option>
+                    </select>
+                </label>
+                <label><span th:text="#{qms.spcEvent.linkNo}">연결 번호</span><input id="actLinkNo" maxlength="30"></label>
+                <!-- 조치(ACTION) 때 고르는 OCAP 표준 조치(docs/29_P3 26장) — 그 규칙 + 공통, 고른 순간 문구가 사본으로 남는다 -->
+                <fieldset id="ocapBox" class="hb-qms-ocap" hidden>
+                    <legend th:text="#{js.qms.spcEvent.ocap}">표준 조치(OCAP)</legend>
+                    <div id="ocapList"></div>
+                </fieldset>
+                <button type="submit" class="hb-btn-primary" th:text="#{qms.spcEvent.actSave}">처리 기록</button>
+            </form>
+        </div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/spc.js}"></script>
+</body>
+</html>

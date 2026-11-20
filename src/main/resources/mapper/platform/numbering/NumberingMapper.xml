@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  채번 (01 5.2). MAX+1 금지 — 한 문장으로 원자적 증가.
+  increment 는 select 태그지만 DML 이다: flushCache="true" 로 MyBatis 1차 캐시를 쓰지 않게 한다
+  (같은 트랜잭션에서 두 번 부르면 캐시된 같은 번호가 나오는 사고 방지. 전역 local-cache-scope=statement 와 이중 방어).
+-->
+<mapper namespace="io.smarthappy.platform.numbering.NumberingMapper">
+
+    <select id="findRule" resultType="map">
+        select pattern, reset_cycle
+          from sys_numbering_rule
+         where rule_cd = #{ruleCd}
+           and use_yn = 'Y'
+    </select>
+
+    <select id="increment" resultType="long" flushCache="true" useCache="false">
+        insert into sys_numbering_seq (comp_cd, rule_cd, period_key, last_no)
+        values (#{compCd}, #{ruleCd}, #{periodKey}, 1)
+        on conflict (comp_cd, rule_cd, period_key) do update
+           set last_no    = sys_numbering_seq.last_no + 1,
+               updated_at = now()
+        returning last_no
+    </select>
+
+    <insert id="insertRuleIfAbsent">
+        insert into sys_numbering_rule (comp_cd, rule_cd, rule_nm, pattern, reset_cycle, created_by, updated_by)
+        values (#{compCd}, #{ruleCd}, #{ruleNm}, #{pattern}, #{resetCycle}, #{actor}, #{actor})
+        on conflict (comp_cd, rule_cd) do nothing
+    </insert>
+
+    <update id="upsertRule">
+        insert into sys_numbering_rule (comp_cd, rule_cd, rule_nm, pattern, reset_cycle, created_by, updated_by)
+        values (#{compCd}, #{ruleCd}, #{ruleNm}, #{pattern}, #{resetCycle}, #{actor}, #{actor})
+        on conflict (comp_cd, rule_cd) do update
+           set rule_nm     = excluded.rule_nm,
+               pattern     = excluded.pattern,
+               reset_cycle = excluded.reset_cycle,
+               row_ver     = sys_numbering_rule.row_ver + 1,
+               updated_at  = now(),
+               updated_by  = excluded.updated_by
+    </update>
+</mapper>

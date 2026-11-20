@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{page.moduleDisabled.title}">쓰지 않는 모듈</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+</head>
+<body class="hb-page">
+<h1 th:text="#{page.moduleDisabled.title}">쓰지 않는 모듈</h1>
+<p th:text="#{page.moduleDisabled.message}">이 회사는 이 화면이 속한 모듈을 쓰지 않습니다. 필요하면 관리자가 시스템 &gt; 사용 모듈에서 켭니다.</p>
+</body>
+</html>

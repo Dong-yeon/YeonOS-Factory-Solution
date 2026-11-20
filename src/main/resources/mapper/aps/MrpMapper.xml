@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- MRP 자재소요계획 (docs/38 19장). 회사 조건은 RLS. aps_mrp* 에만 쓴다 — 지시·입고·MPS·기준정보·거래처는 읽기만 -->
+<mapper namespace="io.smarthappy.module.aps.MrpMapper">
+
+    <!-- ================================================================ 계산 입력 -->
+
+    <select id="findMpsCells" resultType="io.smarthappy.module.aps.MrpDtos$MpsCellSrc">
+        select c.mps_cell_id, r.item_id, c.bucket_date, c.plan_qty
+          from aps_mps_cell c join aps_mps_row r on r.mps_row_id = c.mps_row_id
+         where c.mps_id = #{mpsId}
+         order by r.item_id, c.bucket_date
+    </select>
+
+    <select id="findParamItems" resultType="long">
+        select p.item_id from aps_item_param p where p.plant_cd = #{plantCd} and p.use_yn = 'Y' order by p.item_id
+    </select>
+
+    <!-- 열린 지시: 남은 = 계획 수량 − 생산 입고 순수량(역분개는 음수 그대로, 16.3 M6). 남은 0 인 지시도 남은 소요는 있을 수 있어 모두 -->
+    <select id="findOpenWos" resultType="io.smarthappy.module.aps.MrpDtos$WoSrc">
+        select w.wo_id, w.wo_no, w.item_id, w.plan_start, w.plan_end,
+               w.plan_qty - coalesce((select sum(r.qty) from prd_receipt r where r.wo_id = w.wo_id), 0) as remain_qty
+          from prd_wo w
+         where w.plant_cd = #{plantCd} and w.status in ('PLANNED', 'RELEASED', 'IN_PROGRESS')
+         order by w.wo_no, w.wo_id
+    </select>
+
+    <select id="findItems" resultType="io.smarthappy.module.aps.MrpDtos$ItemSrc">
+        select i.item_id, i.item_cd, i.proc_type, i.unit_cd
+          from mst_item i
+         where i.item_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findParams" resultType="io.smarthappy.module.aps.MrpDtos$ParamSrc">
+        select p.item_id, p.safety_qty, p.lot_rule, p.lot_qty, p.lot_mult, p.make_lead_days
+          from aps_item_param p
+         where p.plant_cd = #{plantCd} and p.use_yn = 'Y'
+           and p.item_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findCusts" resultType="io.smarthappy.module.aps.MrpDtos$CustSrc">
+        select c.cust_id, c.cust_cd from mst_cust c
+         where c.cust_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!-- ================================================================ 저장 -->
+
+    <select id="insertMrp" resultType="long" flushCache="true">
+        insert into aps_mrp (comp_cd, mrp_no, plant_cd, mrp_nm, horizon_start, horizon_days, mps_id, out_days, item_cnt, order_cnt, exc_cnt,
+                             calculated_by, created_by, updated_by)
+        values (hb_current_comp(), #{m.mrpNo}, #{m.plantCd}, #{m.mrpNm}, #{m.horizonStart}, #{m.horizonDays}, #{m.mpsId}, #{m.outDays},
+                #{m.itemCnt}, #{m.orderCnt}, #{m.excCnt}, #{by}, #{by}, #{by})
+        returning mrp_id
+    </select>
+
+    <insert id="insertItems">
+        insert into aps_mrp_item (comp_cd, mrp_id, item_id, llc, proc_type, unit_cd, mps_yn, stock_qty, safety_qty, lot_rule, lot_qty, lot_mult,
+                                  moq, order_mult, lead_days, lead_src, cust_id)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{mrpId}, #{r.itemId}, #{r.llc}, #{r.procType}, #{r.unitCd}, #{r.mpsYn}, #{r.stockQty}, #{r.safetyQty},
+             #{r.lotRule}, #{r.lotQty}, #{r.lotMult}, #{r.moq}, #{r.orderMult}, #{r.leadDays}, #{r.leadSrc}, #{r.custId})
+        </foreach>
+    </insert>
+
+    <insert id="insertElems">
+        insert into aps_mrp_elem (comp_cd, mrp_id, elem_seq, item_id, dir, kind, elem_date, qty, past_due_yn, start_date, late_yn,
+                                  parent_seq, ref_id, ref_no)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{mrpId}, #{r.elemSeq}, #{r.itemId}, #{r.dir}, #{r.kind}, #{r.elemDate}, #{r.qty}, #{r.pastDueYn},
+             #{r.startDate}, #{r.lateYn}, #{r.parentSeq}, #{r.refId}, #{r.refNo})
+        </foreach>
+    </insert>
+
+    <insert id="insertPegs">
+        insert into aps_mrp_peg (comp_cd, mrp_id, demand_seq, supply_seq, qty)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{mrpId}, #{r.demandSeq}, #{r.supplySeq}, #{r.qty})
+        </foreach>
+    </insert>
+
+    <insert id="insertExcs">
+        insert into aps_mrp_exc (comp_cd, mrp_id, item_id, exc_cd, elem_seq, cur_date, sug_date, qty, ref_no)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{mrpId}, #{r.itemId}, #{r.excCd}, #{r.elemSeq}, #{r.curDate}, #{r.sugDate}, #{r.qty}, #{r.refNo})
+        </foreach>
+    </insert>
+
+    <select id="lockMrp" resultType="string" flushCache="true" useCache="false">
+        select status from aps_mrp where mrp_id = #{id} for update
+    </select>
+
+    <update id="discard">
+        update aps_mrp set status = 'DISCARDED', discard_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where mrp_id = #{id} and row_ver = #{rowVer} and status = 'CALC'
+    </update>
+
+    <!-- ================================================================ 조회 -->
+
+    <sql id="mrpCols">
+        m.mrp_id, m.mrp_no, m.plant_cd, m.mrp_nm, m.horizon_start, m.horizon_days, m.mps_id, s.mps_no, m.out_days, m.status, m.item_cnt,
+        m.order_cnt, m.exc_cnt, m.calculated_at, m.calculated_by, m.discard_reason, m.row_ver
+    </sql>
+
+    <select id="findList" resultType="io.smarthappy.module.aps.MrpDtos$MrpRow">
+        select <include refid="mrpCols"/>
+          from aps_mrp m left join aps_mps s on s.mps_id = m.mps_id
+         where m.calculated_at &gt;= #{from} and m.calculated_at &lt; #{to}
+           <if test="plantCd != null">and m.plant_cd = #{plantCd}</if>
+         order by m.calculated_at desc, m.mrp_id desc
+         limit #{limit}
+    </select>
+
+    <select id="findMrp" resultType="io.smarthappy.module.aps.MrpDtos$MrpRow" flushCache="true" useCache="false">
+        select <include refid="mrpCols"/>
+          from aps_mrp m left join aps_mps s on s.mps_id = m.mps_id
+         where m.mrp_id = #{id}
+    </select>
+
+    <!-- 품목 행 — 저차 코드 → 품목 코드 순, 계획 주문 수·합·예외 수 -->
+    <select id="findItemRows" resultType="io.smarthappy.module.aps.MrpDtos$ItemRow" flushCache="true" useCache="false">
+        select t.item_id, i.item_cd, i.item_nm, t.llc, t.proc_type, t.unit_cd, t.mps_yn, trim_scale(t.stock_qty)::text as stock_qty,
+               trim_scale(t.safety_qty)::text as safety_qty, t.lot_rule, trim_scale(t.lot_qty)::text as lot_qty,
+               trim_scale(t.lot_mult)::text as lot_mult, trim_scale(t.moq)::text as moq, trim_scale(t.order_mult)::text as order_mult,
+               t.lead_days, t.lead_src, c.cust_cd,
+               (select count(*) from aps_mrp_elem e where e.mrp_id = t.mrp_id and e.item_id = t.item_id and e.kind in ('MPS', 'PLAN')) as order_cnt,
+               (select trim_scale(coalesce(sum(e.qty), 0))::text from aps_mrp_elem e
+                 where e.mrp_id = t.mrp_id and e.item_id = t.item_id and e.kind in ('MPS', 'PLAN')) as order_qty,
+               (select count(*) from aps_mrp_exc x where x.mrp_id = t.mrp_id and x.item_id = t.item_id) as exc_cnt
+          from aps_mrp_item t
+          join mst_item i on i.item_id = t.item_id
+          left join mst_cust c on c.cust_id = t.cust_id
+         where t.mrp_id = #{mrpId}
+           <if test="itemId != null">and t.item_id = #{itemId}</if>
+         order by t.llc, i.item_cd, t.item_id
+    </select>
+
+    <select id="findExcs" resultType="io.smarthappy.module.aps.MrpDtos$ExcRow" flushCache="true" useCache="false">
+        select x.exc_id, x.item_id, i.item_cd, i.item_nm, x.exc_cd, x.elem_seq, e.kind as elem_kind, x.cur_date, x.sug_date,
+               trim_scale(x.qty)::text as qty, x.ref_no
+          from aps_mrp_exc x
+          join mst_item i on i.item_id = x.item_id
+          left join aps_mrp_elem e on e.mrp_id = x.mrp_id and e.elem_seq = x.elem_seq
+         where x.mrp_id = #{mrpId}
+         order by i.item_cd, x.cur_date nulls first, x.exc_id
+         limit #{limit}
+    </select>
+
+    <sql id="elemCols">
+        e.elem_seq, e.item_id, i.item_cd, i.item_nm, i.unit_cd, e.dir, e.kind, e.elem_date, trim_scale(e.qty)::text as qty, e.past_due_yn,
+        e.start_date, e.late_yn, e.parent_seq, e.ref_id, e.ref_no, i.proc_type
+    </sql>
+
+    <select id="findOrders" resultType="io.smarthappy.module.aps.MrpDtos$ElemRow" flushCache="true" useCache="false">
+        select <include refid="elemCols"/>
+          from aps_mrp_elem e join mst_item i on i.item_id = e.item_id
+         where e.mrp_id = #{mrpId} and e.kind in ('MPS', 'PLAN')
+           <if test="itemId != null">and e.item_id = #{itemId}</if>
+           <if test="kind != null">and e.kind = #{kind}</if>
+         order by i.item_cd, e.elem_date, e.elem_seq
+         limit #{limit}
+    </select>
+
+    <select id="findElems" resultType="io.smarthappy.module.aps.MrpDtos$ElemRow" flushCache="true" useCache="false">
+        select <include refid="elemCols"/>
+          from aps_mrp_elem e join mst_item i on i.item_id = e.item_id
+         where e.mrp_id = #{mrpId}
+           <if test="itemId != null">and e.item_id = #{itemId}</if>
+           <if test="seqs != null">
+               and e.elem_seq in <foreach collection="seqs" item="s" open="(" separator="," close=")">#{s}</foreach>
+           </if>
+         order by e.elem_date, case when e.dir = 'S' then 0 else 1 end, e.elem_seq
+    </select>
+
+    <select id="findPegs" resultType="io.smarthappy.module.aps.MrpDtos$PegRow" flushCache="true" useCache="false">
+        select p.demand_seq, p.supply_seq, trim_scale(p.qty)::text as qty
+          from aps_mrp_peg p
+         where p.mrp_id = #{mrpId}
+           and (
+           <choose>
+               <when test="demandSeqs != null and !demandSeqs.isEmpty()">
+                   p.demand_seq in <foreach collection="demandSeqs" item="s" open="(" separator="," close=")">#{s}</foreach>
+               </when>
+               <otherwise>false</otherwise>
+           </choose>
+           or
+           <choose>
+               <when test="supplySeqs != null and !supplySeqs.isEmpty()">
+                   p.supply_seq in <foreach collection="supplySeqs" item="s" open="(" separator="," close=")">#{s}</foreach>
+               </when>
+               <otherwise>false</otherwise>
+           </choose>
+           )
+         order by p.demand_seq, p.supply_seq
+    </select>
+</mapper>

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  부적합(NCR) (qms-ncr) — P3 QMS 2부 Q8a (docs/29_P3 12.7). 부적합 등록 → 처분(MRB) → 종결, LOT 자동 보류·해제, 특채 결재.
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 담당(WEB). 검사 실행 NG·초품 NG 에서 바로 연다(?lotNo=&inspNo=&source=).
+  직접 치는 값 = LOT 번호·출처·근거 검사 번호·불량 유형·수량·내용, 처분 행(유형·수량·메모·재작업 결과 LOT), 취소 사유, 결재선.
+  서버가 채우는 값 = 번호, 품목·단위(LOT 에서), LOT 보류 근거(MES), 처분 합 확인, 상태.
+  예외 = 다른 LOT 의 검사·판정 안 된 검사, 처분 합 불일치, 특채 있는데 바로 종결, MES 없음(정책 끄기).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">부적합(NCR)</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.ncr.keyword}">번호·LOT·품목·불량</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{qms.ncr.col.status}">상태</span>
+        <select name="status">
+            <option value="" th:text="#{common.all}">전체</option>
+            <option value="OPEN_ALL" th:text="#{qms.ncr.status.openAll}">열린 것(처리 중·특채 결재 중)</option>
+            <option value="OPEN" th:text="#{code.QMS_NCR_STATUS.OPEN}">처리 중</option>
+            <option value="PENDING" th:text="#{code.QMS_NCR_STATUS.PENDING}">특채 결재 중</option>
+            <option value="CLOSED" th:text="#{code.QMS_NCR_STATUS.CLOSED}">종결</option>
+            <option value="CANCELLED" th:text="#{code.QMS_NCR_STATUS.CANCELLED}">취소</option>
+        </select></label>
+    <label><span th:text="#{qms.ncr.col.source}">출처</span>
+        <select name="source" data-hb="select" data-code="QMS_NCR_SOURCE" data-blank="all"></select></label>
+    <label><span th:text="#{qms.ncr.col.basis}">근거</span>
+        <select name="basis">
+            <option value="" th:text="#{common.all}">전체</option>
+            <option value="CUST_RTN" th:text="#{qms.ncr.basis.CUST_RTN}">고객 반품</option>
+            <option value="NO_DEFECT" th:text="#{qms.ncr.basis.NO_DEFECT}">불량 유형 미지정(판정 대기)</option>
+        </select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main hb-qms-scroll">
+        <form id="newForm" class="hb-qms-inline hb-qms-new" autocomplete="off" th:if="${actions.contains('SAVE')}">
+            <h2 class="hb-qms-sub-h" th:text="#{qms.ncr.new}">새 부적합</h2>
+            <label><span th:text="#{qms.ncr.lotNo}">LOT 번호</span><input data-field="lotNo" maxlength="50" required data-help-key="qms-ncr.lotNo"></label>
+            <label><span th:text="#{qms.ncr.col.source}">출처</span><select data-field="source" data-code="QMS_NCR_SOURCE"></select></label>
+            <label><span th:text="#{qms.ncr.inspNo}">근거 검사 번호</span><input data-field="inspNo" maxlength="30" data-help-key="qms-ncr.inspNo"></label>
+            <label><span th:text="#{qms.ncr.col.defect}">불량 유형</span><select data-field="defectId" class="ncr-defect"></select></label>
+            <label><span th:text="#{qms.ncr.col.qty}">수량</span><input data-field="ncQty" type="number" min="0" step="0.001" required></label>
+            <label class="hb-qms-grow"><span th:text="#{qms.ncr.desc}">내용</span><input data-field="description" maxlength="2000" required></label>
+            <button type="submit" th:text="#{qms.ncr.create}">등록</button>
+            <p id="dupNote" class="hb-qms-status hb-wide" data-status="DUE_SOON" role="status" hidden></p>
+        </form>
+        <div id="ncrGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.ncr.select}">부적합을 고르세요.</p>
+        <div id="detailBox" hidden>
+            <p id="headLine" class="hb-qms-status" role="status"></p>
+            <form id="editForm" class="hb-qms-inline" autocomplete="off">
+                <label><span th:text="#{qms.ncr.col.defect}">불량 유형</span><select data-field="defectId" class="ncr-defect"></select></label>
+                <label><span th:text="#{qms.ncr.col.qty}">수량</span><input data-field="ncQty" type="number" min="0" step="0.001"></label>
+                <label class="hb-qms-grow"><span th:text="#{qms.ncr.desc}">내용</span><input data-field="description" maxlength="2000"></label>
+            </form>
+            <h2 class="hb-qms-sub-h" th:text="#{qms.ncr.holds}">LOT 보류 근거</h2>
+            <p id="holdLine" class="hb-muted"></p>
+            <p id="blockedWarn" class="hb-notice" hidden></p>
+            <ul id="holdList" class="hb-files"></ul>
+            <p class="hb-qms-inline"><a id="containLink" class="hb-btn-secondary hb-link-btn" th:text="#{js.qms.contain.open}">봉쇄</a>
+                <a id="traceFwdLink" class="hb-btn-secondary hb-link-btn" th:text="#{qms.lotTrace.goForward}">출하 추적</a>
+                <a id="traceBackLink" class="hb-btn-secondary hb-link-btn" th:text="#{qms.lotTrace.goBackward}">역추적</a></p>
+            <h2 class="hb-qms-sub-h" th:text="#{qms.ncr.capas}">이어진 8D</h2>
+            <ul id="capaList" class="hb-files"></ul>
+            <p><a id="newCapaLink" class="hb-btn-secondary hb-link-btn" th:text="#{qms.ncr.newCapa}">이 부적합으로 8D 만들기</a></p>
+            <h2 class="hb-qms-sub-h" th:text="#{qms.ncr.disps}">처분(MRB)</h2>
+            <div class="hb-qms-table-wrap" data-help-key="qms-ncr.disps">
+                <table class="hb-cmp-table hb-ncr-disp" id="dispTable">
+                    <thead><tr>
+                        <th th:text="#{qms.ncr.col.dispType}">처분</th>
+                        <th th:text="#{qms.ncr.col.qty}">수량</th>
+                        <th th:text="#{qms.ncr.col.note}">메모</th>
+                        <th th:text="#{qms.ncr.col.reworkLot}">재작업 결과 LOT</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <p id="sumLine" class="hb-muted"></p>
+            <div class="hb-toolbar" id="editTools">
+                <button type="button" id="addDispBtn" class="hb-btn-secondary" th:text="#{qms.ncr.addDisp}">처분 행 추가</button>
+                <button type="button" id="saveBtn" th:text="#{qms.ncr.save}">저장</button>
+                <button type="button" id="closeBtn" class="hb-btn-secondary" th:text="#{qms.ncr.close}">종결</button>
+                <!-- 되돌릴 수 없는 동작은 저장과 떨어진 오른쪽 끝(docs/40 P1 ④) -->
+                <div class="hb-qms-danger-zone">
+                    <button type="button" id="cancelBtn" class="hb-btn-danger-outline" th:text="#{qms.ncr.cancel}">취소</button>
+                </div>
+            </div>
+            <section class="hb-sub" id="approvalBox" hidden>
+                <h2 th:text="#{qms.doc.approval}">결재</h2>
+                <div class="hb-qms-inline" id="lineTools">
+                    <label><span th:text="#{qms.doc.lineUser}">결재자</span><select id="lineUser"></select></label>
+                    <label><span th:text="#{qms.doc.lineType}">종류</span>
+                        <select id="lineType">
+                            <option value="APPROVE" th:text="#{js.qms.doc.line.APPROVE}">결재</option>
+                            <option value="AGREE" th:text="#{js.qms.doc.line.AGREE}">합의</option>
+                            <option value="REF" th:text="#{js.qms.doc.line.REF}">참조</option>
+                        </select></label>
+                    <button type="button" id="addLineBtn" class="hb-btn-secondary" th:text="#{qms.doc.addLine}">결재선 추가</button>
+                    <button type="button" id="submitBtn" th:text="#{qms.ncr.submit}">특채 결재 올리기</button>
+                </div>
+                <table class="hb-cmp-table" id="lineTable"><tbody></tbody></table>
+                <div class="hb-qms-inline" id="actTools" hidden>
+                    <label class="hb-qms-grow"><span th:text="#{qms.doc.aprComment}">의견</span><input id="aprComment" maxlength="500"></label>
+                    <button type="button" id="approveBtn" th:text="#{qms.doc.approve}">승인</button>
+                    <button type="button" id="rejectBtn" class="hb-btn-danger-outline" th:text="#{qms.doc.reject}">반려</button>
+                    <button type="button" id="withdrawBtn" class="hb-btn-secondary" th:text="#{qms.doc.withdraw}">회수</button>
+                </div>
+            </section>
+            <section class="hb-sub" id="fileBox" hidden>
+                <h2 th:text="#{qms.doc.files}">첨부</h2>
+                <p class="hb-muted" th:text="#{qms.ncr.filesHint}">특채 고객 승인 기록 등 — 처리 중일 때만 올리고 지웁니다</p>
+                <ul id="files" class="hb-files"></ul>
+                <label id="uploadBox" th:if="${actions.contains('SAVE')}"><span th:text="#{qms.doc.attach}">파일 올리기</span>
+                    <input type="file" id="fileInput"></label>
+            </section>
+            <section class="hb-sub" id="signBox" hidden>
+                <h2 th:text="#{qms.esign.title}">전자서명</h2>
+                <p id="esignLine" class="hb-muted"></p>
+                <ul id="signList" class="hb-files"></ul>
+            </section>
+        </div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.esign.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/ncr.js}"></script>
+</body>
+</html>

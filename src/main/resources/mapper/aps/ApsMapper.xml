@@ -1,0 +1,394 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- APS 계획 (docs/38). 회사 조건은 RLS — comp_cd 를 적지 않는다(INSERT 는 hb_current_comp()). 지시·라우팅·설비·근무조는 읽기만 -->
+<mapper namespace="io.smarthappy.module.aps.ApsMapper">
+
+    <!-- ================================================================ 계산 입력 -->
+
+    <select id="findPlants" resultType="io.smarthappy.module.master.equip.EquipDtos$PlantRow">
+        select p.plant_cd, p.plant_nm, p.time_zone, p.sort_no, p.use_yn, p.row_ver from sys_plant p
+         where p.use_yn = 'Y' order by p.sort_no, p.plant_cd
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="findShifts" resultType="io.smarthappy.module.aps.ApsDtos$ShiftRow">
+        select s.start_time, s.end_time, s.break_min from mst_shift s
+         where s.plant_cd = #{plantCd} and s.use_yn = 'Y' order by s.start_time, s.shift_cd
+    </select>
+
+    <sql id="targetWo">
+        w.plant_cd = #{plantCd} and w.status in ('PLANNED', 'RELEASED', 'IN_PROGRESS') and w.plan_start &lt;= #{lastDay}
+    </sql>
+
+    <select id="findWos" resultType="io.smarthappy.module.aps.ApsDtos$WoSrc">
+        select w.wo_id, w.wo_no, w.status, w.item_id, w.plan_qty, w.unit_cd, w.priority, w.plan_start, w.plan_end, w.row_ver,
+               coalesce(l.due_date, w.plan_end) as due_date, case when l.line_id is null then 'WO' else 'ORDER' end as due_src
+          from prd_wo w
+          left join sal_order_line l on l.line_id = w.order_line_id
+         where <include refid="targetWo"/>
+         order by w.wo_id
+         limit #{limit}
+    </select>
+
+    <!-- 발행 지시: 스냅샷 공정(완료 제외), 잔량 = 계획 수량 − 그 공정 순 양품(역분개 행은 음수라 그대로 더한다).
+         계획 지시: 확정 라우팅 단계(확정본은 트리거로 고정). 외주 여부는 공정 마스터 — 확정 라우팅이 쓰는 공정은 바꿀 수 없다(docs/20) -->
+    <select id="findOps" resultType="io.smarthappy.module.aps.ApsDtos$OpSrc">
+        select x.* from (
+            select p.wo_id, p.wo_proc_id, p.op_seq, p.proc_id, p.proc_cd, p.proc_nm, p.node_id, p.equip_id, m.outsrc_yn,
+                   p.std_ct_sec, p.units_per_cycle, p.setup_min, p.status as proc_status, p.row_ver as proc_row_ver,
+                   w.plan_qty - coalesce((select sum(r.good_qty) from prd_result r where r.wo_proc_id = p.wo_proc_id), 0) as qty
+              from prd_wo w
+              join prd_wo_proc p on p.wo_id = w.wo_id
+              join mst_proc m on m.proc_id = p.proc_id
+             where <include refid="targetWo"/> and w.status in ('RELEASED', 'IN_PROGRESS') and p.status &lt;&gt; 'DONE'
+            union all
+            select w.wo_id, null, s.op_seq, s.proc_id, m.proc_cd, m.proc_nm, s.node_id, null, m.outsrc_yn,
+                   s.std_ct_sec, s.units_per_cycle, s.setup_min, 'WAIT', null, w.plan_qty
+              from prd_wo w
+              join mst_routing_step s on s.routing_id = w.routing_id
+              join mst_proc m on m.proc_id = s.proc_id
+             where <include refid="targetWo"/> and w.status = 'PLANNED'
+        ) x
+         order by x.wo_id, x.op_seq
+         limit #{limit}
+    </select>
+
+    <!-- 사용 중 고정(3단계) — 계산이 먼저 자리 잡는다 -->
+    <select id="findPins" resultType="io.smarthappy.module.aps.ApsDtos$PinSrc">
+        select n.pin_id, n.wo_id, n.op_seq, n.res_kind, n.equip_id, n.node_id, n.start_at
+          from aps_pin n where n.plant_cd = #{plantCd} and n.use_yn = 'Y'
+    </select>
+
+    <select id="findNodes" resultType="io.smarthappy.module.aps.ApsDtos$NodeRow">
+        select h.node_id, h.parent_id, h.node_cd, h.node_nm from mst_equip_hier h where h.plant_cd = #{plantCd}
+    </select>
+
+    <select id="findEquips" resultType="io.smarthappy.module.aps.ApsDtos$EquipRow">
+        select e.equip_id, e.equip_cd, e.equip_nm, e.node_id, e.use_yn from mst_equip e where e.plant_cd = #{plantCd}
+    </select>
+
+    <!-- ================================================================ 계획 저장 -->
+
+    <select id="insertPlan" resultType="long" flushCache="true">
+        insert into aps_plan (comp_cd, plan_no, plant_cd, plan_nm, horizon_start, horizon_days, outsrc_lead_hr, time_zone,
+                              sched_from, sched_to, work_windows, calculated_by, wo_cnt, op_cnt, late_wo_cnt, unsched_op_cnt,
+                              makespan_end, calc_ms, off_days, mat_mode, mat_po, mat_short_wo_cnt, created_by, updated_by)
+        values (hb_current_comp(), #{p.planNo}, #{p.plantCd}, #{p.planNm}, #{p.horizonStart}, #{p.horizonDays}, #{p.outsrcLeadHr},
+                #{p.timeZone}, #{p.schedFrom}, #{p.schedTo}, cast(#{p.workWindows} as jsonb), #{by}, #{p.woCnt}, #{p.opCnt},
+                #{p.lateWoCnt}, #{p.unschedOpCnt}, #{p.makespanEnd}, #{p.calcMs}, cast(#{p.offDays} as jsonb), #{p.matMode}, #{p.matPo},
+                #{p.matShortWoCnt}, #{by}, #{by})
+        returning plan_id
+    </select>
+
+    <insert id="insertWos">
+        insert into aps_plan_wo (comp_cd, plan_id, seq, wo_id, wo_no, wo_status, item_id, plan_qty, unit_cd, priority,
+                                 plan_start, plan_end, start_at, end_at, late_yn, exc_cd, wo_row_ver, due_date, due_src, mat_cd)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{planId}, #{r.seq}, #{r.woId}, #{r.woNo}, #{r.woStatus}, #{r.itemId}, #{r.planQty}, #{r.unitCd},
+             #{r.priority}, #{r.planStart}, #{r.planEnd}, #{r.startAt}, #{r.endAt}, #{r.lateYn}, #{r.excCd}, #{r.woRowVer},
+             #{r.dueDate}, #{r.dueSrc}, #{r.matCd})
+        </foreach>
+    </insert>
+
+    <select id="findPlanWoKeys" resultType="io.smarthappy.module.aps.ApsDtos$PlanWoKey" flushCache="true" useCache="false">
+        select x.plan_wo_id, x.wo_id from aps_plan_wo x where x.plan_id = #{planId}
+    </select>
+
+    <insert id="insertOps">
+        insert into aps_plan_op (comp_cd, plan_id, plan_wo_id, wo_id, wo_proc_id, op_seq, proc_id, proc_cd, proc_nm, node_id,
+                                 equip_id, res_kind, qty, setup_sec, run_sec, start_at, end_at, exc_cd, proc_row_ver, pin_id, warn_cd)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{planId}, #{r.planWoId}, #{r.woId}, #{r.woProcId}, #{r.opSeq}, #{r.procId}, #{r.procCd},
+             #{r.procNm}, #{r.nodeId}, #{r.equipId}, #{r.resKind}, #{r.qty}, #{r.setupSec}, #{r.runSec}, #{r.startAt},
+             #{r.endAt}, #{r.excCd}, #{r.procRowVer}, #{r.pinId}, #{r.warnCd})
+        </foreach>
+    </insert>
+
+    <update id="discard">
+        update aps_plan set status = 'DISCARDED', discard_reason = #{reason}, row_ver = row_ver + 1,
+                            updated_at = now(), updated_by = #{by}
+         where plan_id = #{id} and status = 'CALCULATED' and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 자재 (5단계, docs/38 14장) -->
+
+    <insert id="insertMats">
+        insert into aps_plan_mat (comp_cd, plan_id, plan_wo_id, wo_id, op_seq, src_op_seq, item_id, need_qty, unit_cd, need_at,
+                                  alloc_qty, short_qty, covered_at)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{planId}, #{r.planWoId}, #{r.woId}, #{r.opSeq}, #{r.srcOpSeq}, #{r.itemId}, #{r.needQty}, #{r.unitCd},
+             #{r.needAt}, #{r.allocQty}, #{r.shortQty}, #{r.coveredAt})
+        </foreach>
+    </insert>
+
+    <insert id="insertSupplies">
+        insert into aps_plan_supply (comp_cd, plan_id, item_id, kind, supply_at, qty, unit_cd, po_no, po_line_no, promised_yn, base_unit_yn)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{planId}, #{r.itemId}, #{r.kind}, #{r.supplyAt}, #{r.qty}, #{r.unitCd}, #{r.poNo}, #{r.poLineNo},
+             #{r.promisedYn}, #{r.baseUnitYn})
+        </foreach>
+    </insert>
+
+    <!-- 부족 줄 먼저, 그다음 지시 번호·공정 -->
+    <select id="findPlanMats" resultType="io.smarthappy.module.aps.ApsDtos$PlanMatRow">
+        select m.wo_id, x.wo_no, m.op_seq, m.src_op_seq, i.item_cd, i.item_nm, trim_scale(m.need_qty)::text as need_qty,
+               trim_scale(m.alloc_qty)::text as alloc_qty, trim_scale(m.short_qty)::text as short_qty, m.unit_cd, m.need_at, m.covered_at,
+               trim_scale(coalesce((select sum(s.qty) from aps_plan_supply s where s.plan_id = m.plan_id and s.item_id = m.item_id
+                                       and s.base_unit_yn = 'Y'), 0))::text as supply_qty,
+               m.plan_mat_id, i.proc_type,
+               (select string_agg(distinct r.pr_no, ', ' order by r.pr_no) from aps_plan_pr k join srm_pr r on r.pr_id = k.pr_id
+                 where k.plan_mat_id = m.plan_mat_id and r.status not in ('CANCELLED', 'REJECTED')
+                   and exists (select 1 from srm_pr_line l where l.pr_line_id = k.pr_line_id)) as pr_no
+          from aps_plan_mat m
+          join aps_plan_wo x on x.plan_wo_id = m.plan_wo_id
+          join mst_item i on i.item_id = m.item_id
+         where m.plan_id = #{id}
+         order by (m.short_qty > 0) desc, x.seq, m.op_seq, i.item_cd
+         limit 2000
+    </select>
+
+    <!-- ================================================================ 반영 (2단계, docs/38 11장) -->
+
+    <select id="lockPlan" resultType="string" flushCache="true" useCache="false">
+        select status from aps_plan where plan_id = #{id} for update
+    </select>
+
+    <!-- 지시는 번호 순으로 잠근다(교착 방지). 지시 표는 읽고 잠그기만 — 바꾸는 것은 MES 서비스 -->
+    <select id="lockWos" resultType="long" flushCache="true" useCache="false">
+        select w.wo_id from prd_wo w
+         where w.wo_id in (select x.wo_id from aps_plan_wo x where x.plan_id = #{planId})
+         order by w.wo_id
+           for update of w
+    </select>
+
+    <select id="findApplyWos" resultType="io.smarthappy.module.aps.ApsDtos$ApplyWoSrc" flushCache="true" useCache="false">
+        select x.wo_id, x.wo_no, x.wo_row_ver, x.plan_end as snap_end, x.start_at, x.end_at, x.exc_cd,
+               w.status as cur_status, w.row_ver as cur_row_ver, w.plan_start as cur_start, w.plan_end as cur_end,
+               (select f.fence_days from aps_item_param f where f.plant_cd = w.plant_cd and f.item_id = w.item_id and f.use_yn = 'Y') as item_fence_days,
+               exists (select 1 from aps_plan_op o join aps_pin n on n.pin_id = o.pin_id
+                        where o.plan_id = x.plan_id and o.wo_id = x.wo_id and length(btrim(coalesce(n.remark, ''))) &gt; 0) as pin_reason
+          from aps_plan_wo x join prd_wo w on w.wo_id = x.wo_id
+         where x.plan_id = #{planId}
+         order by x.seq
+    </select>
+
+    <select id="findApplyOps" resultType="io.smarthappy.module.aps.ApsDtos$ApplyOpSrc" flushCache="true" useCache="false">
+        select o.wo_id, o.wo_proc_id, o.op_seq, o.proc_cd, o.proc_row_ver, o.res_kind, o.equip_id, e.equip_cd,
+               o.start_at is not null as scheduled,
+               p.row_ver as cur_row_ver, p.equip_id as cur_equip_id, ce.equip_cd as cur_equip_cd
+          from aps_plan_op o
+          join prd_wo_proc p on p.wo_proc_id = o.wo_proc_id
+          left join mst_equip e on e.equip_id = o.equip_id
+          left join mst_equip ce on ce.equip_id = p.equip_id
+         where o.plan_id = #{planId}
+         order by o.wo_id, o.op_seq
+    </select>
+
+    <!-- 계산 뒤 생긴 대상 지시(같은 공장·같은 조건인데 계획에 없음) -->
+    <select id="findNewWos" resultType="string" flushCache="true" useCache="false">
+        select w.wo_no from prd_wo w
+         where <include refid="targetWo"/>
+           and not exists (select 1 from aps_plan_wo x where x.plan_id = #{planId} and x.wo_id = w.wo_id)
+         order by w.wo_no
+         limit 50
+    </select>
+
+    <update id="markApplied">
+        update aps_plan set status = 'APPLIED', applied_at = now(), applied_by = #{by}, applied_wo_cnt = #{woCnt},
+                            applied_op_cnt = #{opCnt}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where plan_id = #{id} and status = 'CALCULATED' and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 비교 (2단계) -->
+
+    <select id="findCmpOps" resultType="io.smarthappy.module.aps.ApsDtos$CmpOp">
+        select o.wo_id, x.wo_no, o.op_seq, o.proc_cd, o.proc_nm, o.res_kind,
+               case o.res_kind when 'EQUIP' then e.equip_cd when 'NODE' then h.node_cd end as res_cd,
+               o.start_at, o.end_at, o.exc_cd
+          from aps_plan_op o
+          join aps_plan_wo x on x.plan_wo_id = o.plan_wo_id
+          left join mst_equip_hier h on h.node_id = o.node_id
+          left join mst_equip e on e.equip_id = o.equip_id
+         where o.plan_id = #{id}
+         order by x.wo_no, o.op_seq
+    </select>
+
+    <!-- ================================================================ 수동 고정 (3단계, docs/38 12장) -->
+
+    <sql id="pinOpCols">
+        select o.plan_op_id, o.plan_id, a.plant_cd, o.wo_id, o.op_seq, o.node_id, m.outsrc_yn,
+               w.status as wo_status, p.status as proc_status, p.equip_id as cur_equip_id
+          from aps_plan_op o
+          join aps_plan a on a.plan_id = o.plan_id
+          join prd_wo w on w.wo_id = o.wo_id
+          join mst_proc m on m.proc_id = o.proc_id
+          left join prd_wo_proc p on p.wo_id = o.wo_id and p.op_seq = o.op_seq
+    </sql>
+
+    <select id="findPinOp" resultType="io.smarthappy.module.aps.ApsDtos$PinOp" flushCache="true" useCache="false">
+        <include refid="pinOpCols"/> where o.plan_op_id = #{id}
+    </select>
+
+    <select id="findPinOpOf" resultType="io.smarthappy.module.aps.ApsDtos$PinOp" flushCache="true" useCache="false">
+        <include refid="pinOpCols"/> where o.plan_id = #{planId} and o.wo_id = #{woId} and o.op_seq = #{opSeq}
+    </select>
+
+    <!-- 간트 후보 자원 계산용: 계획 공정의 지금 배정 설비(발행 지시만) -->
+    <select id="findCurEquips" resultType="io.smarthappy.module.aps.ApsDtos$PinOp">
+        select o.plan_op_id, o.wo_id, o.op_seq, o.node_id, p.equip_id as cur_equip_id
+          from aps_plan_op o join prd_wo_proc p on p.wo_id = o.wo_id and p.op_seq = o.op_seq
+         where o.plan_id = #{planId}
+    </select>
+
+    <select id="insertPin" resultType="long" flushCache="true">
+        insert into aps_pin (comp_cd, plant_cd, wo_id, op_seq, res_kind, equip_id, node_id, start_at, src_plan_id, remark,
+                             created_by, updated_by)
+        values (hb_current_comp(), #{op.plantCd}, #{op.woId}, #{op.opSeq}, #{kind}, #{equipId}, #{nodeId}, #{startAt}, #{op.planId},
+                #{remark}, #{by}, #{by})
+        returning pin_id
+    </select>
+
+    <select id="findPin" resultType="io.smarthappy.module.aps.ApsDtos$PinRow" flushCache="true" useCache="false">
+        select n.pin_id, n.plant_cd, n.wo_id, n.op_seq, n.res_kind, n.equip_id, n.node_id, n.start_at, n.src_plan_id, n.row_ver
+          from aps_pin n where n.pin_id = #{id} and n.use_yn = 'Y'
+    </select>
+
+    <update id="movePin">
+        update aps_pin set res_kind = #{kind}, equip_id = #{equipId}, node_id = #{nodeId}, start_at = #{startAt},
+                           row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where pin_id = #{id} and use_yn = 'Y' and row_ver = #{rowVer}
+    </update>
+
+    <update id="releasePin">
+        update aps_pin set use_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where pin_id = #{id} and use_yn = 'Y' and row_ver = #{rowVer}
+    </update>
+
+    <select id="findPinList" resultType="io.smarthappy.module.aps.ApsDtos$PinRow">
+        select n.pin_id, n.plant_cd, n.wo_id, w.wo_no, w.status as wo_status, n.op_seq, o.proc_cd, o.proc_nm, n.res_kind,
+               n.equip_id, n.node_id, case n.res_kind when 'EQUIP' then e.equip_cd when 'NODE' then h.node_cd end as res_cd,
+               n.start_at, n.src_plan_id, a.plan_no as src_plan_no, n.updated_by, n.updated_at, n.row_ver
+          from aps_pin n
+          join prd_wo w on w.wo_id = n.wo_id
+          join aps_plan a on a.plan_id = n.src_plan_id
+          left join aps_plan_op o on o.plan_id = n.src_plan_id and o.wo_id = n.wo_id and o.op_seq = n.op_seq
+          left join mst_equip e on e.equip_id = n.equip_id
+          left join mst_equip_hier h on h.node_id = n.node_id
+         where n.use_yn = 'Y'
+           <if test="plantCd != null">and n.plant_cd = #{plantCd}</if>
+         order by n.start_at, w.wo_no, n.op_seq
+         limit 1000
+    </select>
+
+    <!-- ================================================================ 조회 -->
+
+    <sql id="planCols">
+        a.plan_id, a.plan_no, a.plant_cd, p.plant_nm, a.plan_nm, a.rule_cd, a.horizon_start, a.horizon_days, a.outsrc_lead_hr,
+        a.time_zone, a.sched_from, a.sched_to, a.status, a.calculated_at, a.calculated_by, a.wo_cnt, a.op_cnt, a.late_wo_cnt,
+        a.unsched_op_cnt, a.makespan_end, a.calc_ms, jsonb_array_length(a.off_days) as off_day_cnt, a.mat_mode, a.mat_po, a.mat_short_wo_cnt, a.discard_reason, a.remark, a.purged_at, a.applied_at, a.applied_by, a.applied_wo_cnt,
+        a.applied_op_cnt, a.row_ver,
+        case when a.status = 'APPLIED' and not exists (select 1 from aps_plan b where b.plant_cd = a.plant_cd and b.status = 'APPLIED'
+                 and (b.applied_at &gt; a.applied_at or (b.applied_at = a.applied_at and b.plan_id &gt; a.plan_id))) then 'Y' else 'N' end as current_yn
+    </sql>
+
+    <!-- 목록·grid 공통 조건 — 계산일 [from, to), 공장 선택 -->
+    <sql id="planFrom">
+          from aps_plan a join sys_plant p on p.comp_cd = a.comp_cd and p.plant_cd = a.plant_cd
+         where a.calculated_at &gt;= #{c.from} and a.calculated_at &lt; #{c.to}
+           <if test="c.plantCd != null">and a.plant_cd = #{c.plantCd}</if>
+    </sql>
+
+    <select id="findPlans" resultType="io.smarthappy.module.aps.ApsDtos$PlanRow">
+        select <include refid="planCols"/>
+        <include refid="planFrom"/>
+         order by a.calculated_at desc, a.plan_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3) — 정렬은 허용 목록(PlanSort) 키만, 마지막에 plan_id 로 순서 고정 -->
+    <select id="findPlanPage" resultType="io.smarthappy.module.aps.ApsDtos$PlanRow">
+        select <include refid="planCols"/>
+        <include refid="planFrom"/>
+         order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PLAN_NO'">a.plan_no<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PLAN_NM'">a.plan_nm<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'PLANT_CD'">a.plant_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'HORIZON_START'">a.horizon_start<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'LATE_WO_CNT'">a.late_wo_cnt<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'UNSCHED_OP_CNT'">a.unsched_op_cnt<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'STATUS'">a.status<if test="s.desc"> desc</if></when>
+                <otherwise>a.calculated_at<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+        </foreach>
+         a.plan_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <!-- ================================================================ 6단계 CTP (읽기만) -->
+
+    <!-- 가상 지시 공정 = 확정 라우팅 단계(계획 지시 findOps 의 둘째 갈래와 같은 칸), 잔량 = 질의 수량 -->
+    <select id="findRoutingOps" resultType="io.smarthappy.module.aps.ApsDtos$OpSrc">
+        select s.op_seq, s.proc_id, m.proc_cd, m.proc_nm, s.node_id, null as equip_id, m.outsrc_yn,
+               s.std_ct_sec, s.units_per_cycle, s.setup_min, 'WAIT' as proc_status, #{qty} as qty
+          from mst_routing_step s
+          join mst_proc m on m.proc_id = s.proc_id
+         where s.routing_id = #{routingId}
+         order by s.op_seq
+    </select>
+
+    <select id="findItemBriefs" resultType="io.smarthappy.module.aps.ApsDtos$ItemBrief">
+        select i.item_id, i.item_cd, i.item_nm from mst_item i
+         where i.item_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="countPlans" resultType="long">
+        select count(*) <include refid="planFrom"/>
+    </select>
+
+    <select id="findPlan" resultType="io.smarthappy.module.aps.ApsDtos$PlanRow">
+        select <include refid="planCols"/>
+          from aps_plan a join sys_plant p on p.comp_cd = a.comp_cd and p.plant_cd = a.plant_cd
+         where a.plan_id = #{id}
+    </select>
+
+    <select id="findOffDays" resultType="string">
+        select off_days::text from aps_plan where plan_id = #{id}
+    </select>
+
+    <select id="findWindows" resultType="string">
+        select work_windows::text from aps_plan where plan_id = #{id}
+    </select>
+
+    <select id="findPlanWos" resultType="io.smarthappy.module.aps.ApsDtos$PlanWoRow">
+        select x.plan_wo_id, x.seq, x.wo_id, x.wo_no, x.wo_status, i.item_cd, i.item_nm, trim_scale(x.plan_qty)::text as plan_qty,
+               x.unit_cd, x.priority, x.plan_start, x.plan_end, x.due_date, x.due_src, x.start_at, x.end_at, x.late_yn, x.exc_cd, x.mat_cd
+          from aps_plan_wo x join mst_item i on i.item_id = x.item_id
+         where x.plan_id = #{id}
+         order by x.seq
+    </select>
+
+    <select id="findPlanOps" resultType="io.smarthappy.module.aps.ApsDtos$PlanOpRow">
+        select o.plan_op_id, o.wo_id, x.wo_no, x.seq, x.late_yn, o.op_seq, o.proc_cd, o.proc_nm, o.node_id, h.node_cd, h.node_nm,
+               o.equip_id, e.equip_cd, e.equip_nm, o.res_kind, trim_scale(o.qty)::text as qty, x.unit_cd, o.setup_sec, o.run_sec,
+               o.start_at, o.end_at, o.exc_cd, o.pin_id, o.warn_cd,
+               case when exists (select 1 from aps_plan_mat m where m.plan_id = o.plan_id and m.wo_id = o.wo_id
+                                    and m.op_seq = o.op_seq and m.short_qty > 0) then 'Y' else 'N' end as mat_short_yn
+          from aps_plan_op o
+          join aps_plan_wo x on x.plan_wo_id = o.plan_wo_id
+          left join mst_equip_hier h on h.node_id = o.node_id
+          left join mst_equip e on e.equip_id = o.equip_id
+         where o.plan_id = #{id}
+           <if test="scheduled">and o.start_at is not null</if>
+           <if test="!scheduled">and o.start_at is null</if>
+         order by <if test="scheduled">o.start_at, </if>x.seq, o.op_seq
+    </select>
+</mapper>

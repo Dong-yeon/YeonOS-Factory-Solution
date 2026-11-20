@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- PPAP·PCN (PLM 4단계, docs/39 14.4·14.5). 회사 조건은 RLS — comp_cd 를 적지 않는다 -->
+<mapper namespace="io.smarthappy.module.plm.PlmPpapMapper">
+
+    <!-- ================================================================ PPAP -->
+
+    <sql id="ppapCols">
+        p.ppap_id, p.eco_id, p.cust_id, c.cust_cd, c.cust_nm, p.submit_level, p.status, p.submitted_on, p.decided_on,
+        p.decision_ref, p.decision_note, p.remark, p.row_ver, p.updated_at, p.updated_by
+    </sql>
+
+    <select id="findPpapOfEco" resultType="io.smarthappy.module.plm.PlmDtos$PpapRow">
+        select <include refid="ppapCols"/> from plm_ppap p join mst_cust c on c.cust_id = p.cust_id where p.eco_id = #{ecoId}
+    </select>
+
+    <select id="findPpap" resultType="io.smarthappy.module.plm.PlmDtos$PpapRow">
+        select <include refid="ppapCols"/> from plm_ppap p join mst_cust c on c.cust_id = p.cust_id where p.ppap_id = #{ppapId}
+    </select>
+
+    <select id="lockPpap" resultType="io.smarthappy.module.plm.PlmDtos$PpapRow">
+        select p.ppap_id, p.eco_id, p.cust_id, p.submit_level, p.status, p.submitted_on, p.decided_on, p.row_ver
+          from plm_ppap p where p.ppap_id = #{ppapId} for update
+    </select>
+
+    <select id="findElems" resultType="io.smarthappy.module.plm.PlmDtos$PpapElemRow">
+        select e.elem_id, e.elem_no, e.req_cd, e.status, e.file_id, f.orig_name as file_name, e.note, e.row_ver,
+               e.apqp_kind, e.apqp_rev_id, e.apqp_label
+          from plm_ppap_elem e left join sys_file f on f.file_id = e.file_id
+         where e.ppap_id = #{ppapId}
+         order by e.elem_no
+    </select>
+
+    <select id="insertPpap" resultType="long" flushCache="true">
+        insert into plm_ppap (comp_cd, eco_id, cust_id, submit_level, remark, created_by, updated_by)
+        values (hb_current_comp(), #{ecoId}, #{custId}, #{level}, #{remark}, #{by}, #{by})
+        returning ppap_id
+    </select>
+
+    <insert id="insertElem">
+        insert into plm_ppap_elem (comp_cd, ppap_id, elem_no, req_cd, created_by, updated_by)
+        values (hb_current_comp(), #{ppapId}, #{elemNo}, #{reqCd}, #{by}, #{by})
+    </insert>
+
+    <update id="updatePpap">
+        update plm_ppap set submit_level = #{level}, remark = #{remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ppap_id = #{ppapId} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="updateElem">
+        update plm_ppap_elem
+           set req_cd = #{reqCd}, status = #{status}, file_id = #{fileId,jdbcType=BIGINT}, note = #{note,jdbcType=VARCHAR},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ppap_id = #{ppapId} and elem_no = #{elemNo}
+           and (req_cd &lt;&gt; #{reqCd} or status &lt;&gt; #{status} or file_id is distinct from #{fileId,jdbcType=BIGINT}
+                or note is distinct from #{note,jdbcType=VARCHAR})
+    </update>
+
+    <update id="updateElemApqp">
+        update plm_ppap_elem
+           set apqp_kind = #{kind,jdbcType=VARCHAR}, apqp_rev_id = #{revId,jdbcType=BIGINT}, apqp_label = #{label,jdbcType=VARCHAR},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ppap_id = #{ppapId} and elem_no = #{elemNo}
+           and (apqp_kind is distinct from #{kind,jdbcType=VARCHAR} or apqp_rev_id is distinct from #{revId,jdbcType=BIGINT}
+                or apqp_label is distinct from #{label,jdbcType=VARCHAR})
+    </update>
+
+    <select id="ecoTargetItems" resultType="io.smarthappy.module.plm.PlmDtos$PpapApqpItem">
+        select i.item_id, i.item_cd, i.item_nm
+          from mst_item i
+         where i.item_id in (select t.item_id from plm_eco_target t where t.eco_id = #{ecoId})
+         order by i.item_cd
+    </select>
+
+    <update id="submitPpap">
+        update plm_ppap set status = 'SUBMITTED', submitted_on = #{on}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ppap_id = #{ppapId} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="decidePpap">
+        update plm_ppap set status = #{status}, decided_on = #{on}, decision_ref = #{ref,jdbcType=VARCHAR},
+               decision_note = #{note,jdbcType=VARCHAR}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ppap_id = #{ppapId} and row_ver = #{rowVer} and status = 'SUBMITTED'
+    </update>
+
+    <update id="reopenPpap">
+        update plm_ppap set status = 'DRAFT', decided_on = null, decision_ref = null, decision_note = null,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ppap_id = #{ppapId} and row_ver = #{rowVer} and status in ('INTERIM', 'REJECTED')
+    </update>
+
+    <update id="syncEcoCustApproval">
+        update plm_eco set cust_approval_status = 'APPROVED', cust_approval_ref = #{ref}, cust_approved_on = #{on},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and cust_approval_req_yn = 'Y' and cust_id = #{custId}
+           and status in ('DRAFT', 'PENDING', 'APPROVED')
+    </update>
+
+    <!-- ================================================================ PCN -->
+
+    <select id="findPcns" resultType="io.smarthappy.module.plm.PlmDtos$PcnRow">
+        select n.pcn_id, n.pcn_no, n.eco_id, n.cust_id, c.cust_cd, c.cust_nm, n.notified_on, n.response_due, n.status,
+               n.responded_on, n.response_note, n.note, (n.status = 'SENT' and n.response_due &lt; #{today}) as overdue, n.row_ver
+          from plm_pcn n join mst_cust c on c.cust_id = n.cust_id
+         where n.eco_id = #{ecoId}
+         order by n.pcn_id
+    </select>
+
+    <select id="lockPcn" resultType="io.smarthappy.module.plm.PlmDtos$PcnRow">
+        select n.pcn_id, n.pcn_no, n.eco_id, n.cust_id, n.notified_on, n.response_due, n.status, n.row_ver
+          from plm_pcn n where n.pcn_id = #{pcnId} for update
+    </select>
+
+    <select id="insertPcn" resultType="long" flushCache="true">
+        insert into plm_pcn (comp_cd, pcn_no, eco_id, cust_id, notified_on, response_due, note, created_by, updated_by)
+        values (hb_current_comp(), #{no}, #{ecoId}, #{custId}, #{notifiedOn}, #{due}, #{note,jdbcType=VARCHAR}, #{by}, #{by})
+        returning pcn_id
+    </select>
+
+    <update id="respondPcn">
+        update plm_pcn set status = #{status}, responded_on = #{on}, response_note = #{note,jdbcType=VARCHAR},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where pcn_id = #{pcnId} and row_ver = #{rowVer} and status = 'SENT'
+    </update>
+
+    <!-- PCN 메일 (docs/39 23장) -->
+    <select id="findPcnContacts" resultType="io.smarthappy.module.plm.PlmDtos$PcnContact">
+        select t.contact_id, t.contact_nm, t.dept_nm, t.email, (t.main_yn = 'Y') as main
+          from plm_pcn n join mst_cust_contact t on t.cust_id = n.cust_id
+         where n.pcn_id = #{pcnId} and t.use_yn = 'Y' and t.email is not null and btrim(t.email) &lt;&gt; ''
+         order by (t.main_yn = 'Y') desc, t.contact_nm, t.contact_id
+    </select>
+
+    <select id="pcnMailSource" resultType="io.smarthappy.module.plm.PlmDtos$PcnMailSource">
+        select n.pcn_id, n.pcn_no, n.status, n.response_due, n.note, e.eco_id, e.eco_no, e.title as eco_title, e.reason_cd,
+               e.effective_date, e.status as eco_status, c.comp_nm, c.locale_cd
+          from plm_pcn n
+          join plm_eco e on e.eco_id = n.eco_id
+          join sys_comp c on c.comp_cd = n.comp_cd
+         where n.pcn_id = #{pcnId}
+    </select>
+
+    <select id="insertPcnMail" resultType="long" flushCache="true">
+        insert into plm_pcn_mail (comp_cd, pcn_id, contact_id, to_addr, to_nm, subject, outbox_id, notice_file_id, created_by)
+        values (hb_current_comp(), #{pcnId}, #{contactId}, #{addr}, #{nm}, #{subject}, #{outboxId}, #{noticeFileId,jdbcType=BIGINT}, #{by})
+        returning mail_id
+    </select>
+
+    <select id="findPcnMails" resultType="io.smarthappy.module.plm.PlmDtos$PcnMailRow">
+        select m.mail_id, m.pcn_id, m.to_nm, m.to_addr, m.created_at as sent_at, m.created_by as sent_by, m.outbox_id::text as outbox_id,
+               m.notice_file_id, f.orig_name as notice_file_nm
+          from plm_pcn_mail m join plm_pcn n on n.pcn_id = m.pcn_id
+          left join sys_file f on f.file_id = m.notice_file_id
+         where n.eco_id = #{ecoId}
+         order by m.mail_id
+    </select>
+
+    <!-- ================================================================ PPAP 제출 메일 (docs/39 37장) -->
+
+    <!-- 받는 사람 후보 = 그 패키지 고객(판매 거래처 — V069 트리거)의 사용 중·메일 있는 담당자, 대표 먼저(P1) -->
+    <select id="findPpapContacts" resultType="io.smarthappy.module.plm.PlmDtos$PcnContact">
+        select t.contact_id, t.contact_nm, t.dept_nm, t.email, (t.main_yn = 'Y') as main
+          from plm_ppap p join mst_cust_contact t on t.cust_id = p.cust_id
+         where p.ppap_id = #{ppapId} and t.use_yn = 'Y' and t.email is not null and btrim(t.email) &lt;&gt; ''
+         order by (t.main_yn = 'Y') desc, t.contact_nm, t.contact_id
+    </select>
+
+    <select id="ppapMailSource" resultType="io.smarthappy.module.plm.PlmDtos$PpapMailSource">
+        select p.ppap_id, p.status, p.submit_level, p.submitted_on, e.eco_id, e.eco_no, e.title as eco_title, e.status as eco_status,
+               c.comp_nm, c.locale_cd
+          from plm_ppap p
+          join plm_eco e on e.eco_id = p.eco_id
+          join sys_comp c on c.comp_cd = p.comp_cd
+         where p.ppap_id = #{ppapId}
+    </select>
+
+    <select id="insertPpapMail" resultType="long" flushCache="true">
+        insert into plm_ppap_mail (comp_cd, ppap_id, contact_id, to_addr, to_nm, subject, outbox_id, summary_file_id, created_by)
+        values (hb_current_comp(), #{ppapId}, #{contactId}, #{addr}, #{nm}, #{subject}, #{outboxId}, #{summaryFileId}, #{by})
+        returning mail_id
+    </select>
+
+    <!-- 패키지의 발송 이력 — 오래된 것부터, 요약서 사본 이름 -->
+    <select id="findPpapMails" resultType="io.smarthappy.module.plm.PlmDtos$PpapMailRow">
+        select m.mail_id, m.ppap_id, m.to_nm, m.to_addr, m.created_at as sent_at, m.created_by as sent_by, m.outbox_id::text as outbox_id,
+               m.summary_file_id, f.orig_name as summary_file_nm
+          from plm_ppap_mail m
+          left join sys_file f on f.file_id = m.summary_file_id
+         where m.ppap_id = #{ppapId}
+         order by m.mail_id
+    </select>
+</mapper>

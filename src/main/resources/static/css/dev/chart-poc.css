@@ -1,0 +1,19 @@
+/* hb.chart 확인 화면(local 전용, docs/61 11장) */
+.poc { padding: var(--hb-space-6); }
+.poc h1 { font-size: var(--hb-fs-xl); margin: 0 0 var(--hb-space-3); }
+.poc h2 { font-size: var(--hb-fs-md); margin: 0 0 var(--hb-space-4); }
+.poc-note, .poc-dim { color: var(--hb-text-muted); font-size: var(--hb-fs-sm); }
+.poc-count { color: var(--hb-status-success-fg); }
+.poc-count.poc-bad { color: var(--hb-status-danger-fg); }
+.poc-csp-list { color: var(--hb-status-danger-fg); font-size: var(--hb-fs-sm); }
+.poc-toolbar { display: flex; flex-wrap: wrap; gap: var(--hb-space-4); align-items: center; }
+.poc-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--hb-space-6); }
+.poc-card { border: 1px solid var(--hb-border-subtle); border-radius: var(--hb-radius-lg); padding: var(--hb-space-5); min-width: 0; }
+.poc-gauges { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--hb-space-4); }
+@media (max-width: 900px) {
+    .poc-charts { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 599px) {
+    .poc { padding: var(--hb-space-4); }
+    .poc-gauges { grid-template-columns: minmax(0, 1fr); }
+}

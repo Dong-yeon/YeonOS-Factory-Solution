@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설계 변경 요청 (plm-ecr) — PLM 1단계 (docs/39). 누구나 요청을 올리고, 요청자만 고치거나 취소한다.
+  검토 담당(APPROVE)은 접수(새 설계 변경 지시 또는 작성 중 지시에 묶기)·반려(사유)한다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설계 변경 요청</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <fieldset class="hb-seg">
+        <legend th:text="#{plm.col.status}">상태</legend>
+        <label><input type="radio" name="status" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="status" value="OPEN"><span th:text="#{code.PLM_ECR_STATUS.OPEN}">열림</span></label>
+        <label><input type="radio" name="status" value="ACCEPTED"><span th:text="#{code.PLM_ECR_STATUS.ACCEPTED}">접수</span></label>
+        <label><input type="radio" name="status" value="REJECTED"><span th:text="#{code.PLM_ECR_STATUS.REJECTED}">반려</span></label>
+    </fieldset>
+    <label><span th:text="#{plm.col.itemCd}">품목 코드</span><input name="itemCd" maxlength="40"></label>
+    <label><span th:text="#{plm.col.keyword}">번호·제목</span><input name="keyword" maxlength="50"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="ecrGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 저장 줄과 떨어진 자리, 외곽선 위험 톤(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="cancelBtn" class="hb-btn-danger-outline" hidden th:text="#{plmEcr.cancel}">요청 취소</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{plmEcr.selectOrNew}">왼쪽에서 요청을 고르거나 신규를 누르세요.</p>
+        <form id="ecrForm" class="hb-form" autocomplete="off">
+            <label class="hb-wide"><span th:text="#{plm.col.title}">제목</span>
+                <input data-field="title" maxlength="200" required></label>
+            <label><span th:text="#{plm.col.reason}">변경 사유</span>
+                <select data-field="reasonCd" data-code="PLM_CHANGE_REASON" data-blank="select" required></select></label>
+            <label><span th:text="#{plm.col.itemCd}">품목 코드</span>
+                <input data-field="itemCd" maxlength="40" list="itemList"><datalist id="itemList"></datalist></label>
+            <label class="hb-wide"><span th:text="#{plm.col.description}">내용</span>
+                <textarea data-field="description" maxlength="4000" rows="5"></textarea></label>
+            <label><span th:text="#{plm.col.status}">상태</span><output id="ecrStatus" class="hb-output"></output></label>
+            <label><span th:text="#{plm.col.ecoNo}">지시 번호</span><output id="ecrEco" class="hb-output"></output></label>
+            <label class="hb-wide"><span th:text="#{plm.col.decision}">검토 의견</span><output id="ecrDecision" class="hb-output"></output></label>
+        </form>
+        <section class="hb-sub" id="decideSection" th:if="${actions.contains('APPROVE')}" hidden>
+            <h2 th:text="#{plmEcr.decide}">검토</h2>
+            <form id="decideForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{plmEcr.intoEco}">묶을 지시</span><select data-field="ecoId" id="ecoSel"></select></label>
+                <label><span th:text="#{plm.col.effectiveDate}">유효일</span>
+                    <input data-field="effectiveDate" type="date" min="2000-01-01" max="2999-12-31"></label>
+                <label class="hb-wide"><span th:text="#{plm.col.comment}">의견</span><input data-field="comment" maxlength="1000"></label>
+            </form>
+            <div class="hb-toolbar">
+                <button type="button" id="acceptBtn" th:text="#{plmEcr.accept}">접수</button>
+                <button type="button" id="rejectBtn" class="hb-btn-danger-outline" th:text="#{plmEcr.reject}">반려</button>
+            </div>
+        </section>
+        <section class="hb-sub" id="fileSection" hidden>
+            <h2 th:text="#{plm.files}">첨부(도면·문서)</h2>
+            <ul id="files" class="hb-files"></ul>
+            <input type="file" id="fileInput" th:if="${actions.contains('SAVE')}" th:aria-label="#{plm.files}">
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/plm/plm-common.js}"></script>
+<script th:src="@{/js/views/plm/ecr-mgt.js}"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{portal/layout :: head(#{portal.menu.home})}"></head>
+<!--
+  협력사 포털 홈 (docs/42 7장 2). 고정 메뉴를 카드로 한 번 더 보여 준다 — 업무 메뉴(SRM 발주 회신·ASN·납품서)는 7장 3 에서 생긴다.
+-->
+<body class="pt-page">
+<header th:replace="~{portal/layout :: header}"></header>
+<div class="pt-body">
+    <nav th:replace="~{portal/layout :: nav}"></nav>
+    <main class="pt-main">
+        <h1 th:text="#{portal.home.title(${supplier.custNm})}">협력상사 님, 안녕하세요</h1>
+        <p class="pt-muted" th:text="#{portal.home.sub}">이 포털에서는 우리 회사와 주고받는 발주·납품 정보만 봅니다.</p>
+        <ul class="pt-cards">
+            <li th:each="m : ${menus}" th:if="${m.code != 'home'}">
+                <a th:href="@{${m.path}}" th:text="#{${m.labelKey}}">메뉴</a>
+            </li>
+        </ul>
+        <p class="pt-muted" th:if="${#lists.size(menus) <= 2}" th:text="#{portal.home.empty}">업무 메뉴는 준비 중입니다.</p>
+    </main>
+</div>
+<th:block th:replace="~{portal/layout :: scripts}"></th:block>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  홈 카드 집계 (docs/37 6장). 회사 조건은 RLS. 열린 행(status = 'OPEN') + 납기 범위는 부분 인덱스
+  ix_sal_order_line_due (comp_cd, due_date) WHERE status = 'OPEN' 를 탄다. 수량 단위 = 품목 기본 단위(수주 행은 기본 단위).
+-->
+<mapper namespace="io.smarthappy.module.sales.SalesHomeMapper">
+
+    <select id="dueSummary" resultType="io.smarthappy.module.sales.SalesHomeMapper$DueSummary">
+        select count(*) filter (where l.due_date &lt; #{today}) as overdue_cnt,
+               count(*) filter (where l.due_date = #{today}) as today_cnt,
+               count(*) filter (where l.due_date &gt; #{today}) as soon_cnt
+          from sal_order_line l
+         where l.status = 'OPEN'
+           and l.due_date &lt;= #{until}
+    </select>
+
+    <select id="dueTop" resultType="io.smarthappy.module.sales.SalesHomeMapper$DueRow">
+        <!-- 7단계(docs/37 19장): 수량 = 아직 안 나간 잔량(수주 − 출하, V123 shipped_qty). 일부 출하된 행에서 전체 수량은 할 일과 다르다 -->
+        select o.order_no, l.line_no, c.cust_nm, i.item_cd, trim_scale(greatest(l.qty - l.shipped_qty, 0))::text as qty, i.unit_cd,
+               l.due_date, o.order_date
+          from sal_order_line l
+          join sal_order o on o.order_id = l.order_id
+          join mst_cust c on c.cust_id = o.cust_id
+          join mst_item i on i.item_id = l.item_id
+         where l.status = 'OPEN'
+           and l.due_date &lt;= #{until}
+         order by l.due_date, o.order_no, l.line_no
+         limit #{limit}
+    </select>
+</mapper>

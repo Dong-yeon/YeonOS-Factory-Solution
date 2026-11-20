@@ -1,0 +1,11 @@
+# 공개 데모(docs/23) — prod 위에 얹는다: --spring.profiles.active=prod,demo (prod 기동 가드는 그대로 적용)
+# happyboot.dev.admin-password·login-prefill 처럼 prod 가드가 막는 값은 쓰지 않는다.
+happyboot:
+  demo:
+    login-id: ${DEMO_LOGIN_ID:user1}   # 체험 계정 아이디(2026-10-26 demo → user1)
+    password: ${DEMO_PASSWORD:}   # 체험 계정 비밀번호 — 로그인 화면·README 에 공개하는 값(12자 이상), 없으면 기동 중단(DemoAccountSeeder)
+    notice: true                  # 로그인 화면 안내
+  security:
+    # 공개 비밀번호 + 5회 잠금 = 누구나 체험 계정을 15분씩 막을 수 있다 → 계정 잠금은 사실상 끄고
+    # 접속 IP 기준 시도 제한(IP+회사 20회·IP 100회/10분)에 맡긴다. 실제 IP 는 TRUSTED_PROXIES(Caddy) 로 받는다 (E5·E6)
+    max-login-fail: 1000

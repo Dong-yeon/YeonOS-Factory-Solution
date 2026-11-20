@@ -1,0 +1,467 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 1부 C2 — 점검표·예방점검 계획·점검 실행 (docs/33 4.3) -->
+<mapper namespace="io.smarthappy.module.cms.CmsPmMapper">
+
+    <!-- ================================================================ 점검표 -->
+
+    <sql id="tmplCols">
+        t.tmpl_id, t.tmpl_cd, t.tmpl_nm, t.target_kind, t.equip_class_id, c.class_cd as equip_class_cd, c.class_nm as equip_class_nm,
+        t.use_yn, t.remark, t.row_ver, t.updated_at, t.updated_by,
+        (select count(*) from cms_chk_tmpl_item i where i.tmpl_id = t.tmpl_id) as item_cnt,
+        (select count(*) from cms_pm_plan p where p.tmpl_id = t.tmpl_id and p.use_yn = 'Y') as plan_cnt
+    </sql>
+
+    <!-- 목록·grid 공통 FROM·조건 -->
+    <sql id="tmplFromWhere">
+          from cms_chk_tmpl t left join mst_equip_class c on c.class_id = t.equip_class_id
+        <where>
+            <if test="useYn != null">t.use_yn = #{useYn}</if>
+            <if test="keyword != null">and (t.tmpl_cd like #{keyword} escape '\' or t.tmpl_nm ilike #{keyword} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findTmpls" resultType="io.smarthappy.module.cms.CmsPmDtos$TmplRow">
+        select <include refid="tmplCols"/> <include refid="tmplFromWhere"/>
+         order by t.tmpl_cd
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findTmplPage" resultType="io.smarthappy.module.cms.CmsPmDtos$TmplRow">
+        select <include refid="tmplCols"/> <include refid="tmplFromWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'TMPL_NM'">t.tmpl_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TARGET_KIND'">t.target_kind<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'EQUIP_CLASS'">c.class_cd<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'USE_YN'">t.use_yn<if test="s.desc"> desc</if></when>
+                <otherwise>t.tmpl_cd<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         t.tmpl_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countTmpls" resultType="long">
+        select count(*) <include refid="tmplFromWhere"/>
+    </select>
+
+    <select id="findTmpl" resultType="io.smarthappy.module.cms.CmsPmDtos$TmplRow">
+        select <include refid="tmplCols"/> from cms_chk_tmpl t left join mst_equip_class c on c.class_id = t.equip_class_id
+         where t.tmpl_id = #{id}
+    </select>
+
+    <select id="findTmplByCd" resultType="io.smarthappy.module.cms.CmsPmDtos$TmplRow">
+        select <include refid="tmplCols"/> from cms_chk_tmpl t left join mst_equip_class c on c.class_id = t.equip_class_id
+         where t.tmpl_cd = #{tmplCd}
+    </select>
+
+    <select id="insertTmpl" resultType="long" flushCache="true">
+        insert into cms_chk_tmpl (comp_cd, tmpl_cd, tmpl_nm, target_kind, equip_class_id, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.tmplCd}, #{f.tmplNm}, #{f.targetKind}, #{f.equipClassId}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning tmpl_id
+    </select>
+
+    <update id="updateTmpl">
+        update cms_chk_tmpl
+           set tmpl_nm = #{f.tmplNm}, equip_class_id = #{f.equipClassId}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tmpl_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="touchTmpl">
+        update cms_chk_tmpl set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tmpl_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <select id="findItems" resultType="io.smarthappy.module.cms.CmsPmDtos$ItemRow">
+        select item_id, tmpl_id, seq, item_nm, method_text, judge_type, lsl, usl, unit_nm, scale, required_yn
+          from cms_chk_tmpl_item where tmpl_id = #{tmplId} order by seq
+    </select>
+
+    <insert id="insertItem">
+        insert into cms_chk_tmpl_item (comp_cd, tmpl_id, seq, item_nm, method_text, judge_type, lsl, usl, unit_nm, scale, required_yn,
+                                       created_by, updated_by)
+        values (hb_current_comp(), #{tmplId}, #{v.seq}, #{v.itemNm}, #{v.methodText}, #{v.judgeType}, #{v.lsl}, #{v.usl}, #{v.unitNm},
+                #{v.scale}, #{v.requiredYn}, #{by}, #{by})
+    </insert>
+
+    <!-- 서비스가 바뀐 행만 부른다(같은 값이면 부르지 않음 — 감사 이력이 늘지 않게) -->
+    <update id="updateItem">
+        update cms_chk_tmpl_item
+           set seq = #{v.seq}, item_nm = #{v.itemNm}, method_text = #{v.methodText}, judge_type = #{v.judgeType}, lsl = #{v.lsl},
+               usl = #{v.usl}, unit_nm = #{v.unitNm}, scale = #{v.scale}, required_yn = #{v.requiredYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where item_id = #{v.itemId} and tmpl_id = #{tmplId}
+    </update>
+
+    <delete id="deleteItem">
+        delete from cms_chk_tmpl_item where item_id = #{itemId} and tmpl_id = #{tmplId}
+    </delete>
+
+    <!-- ================================================================ 계획 -->
+
+    <sql id="planCols">
+        p.plan_id, p.plan_cd, p.plan_nm, p.target_type, p.equip_id, p.asset_id,
+        coalesce(e.equip_cd, a.asset_cd) as target_cd, coalesce(e.equip_nm, a.asset_nm) as target_nm,
+        coalesce(e.plant_cd, (select e2.plant_cd from mst_asset_install i join mst_equip e2 on e2.equip_id = i.equip_id
+                               where i.asset_id = p.asset_id and i.removed_at is null and i.void_yn = 'N' limit 1)) as plant_cd,
+        p.tmpl_id, t.tmpl_cd, t.tmpl_nm, p.exec_mode, p.cycle_type, p.cal_unit, p.cal_interval, p.schedule_basis, p.anchor_date,
+        p.lead_days, p.assignee_id, u.login_id as assignee_login_id, u.user_nm as assignee_nm, p.est_minutes, p.next_due_date,
+        p.last_done_date, p.use_yn, p.remark, p.row_ver, p.updated_at, p.updated_by,
+        p.counter_id, k.counter_cd, k.counter_nm, k.unit_nm as counter_unit, coalesce(k.scale, 0) as counter_scale,
+        p.usage_interval, p.usage_lead, p.anchor_usage, p.next_due_usage, p.last_done_usage,
+        case when p.counter_id is not null then (select coalesce(sum(cr.delta_qty), 0) from cms_counter_reading cr
+                                                  where cr.counter_id = p.counter_id and cr.void_yn = 'N') end as counter_total,
+        (select r.run_id from cms_chk_run r where r.plan_id = p.plan_id and r.status = 'OPEN' limit 1) as open_run_id
+    </sql>
+    <sql id="planFrom">
+        from cms_pm_plan p
+        join cms_chk_tmpl t on t.tmpl_id = p.tmpl_id
+        left join mst_equip e on e.equip_id = p.equip_id
+        left join mst_phys_asset a on a.asset_id = p.asset_id
+        left join sys_user u on u.user_id = p.assignee_id
+        left join cms_counter k on k.counter_id = p.counter_id
+    </sql>
+
+    <!-- 지연 조인(docs/33 13.13, QA M6): 거름·정렬·쪽에 쓰는 칸만(계수기 판독 합·열린 회차 같은 계산 없이) — 목록·grid·건수 공통 -->
+    <sql id="planLiteRows">
+        select * from (select p.plan_id, p.plan_cd, p.plan_nm, coalesce(e.equip_cd, a.asset_cd) as target_cd, t.tmpl_cd, p.exec_mode,
+                              u.user_nm as assignee_nm, p.use_yn, p.next_due_date,
+                              coalesce(e.plant_cd, (select e2.plant_cd from mst_asset_install i join mst_equip e2 on e2.equip_id = i.equip_id
+                                                     where i.asset_id = p.asset_id and i.removed_at is null and i.void_yn = 'N' limit 1)) as plant_cd
+                         <include refid="planFrom"/>
+        <where>
+            <if test="useYn != null">p.use_yn = #{useYn}</if>
+            <if test="equipId != null">and p.equip_id = #{equipId}</if>
+            <if test="keyword != null">and (p.plan_cd like #{keyword} escape '\' or p.plan_nm ilike #{keyword} escape '\'
+                or e.equip_cd like #{keyword} escape '\' or a.asset_cd like #{keyword} escape '\')</if>
+        </where>) x
+        <where><if test="plantCd != null">x.plant_cd = #{plantCd}</if></where>
+    </sql>
+
+    <!-- grid 정렬(허용 목록 enum 이름으로만) — 안쪽·바깥 같은 식, 마지막 PK -->
+    <sql id="planSort">
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PLAN_CD'">x.plan_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PLAN_NM'">x.plan_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TARGET_CD'">x.target_cd<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'TMPL_CD'">x.tmpl_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'EXEC_MODE'">x.exec_mode<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ASSIGNEE_NM'">x.assignee_nm<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'USE_YN'">x.use_yn<if test="s.desc"> desc</if></when>
+                <otherwise>x.next_due_date<if test="s.desc"> desc nulls last</if></otherwise>
+            </choose>,
+         </foreach>
+         x.plan_id
+    </sql>
+
+    <select id="findPlans" resultType="io.smarthappy.module.cms.CmsPmDtos$PlanRow">
+        select * from (select <include refid="planCols"/> <include refid="planFrom"/>
+                        where p.plan_id in (select x.plan_id from (<include refid="planLiteRows"/>) x
+                                             order by x.next_due_date nulls last, x.plan_cd limit #{limit})) x
+         order by x.next_due_date nulls last, x.plan_cd
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK. 예정 상태는 계산 값이라 정렬 밖 -->
+    <select id="findPlanPage" resultType="io.smarthappy.module.cms.CmsPmDtos$PlanRow">
+        select * from (select <include refid="planCols"/> <include refid="planFrom"/>
+                        where p.plan_id in (select x.plan_id from (<include refid="planLiteRows"/>) x
+                                             order by <include refid="planSort"/>
+                                             limit #{page.size} offset #{page.offset})) x
+         order by <include refid="planSort"/>
+    </select>
+
+    <select id="countPlans" resultType="long">
+        select count(*) from (<include refid="planLiteRows"/>) y
+    </select>
+
+    <select id="findPlan" resultType="io.smarthappy.module.cms.CmsPmDtos$PlanRow">
+        select <include refid="planCols"/> <include refid="planFrom"/> where p.plan_id = #{id}
+    </select>
+
+    <select id="lockPlan" resultType="java.lang.Long">
+        select plan_id from cms_pm_plan where plan_id = #{id} for update
+    </select>
+
+    <select id="planCdExists" resultType="boolean">
+        select exists (select 1 from cms_pm_plan where plan_cd = #{planCd})
+    </select>
+
+    <select id="insertPlan" resultType="long" flushCache="true">
+        insert into cms_pm_plan (comp_cd, plan_cd, plan_nm, target_type, equip_id, asset_id, tmpl_id, exec_mode, cycle_type, cal_unit,
+                                 cal_interval, schedule_basis, anchor_date, lead_days, assignee_id, est_minutes, next_due_date,
+                                 counter_id, usage_interval, usage_lead, anchor_usage, next_due_usage, use_yn, remark,
+                                 created_by, updated_by)
+        values (hb_current_comp(), #{p.planCd}, #{p.planNm}, #{p.targetType}, #{p.equipId}, #{p.assetId}, #{p.tmplId}, #{p.execMode},
+                #{p.cycleType}, #{p.calUnit}, #{p.calInterval}, #{p.scheduleBasis}, #{p.anchorDate}, #{p.leadDays}, #{p.assigneeId},
+                #{p.estMinutes}, #{p.nextDueDate}, #{p.counterId}, #{p.usageInterval}, #{p.usageLead}, #{p.anchorUsage},
+                #{p.nextDueUsage}, #{p.useYn}, #{p.remark}, #{by}, #{by})
+        returning plan_id
+    </select>
+
+    <update id="updatePlan">
+        update cms_pm_plan
+           set plan_nm = #{p.planNm}, tmpl_id = #{p.tmplId}, exec_mode = #{p.execMode}, cal_unit = #{p.calUnit},
+               cal_interval = #{p.calInterval}, schedule_basis = #{p.scheduleBasis}, anchor_date = #{p.anchorDate},
+               lead_days = #{p.leadDays}, assignee_id = #{p.assigneeId}, est_minutes = #{p.estMinutes},
+               next_due_date = #{p.nextDueDate}, usage_interval = #{p.usageInterval}, usage_lead = #{p.usageLead},
+               anchor_usage = #{p.anchorUsage}, next_due_usage = #{p.nextDueUsage}, use_yn = #{p.useYn}, remark = #{p.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where plan_id = #{p.planId} and row_ver = #{p.rowVer}
+    </update>
+
+    <update id="advancePlan">
+        update cms_pm_plan
+           set next_due_date = #{next}, last_done_date = coalesce(#{lastDone}, last_done_date),
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where plan_id = #{id}
+    </update>
+
+    <!-- 사용량 주기: 다음 예정 사용량 + 마지막 완료(날짜·누적, 건너뛰면 그대로) -->
+    <update id="advanceUsagePlan">
+        update cms_pm_plan
+           set next_due_usage = #{next}, last_done_date = coalesce(#{lastDone}, last_done_date),
+               last_done_usage = coalesce(#{lastDoneUsage}, last_done_usage),
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where plan_id = #{id}
+    </update>
+
+    <!-- 달력: 다음 예정일 ≤ 상한이고 그 예정이 아직 없음 / 사용량: 누적 ≥ 다음 예정 − 선행. 둘 다 열린 예정 없음 -->
+    <select id="findPlansToGenerate" resultType="io.smarthappy.module.cms.CmsPmDtos$PlanRow">
+        select <include refid="planCols"/> <include refid="planFrom"/>
+         where p.use_yn = 'Y'
+           and ((p.cycle_type = 'CAL' and p.next_due_date &lt;= #{upTo}
+                 and not exists (select 1 from cms_chk_run r where r.plan_id = p.plan_id and r.due_date = p.next_due_date))
+             or (p.cycle_type = 'USAGE'
+                 and (select coalesce(sum(cr.delta_qty), 0) from cms_counter_reading cr where cr.counter_id = p.counter_id and cr.void_yn = 'N')
+                     &gt;= p.next_due_usage - coalesce(p.usage_lead, 0)))
+           and not exists (select 1 from cms_chk_run r where r.plan_id = p.plan_id and r.status = 'OPEN')
+         order by p.plan_id
+    </select>
+
+    <!-- 달력 보기(C27, docs/33 13.14) — 대상의 공장(설비 공장, 금형·지그는 설치된 설비의 공장)이 고른 공장인 것만 -->
+    <sql id="calPlant">
+        coalesce(e.plant_cd, (select e2.plant_cd from mst_asset_install i join mst_equip e2 on e2.equip_id = i.equip_id
+                               where i.asset_id = a.asset_id and i.removed_at is null and i.void_yn = 'N' limit 1)) as plant_cd
+    </sql>
+
+    <!-- 그 달(예정일 from~to)의 점검 실행 — 상태 무관(열린 것·끝난 것·건너뛴 것) -->
+    <select id="findCalRuns" resultType="io.smarthappy.module.cms.CmsPmDtos$CalRunRow">
+        select x.run_id, x.plan_id, x.plan_cd, x.plan_nm, x.target_cd, x.cycle_type, x.due_date, x.due_usage, x.counter_scale,
+               x.status, x.result, x.lead_days
+          from (select r.run_id, r.plan_id, p.plan_cd, p.plan_nm, coalesce(e.equip_cd, a.asset_cd) as target_cd, p.cycle_type,
+                       r.due_date, r.due_usage, coalesce(k.scale, 0) as counter_scale, r.status, r.result, p.lead_days,
+                       <include refid="calPlant"/>
+                  from cms_chk_run r
+                  join cms_pm_plan p on p.plan_id = r.plan_id
+                  left join mst_equip e on e.equip_id = r.equip_id
+                  left join mst_phys_asset a on a.asset_id = r.asset_id
+                  left join cms_counter k on k.counter_id = p.counter_id
+                 where r.due_date between #{from} and #{to}) x
+         where x.plant_cd = #{plantCd}
+         order by x.due_date, x.plan_cd, x.run_id
+         limit #{limit}
+    </select>
+
+    <!-- 사용 중 달력 주기 계획 — 예상(FORECAST) 계산 입력. 열린 예정의 예정일 함께 -->
+    <select id="findCalPlans" resultType="io.smarthappy.module.cms.CmsPmDtos$CalPlanRow">
+        select x.plan_id, x.plan_cd, x.plan_nm, x.target_cd, x.schedule_basis, x.cal_unit, x.cal_interval, x.anchor_date,
+               x.next_due_date, x.lead_days,
+               (select r.due_date from cms_chk_run r where r.plan_id = x.plan_id and r.status = 'OPEN' limit 1) as open_due_date
+          from (select p.plan_id, p.plan_cd, p.plan_nm, coalesce(e.equip_cd, a.asset_cd) as target_cd, p.schedule_basis, p.cal_unit,
+                       p.cal_interval, p.anchor_date, p.next_due_date, p.lead_days, <include refid="calPlant"/>
+                  from cms_pm_plan p
+                  left join mst_equip e on e.equip_id = p.equip_id
+                  left join mst_phys_asset a on a.asset_id = p.asset_id
+                 where p.use_yn = 'Y' and p.cycle_type = 'CAL') x
+         where x.plant_cd = #{plantCd}
+         order by x.plan_cd
+         limit #{limit}
+    </select>
+
+    <select id="countCalUsagePlans" resultType="int">
+        select count(*)
+          from (select <include refid="calPlant"/>
+                  from cms_pm_plan p
+                  left join mst_equip e on e.equip_id = p.equip_id
+                  left join mst_phys_asset a on a.asset_id = p.asset_id
+                 where p.use_yn = 'Y' and p.cycle_type = 'USAGE') x
+         where x.plant_cd = #{plantCd}
+    </select>
+
+    <select id="findUsagePlansOfCounter" resultType="long">
+        select plan_id from cms_pm_plan where counter_id = #{counterId} and cycle_type = 'USAGE' and use_yn = 'Y' order by plan_id
+    </select>
+
+    <select id="findActiveEquipOfClass" resultType="string">
+        select equip_cd from mst_equip where class_id = #{classId} and use_yn = 'Y' order by equip_cd
+    </select>
+
+    <!-- ================================================================ 점검 실행 -->
+
+    <select id="insertRun" resultType="long" flushCache="true">
+        insert into cms_chk_run (comp_cd, plan_id, mwo_id, target_type, equip_id, asset_id, tmpl_id, due_date, due_usage,
+                                 created_by, updated_by)
+        values (hb_current_comp(), #{r.planId}, #{r.mwoId}, #{r.targetType}, #{r.equipId}, #{r.assetId}, #{r.tmplId}, #{r.dueDate},
+                #{r.dueUsage}, #{by}, #{by})
+        returning run_id
+    </select>
+
+    <insert id="snapshotResults">
+        insert into cms_chk_result (comp_cd, run_id, seq, item_nm, method_text, judge_type, lsl, usl, unit_nm, scale, required_yn,
+                                    created_by, updated_by)
+        select hb_current_comp(), #{runId}, i.seq, i.item_nm, i.method_text, i.judge_type, i.lsl, i.usl, i.unit_nm, i.scale,
+               i.required_yn, #{by}, #{by}
+          from cms_chk_tmpl_item i where i.tmpl_id = #{tmplId}
+    </insert>
+
+    <sql id="runCols">
+        r.run_id, r.plan_id, p.plan_cd, p.plan_nm, p.exec_mode, r.mwo_id, m.mwo_no, m.status as mwo_status, r.target_type, r.equip_id,
+        r.asset_id, coalesce(e.equip_cd, a.asset_cd) as target_cd, coalesce(e.equip_nm, a.asset_nm) as target_nm,
+        e.class_id as target_class_id,
+        coalesce(e.plant_cd, (select e2.plant_cd from mst_asset_install i join mst_equip e2 on e2.equip_id = i.equip_id
+                               where i.asset_id = r.asset_id and i.removed_at is null and i.void_yn = 'N' limit 1)) as plant_cd,
+        r.tmpl_id, t.tmpl_cd, t.tmpl_nm, r.due_date, r.status, r.performed_at, coalesce(pu.login_id, fw.worker_cd) as performed_login_id,
+        coalesce(pu.user_nm, fw.worker_nm) as performed_nm, r.floor_req_id, r.result, r.skip_reason_cd, r.skip_reason, p.lead_days, r.row_ver, r.updated_at, r.updated_by,
+        p.cycle_type, r.due_usage, r.done_usage, p.usage_lead, k.unit_nm as counter_unit, coalesce(k.scale, 0) as counter_scale,
+        case when p.counter_id is not null then (select coalesce(sum(cr.delta_qty), 0) from cms_counter_reading cr
+                                                  where cr.counter_id = p.counter_id and cr.void_yn = 'N') end as counter_total,
+        (select count(*) from cms_chk_result x where x.run_id = r.run_id and x.judge = 'NG') as ng_cnt
+    </sql>
+    <sql id="runFrom">
+        from cms_chk_run r
+        join cms_pm_plan p on p.plan_id = r.plan_id
+        join cms_chk_tmpl t on t.tmpl_id = r.tmpl_id
+        left join cms_mwo m on m.mwo_id = r.mwo_id
+        left join mst_equip e on e.equip_id = r.equip_id
+        left join mst_phys_asset a on a.asset_id = r.asset_id
+        left join sys_user pu on pu.user_id = r.performed_by
+        left join mst_worker fw on fw.worker_id = r.floor_worker_id
+        left join cms_counter k on k.counter_id = p.counter_id
+    </sql>
+
+    <!-- 지연 조인(docs/33 13.13, QA H4): 안쪽 = 거름·정렬·쪽 고르기(행별 계산 없음 — 공장은 조건에서만, 자산 설치 공장 부질의는
+         설비 공장이 없을 때만 평가) — 목록·grid·건수 공통 FROM·조건. 판독 합·NG 수는 바깥(runCols)이 고른 행에만 -->
+    <!-- 계획은 left join(plan_id NOT NULL·FK 라 늘 한 행 — 결과 같음): 계획 칸을 쓰지 않는 조회(기본 정렬·건수)에서 플래너가 조인을 뺀다(13.17) -->
+    <sql id="runLiteFromWhere">
+          from cms_chk_run r
+          left join cms_pm_plan p on p.plan_id = r.plan_id
+          left join cms_mwo m on m.mwo_id = r.mwo_id
+          left join mst_equip e on e.equip_id = r.equip_id
+          left join mst_phys_asset a on a.asset_id = r.asset_id
+         where r.due_date &gt;= #{from} and r.due_date &lt;= #{to}
+           <if test="statuses != null">and r.status in <foreach collection="statuses" item="s" open="(" separator="," close=")">#{s}</foreach></if>
+           <if test="execMode != null">and p.exec_mode = #{execMode}</if>
+           <if test="planId != null">and r.plan_id = #{planId}</if>
+           <if test="equipId != null">and r.equip_id = #{equipId}</if>
+           <if test="keyword != null">and (p.plan_cd like #{keyword} escape '\' or p.plan_nm ilike #{keyword} escape '\'
+                or e.equip_cd like #{keyword} escape '\' or a.asset_cd like #{keyword} escape '\')</if>
+           <if test="plantCd != null">and coalesce(e.plant_cd, (select e2.plant_cd from mst_asset_install i join mst_equip e2 on e2.equip_id = i.equip_id
+                                       where i.asset_id = r.asset_id and i.removed_at is null and i.void_yn = 'N' limit 1)) = #{plantCd}</if>
+    </sql>
+
+    <!-- 안쪽 정렬(허용 목록 enum 이름으로만) — 바깥 runSort 와 같은 순서, 마지막 PK -->
+    <sql id="runSortInner">
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PLAN_CD'">p.plan_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TARGET_CD'">coalesce(e.equip_cd, a.asset_cd)<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'EXEC_MODE'">p.exec_mode<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'STATUS'">r.status<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'RESULT'">r.result<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'MWO_NO'">m.mwo_no<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'PERFORMED_AT'">r.performed_at<if test="s.desc"> desc nulls last</if></when>
+                <otherwise>r.due_date<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         r.run_id
+    </sql>
+
+    <!-- 바깥 정렬(허용 목록 enum 이름으로만) — 안쪽 runSortInner 와 같은 순서, 마지막 PK -->
+    <sql id="runSort">
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PLAN_CD'">x.plan_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TARGET_CD'">x.target_cd<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'EXEC_MODE'">x.exec_mode<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'STATUS'">x.status<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'RESULT'">x.result<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'MWO_NO'">x.mwo_no<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'PERFORMED_AT'">x.performed_at<if test="s.desc"> desc nulls last</if></when>
+                <otherwise>x.due_date<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         x.run_id
+    </sql>
+
+    <select id="findRuns" resultType="io.smarthappy.module.cms.CmsPmDtos$RunRow">
+        select * from (select <include refid="runCols"/> <include refid="runFrom"/>
+                        where r.run_id in (select r.run_id <include refid="runLiteFromWhere"/> order by r.due_date, r.run_id limit #{limit})) x
+         order by x.due_date, x.run_id
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK. 예정 상태·기한 안 완료는 계산 값이라 정렬 밖 -->
+    <select id="findRunPage" resultType="io.smarthappy.module.cms.CmsPmDtos$RunRow">
+        select * from (select <include refid="runCols"/> <include refid="runFrom"/>
+                        where r.run_id in (select r.run_id <include refid="runLiteFromWhere"/>
+                                            order by <include refid="runSortInner"/>
+                                            limit #{page.size} offset #{page.offset})) x
+         order by <include refid="runSort"/>
+    </select>
+
+    <select id="countRuns" resultType="long">
+        select count(*) <include refid="runLiteFromWhere"/>
+    </select>
+
+    <select id="findRun" resultType="io.smarthappy.module.cms.CmsPmDtos$RunRow">
+        select <include refid="runCols"/> <include refid="runFrom"/> where r.run_id = #{id}
+    </select>
+
+    <select id="findRunByMwo" resultType="io.smarthappy.module.cms.CmsPmDtos$RunRow">
+        select <include refid="runCols"/> <include refid="runFrom"/> where r.mwo_id = #{mwoId}
+    </select>
+
+    <select id="lockRun" resultType="java.lang.Long">
+        select run_id from cms_chk_run where run_id = #{id} for update
+    </select>
+
+    <select id="findResults" resultType="io.smarthappy.module.cms.CmsPmDtos$ResultRow">
+        select result_id, seq, item_nm, method_text, judge_type, lsl, usl, unit_nm, scale, required_yn, value_num, value_text, judge,
+               remark
+          from cms_chk_result where run_id = #{runId} order by seq
+    </select>
+
+    <update id="updateResult">
+        update cms_chk_result
+           set value_num = #{valueNum}, value_text = #{valueText}, judge = #{judge}, remark = #{remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where run_id = #{runId} and seq = #{seq}
+    </update>
+
+    <update id="finishRun">
+        update cms_chk_run
+           set status = #{status}, performed_at = #{performedAt}, performed_by = #{performedBy}, result = #{result},
+               skip_reason_cd = #{skipReasonCd}, skip_reason = #{skipReason}, done_usage = #{doneUsage},
+               floor_worker_id = #{floorWorkerId}, floor_terminal_id = #{floorTerminalId}, floor_req_id = #{floorReqId},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where run_id = #{id} and status = 'OPEN' <if test="rowVer != null">and row_ver = #{rowVer}</if>
+    </update>
+
+    <!-- 현장 단말(docs/25 4.58) — 설비 대상·CHECK 방식·열린 실행만. 공장은 설비 공장 -->
+    <select id="findFloorDue" resultType="io.smarthappy.module.cms.CmsPmDtos$RunRow">
+        select <include refid="runCols"/>,
+               (select count(*) from cms_chk_result x where x.run_id = r.run_id) as item_cnt
+        <include refid="runFrom"/>
+         where r.status = 'OPEN' and p.exec_mode = 'CHECK' and e.plant_cd = #{plantCd}
+           and r.equip_id in <foreach collection="equipIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by r.due_date, e.equip_cd, r.run_id
+         limit #{limit}
+    </select>
+
+    <select id="findRunIdByFloorReq" resultType="java.lang.Long">
+        select run_id from cms_chk_run where floor_req_id = #{reqId}
+    </select>
+</mapper>

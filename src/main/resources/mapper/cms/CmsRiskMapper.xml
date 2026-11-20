@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 1부 C6 — 위험성평가 (docs/33 4.7). 확정본 불변은 트리거, 여기서는 고칠 수 있는 칸만 쓴다 -->
+<mapper namespace="io.smarthappy.module.cms.CmsRiskMapper">
+
+    <sql id="raCols">
+        r.ra_id, r.ra_no, r.plant_cd, r.ra_type, r.method, r.matrix_cd, r.title, r.scope_text, r.assess_date, r.status, r.prev_ra_id,
+        pr.ra_no as prev_ra_no, r.apr_id, r.released_at, r.released_by, r.remark, r.row_ver, r.updated_at, r.updated_by,
+        (select count(*) from cms_risk_item i where i.ra_id = r.ra_id) as item_cnt,
+        (select count(*) from cms_risk_item i where i.ra_id = r.ra_id and i.risk_level = 'HIGH') as high_cnt,
+        (select count(*) from cms_risk_item i where i.ra_id = r.ra_id and i.done_date is null and i.risk_level in ('MEDIUM', 'HIGH'))
+            as open_cnt,
+        (select count(*) from cms_risk_item i where i.ra_id = r.ra_id and i.done_date is null and i.due_date &lt; #{today}) as overdue_cnt,
+        (select count(*) from cms_risk_member m where m.ra_id = r.ra_id) as member_cnt
+    </sql>
+
+    <!-- 목록·grid 공통 조건 -->
+    <sql id="raWhere">
+         where r.assess_date &gt;= #{from} and r.assess_date &lt;= #{to}
+           <if test="statuses != null">and r.status in <foreach collection="statuses" item="s" open="(" separator="," close=")">#{s}</foreach></if>
+           <if test="keyword != null">and (r.ra_no like #{keyword} escape '\' or r.title ilike #{keyword} escape '\')</if>
+    </sql>
+
+    <select id="findRas" resultType="io.smarthappy.module.cms.CmsRiskDtos$RaRow">
+        select <include refid="raCols"/>
+          from cms_risk_assess r left join cms_risk_assess pr on pr.ra_id = r.prev_ra_id
+        <include refid="raWhere"/>
+         order by r.assess_date desc, r.ra_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findRaPage" resultType="io.smarthappy.module.cms.CmsRiskDtos$RaRow">
+        select <include refid="raCols"/>
+          from cms_risk_assess r left join cms_risk_assess pr on pr.ra_id = r.prev_ra_id
+        <include refid="raWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'RA_NO'">r.ra_no</when>
+                <when test="s.key == 'TITLE'">r.title</when>
+                <when test="s.key == 'RA_TYPE'">r.ra_type</when>
+                <when test="s.key == 'STATUS'">r.status</when>
+                <otherwise>r.assess_date</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         r.ra_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countRas" resultType="long">
+        select count(*) from cms_risk_assess r <include refid="raWhere"/>
+    </select>
+
+    <select id="findRa" resultType="io.smarthappy.module.cms.CmsRiskDtos$RaRow">
+        select <include refid="raCols"/>
+          from cms_risk_assess r left join cms_risk_assess pr on pr.ra_id = r.prev_ra_id
+         where r.ra_id = #{id}
+    </select>
+
+    <select id="lockRa" resultType="java.lang.Long">
+        select ra_id from cms_risk_assess where ra_id = #{id} for update
+    </select>
+
+    <select id="insertRa" resultType="long" flushCache="true">
+        insert into cms_risk_assess (comp_cd, ra_no, plant_cd, ra_type, method, matrix_cd, title, scope_text, assess_date, prev_ra_id, remark,
+                                     created_by, updated_by)
+        values (hb_current_comp(), #{r.raNo}, #{r.plantCd}, #{r.raType}, #{r.method}, #{r.matrixCd}, #{r.title}, #{r.scopeText},
+                #{r.assessDate}, #{r.prevRaId}, #{r.remark}, #{by}, #{by})
+        returning ra_id
+    </select>
+
+    <update id="updateRa">
+        update cms_risk_assess
+           set plant_cd = #{r.plantCd}, ra_type = #{r.raType}, title = #{r.title}, scope_text = #{r.scopeText},
+               assess_date = #{r.assessDate}, remark = #{r.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ra_id = #{r.raId} and row_ver = #{r.rowVer}
+    </update>
+
+    <update id="setStatus">
+        update cms_risk_assess
+           set status = #{status}, apr_id = #{aprId},
+               <if test="released">released_at = now(), released_by = #{by},</if>
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ra_id = #{id} <if test="rowVer != null">and row_ver = #{rowVer}</if>
+    </update>
+
+    <sql id="itemCols">
+        i.item_id, i.seq, i.task_text, i.equip_id, e.equip_cd, e.equip_nm, i.hazard_cat, i.hazard_text, i.current_measure, i.likelihood,
+        i.severity, i.risk_level, i.plan_measure, i.owner_user_id, u.login_id as owner_login_id, u.user_nm as owner_nm, i.due_date,
+        i.done_date, i.residual_l, i.residual_s, i.residual_level, i.row_ver
+    </sql>
+    <sql id="itemFrom">
+        from cms_risk_item i
+        left join mst_equip e on e.equip_id = i.equip_id
+        left join sys_user u on u.user_id = i.owner_user_id
+    </sql>
+
+    <select id="findItems" resultType="io.smarthappy.module.cms.CmsRiskDtos$ItemRow">
+        select <include refid="itemCols"/> <include refid="itemFrom"/> where i.ra_id = #{raId} order by i.seq
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.cms.CmsRiskDtos$ItemRow">
+        select <include refid="itemCols"/> <include refid="itemFrom"/> where i.ra_id = #{raId} and i.item_id = #{itemId}
+    </select>
+
+    <select id="insertItem" resultType="long" flushCache="true">
+        insert into cms_risk_item (comp_cd, ra_id, seq, task_text, equip_id, hazard_cat, hazard_text, current_measure, likelihood, severity,
+                                   risk_level, plan_measure, owner_user_id, due_date, created_by, updated_by)
+        values (hb_current_comp(), #{raId}, #{i.seq}, #{i.taskText}, #{i.equipId}, #{i.hazardCat}, #{i.hazardText}, #{i.currentMeasure},
+                #{i.likelihood}, #{i.severity}, #{i.riskLevel}, #{i.planMeasure}, #{i.ownerUserId}, #{i.dueDate}, #{by}, #{by})
+        returning item_id
+    </select>
+
+    <update id="updateItem">
+        update cms_risk_item
+           set seq = #{i.seq}, task_text = #{i.taskText}, equip_id = #{i.equipId}, hazard_cat = #{i.hazardCat}, hazard_text = #{i.hazardText},
+               current_measure = #{i.currentMeasure}, likelihood = #{i.likelihood}, severity = #{i.severity}, risk_level = #{i.riskLevel},
+               plan_measure = #{i.planMeasure}, owner_user_id = #{i.ownerUserId}, due_date = #{i.dueDate},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ra_id = #{raId} and item_id = #{i.itemId} and row_ver = #{i.rowVer}
+    </update>
+
+    <update id="progressItem">
+        update cms_risk_item
+           set done_date = #{i.doneDate}, residual_l = #{i.residualL}, residual_s = #{i.residualS}, residual_level = #{i.residualLevel},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ra_id = #{raId} and item_id = #{i.itemId} and row_ver = #{i.rowVer}
+    </update>
+
+    <select id="itemOfRa" resultType="int">
+        select count(*) from cms_risk_item where ra_id = #{raId} and item_id = #{itemId}
+    </select>
+
+    <delete id="deleteItem">
+        delete from cms_risk_item where ra_id = #{raId} and item_id = #{itemId}
+    </delete>
+
+    <!-- 사용 중지된 설비·담당은 새 참조라 비운다(트리거가 막기 전에) -->
+    <insert id="copyItems">
+        insert into cms_risk_item (comp_cd, ra_id, seq, task_text, equip_id, hazard_cat, hazard_text, current_measure, likelihood, severity,
+                                   risk_level, plan_measure, owner_user_id, due_date, created_by, updated_by)
+        select i.comp_cd, #{toRaId}, i.seq, i.task_text,
+               (select e.equip_id from mst_equip e where e.equip_id = i.equip_id and e.use_yn = 'Y'),
+               i.hazard_cat, i.hazard_text,
+               -- 끝낸 개선 대책은 새 평가의 "현재 조치"로 넘어간다(500자 안에서)
+               left(nullif(coalesce(i.current_measure, '') ||
+                   case when i.done_date is not null and i.plan_measure is not null
+                        then case when i.current_measure is null then '' else ' / ' end || i.plan_measure else '' end, ''), 500),
+               coalesce(i.residual_l, i.likelihood), coalesce(i.residual_s, i.severity), coalesce(i.residual_level, i.risk_level),
+               case when i.done_date is null then i.plan_measure end,
+               case when i.done_date is null then (select u.user_id from sys_user u where u.user_id = i.owner_user_id and u.use_yn = 'Y') end,
+               case when i.done_date is null then i.due_date end, #{by}, #{by}
+          from cms_risk_item i where i.ra_id = #{fromRaId}
+    </insert>
+
+    <select id="findMembers" resultType="io.smarthappy.module.cms.CmsRiskDtos$MemberRow">
+        select m.member_id, m.user_id, u.login_id, m.worker_id, w.worker_cd, m.member_nm, m.role_cd, m.participated_on, m.notified_on, m.remark, m.row_ver
+          from cms_risk_member m left join sys_user u on u.user_id = m.user_id left join mst_worker w on w.worker_id = m.worker_id
+         where m.ra_id = #{raId} order by m.member_id
+    </select>
+
+    <select id="insertMember" resultType="long" flushCache="true">
+        insert into cms_risk_member (comp_cd, ra_id, user_id, worker_id, member_nm, role_cd, participated_on, notified_on, remark, created_by, updated_by)
+        values (hb_current_comp(), #{raId}, #{m.userId}, #{m.workerId}, #{m.memberNm}, #{m.roleCd}, #{m.participatedOn}, #{m.notifiedOn}, #{m.remark},
+                #{by}, #{by})
+        returning member_id
+    </select>
+
+    <!-- 작업자(C19) — 기준정보 mst_worker 읽기만(상위 결정) -->
+    <select id="findWorkers" resultType="io.smarthappy.module.cms.CmsRiskDtos$WorkerOption">
+        select w.worker_id, w.worker_cd, w.worker_nm, w.plant_cd from mst_worker w where w.use_yn = 'Y' order by w.worker_cd limit #{limit}
+    </select>
+
+    <select id="findWorker" resultType="io.smarthappy.module.cms.CmsRiskDtos$WorkerOption">
+        select w.worker_id, w.worker_cd, w.worker_nm, w.plant_cd from mst_worker w where w.worker_cd = #{workerCd} and w.use_yn = 'Y'
+    </select>
+
+    <update id="notifyMember">
+        update cms_risk_member
+           set notified_on = #{notifiedOn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ra_id = #{raId} and member_id = #{memberId} <if test="rowVer != null">and row_ver = #{rowVer}</if>
+    </update>
+
+    <delete id="deleteMember">
+        delete from cms_risk_member where ra_id = #{raId} and member_id = #{memberId}
+    </delete>
+
+    <select id="itemRaStatus" resultType="java.lang.String">
+        select a.status from cms_risk_item i join cms_risk_assess a on a.ra_id = i.ra_id where i.item_id = #{itemId}
+    </select>
+</mapper>

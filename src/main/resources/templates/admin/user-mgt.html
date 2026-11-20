@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  사용자 관리 (sys-user) — 시스템관리 1단계 (docs/36).
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자·헬프데스크(WEB). 입사·퇴사·부서 이동·"잠겼어요" 문의 때 연다.
+  직접 치는 값 = 아이디·이름·메일. 비밀번호는 치지 않는다 — 서버가 임시 비밀번호를 만들어 한 번만 보여 주고 다음 로그인 때 바꾸게 한다.
+  예외 = 나보다 큰 권한(그룹·사용자)은 잠김 표시, 자기 소속·자기 잠금은 불가, 마지막 관리자는 끌 수 없음 — 판정은 서버.
+  협력사 포털 사용자(docs/42 5장) = 추가 때 유형 "협력사 사용자" + 소속 협력사(사용 중 구매·겸용 거래처). 그 뒤 유형·소속은 바꾸지 않고,
+  부서·권한그룹 칸은 숨긴다(서버도 거부).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">사용자 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{sysUser.search.keyword}">아이디·이름</span>
+        <input name="keyword" maxlength="50" data-help-key="sys-user.keyword"></label>
+    <label><span th:text="#{sysUser.col.groups}">권한그룹</span>
+        <select name="authGrpCd" id="grpSel"><option value="" th:text="#{common.all}">전체</option></select></label>
+    <label><span th:text="#{sysUser.col.dept}">부서</span>
+        <select name="deptId" id="deptSel"><option value="" th:text="#{common.all}">전체</option></select></label>
+    <label><span th:text="#{sysUser.col.userType}">사용자 유형</span>
+        <select name="userType" data-hb="select" data-code="USER_TYPE" data-blank="all"></select></label>
+    <label><span th:text="#{sysUser.col.lockState}">잠금</span>
+        <select name="lockState" data-hb="select" data-code="USER_LOCK_STATE" data-blank="all"></select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{sysUser.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y" checked><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:text="#{import.button}">엑셀 올리기</button>
+        </div>
+        <div id="userGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 계정 동작(되돌리기 어려운 것 포함)은 저장 줄과 떨어진 자리(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('FN1') or actions.contains('FN2')}">
+            <button type="button" id="resetBtn" class="hb-btn-secondary" th:if="${actions.contains('FN1')}" th:text="#{sysUser.resetPassword}">비밀번호 초기화</button>
+            <button type="button" id="resetMfaBtn" class="hb-btn-secondary" th:if="${actions.contains('FN1')}" th:text="#{sysUser.resetMfa}">2단계 인증 초기화</button>
+            <button type="button" id="unlockBtn" class="hb-btn-secondary" th:if="${actions.contains('FN2')}" th:text="#{sysUser.unlock}">잠금 해제</button>
+            <button type="button" id="lockBtn" class="hb-btn-danger-outline" th:if="${actions.contains('FN2')}" th:text="#{sysUser.lock}">잠금</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{sysUser.selectOrNew}">왼쪽에서 사용자를 고르거나 신규를 누르세요.</p>
+
+        <!-- 임시 비밀번호 — 추가·초기화 응답에서 한 번만. 닫으면 다시 볼 수 없다 -->
+        <section id="tempBox" class="hb-sub hb-temp-pwd" hidden>
+            <h2 th:text="#{sysUser.temp.title}">임시 비밀번호</h2>
+            <p class="hb-muted" th:text="#{sysUser.temp.note}">이 창을 닫으면 다시 볼 수 없습니다. 사용자에게 직접 전달하세요 — 첫 로그인 때 새 비밀번호로 바꿔야 합니다.</p>
+            <p><span id="tempLogin"></span> · <code id="tempPwd" class="hb-temp-code"></code></p>
+            <div class="hb-toolbar">
+                <button type="button" id="copyTempBtn" class="hb-btn-secondary" th:text="#{sysUser.temp.copy}">복사</button>
+                <button type="button" id="closeTempBtn" class="hb-btn-secondary" th:text="#{common.close}">닫기</button>
+            </div>
+        </section>
+
+        <form id="userForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{sysUser.col.userType}">사용자 유형</span>
+                <select data-field="userType" data-help-key="sys-user.userType">
+                    <option value="INTERNAL" th:text="#{code.USER_TYPE.INTERNAL}">회사 사용자</option>
+                    <option value="SUPPLIER" th:text="#{code.USER_TYPE.SUPPLIER}">협력사 사용자</option>
+                </select></label>
+            <label class="hb-wide" id="custRow" hidden><span th:text="#{sysUser.col.cust}">소속 협력사</span>
+                <select data-field="custId" data-help-key="sys-user.custId"></select>
+                <input id="custKeyword" type="search" maxlength="50" th:placeholder="#{sysUser.custSearch}" th:aria-label="#{sysUser.custSearch}"></label>
+            <label><span th:text="#{sysUser.col.loginId}">아이디</span>
+                <input data-field="loginId" maxlength="50" required spellcheck="false" data-help-key="sys-user.loginId"></label>
+            <label><span th:text="#{sysUser.col.userNm}">이름</span>
+                <input data-field="userNm" maxlength="50" required></label>
+            <label class="hb-wide"><span th:text="#{sysUser.col.email}">메일</span>
+                <input data-field="email" maxlength="200" type="email"></label>
+            <label class="hb-wide" id="deptRow"><span th:text="#{sysUser.col.dept}">부서</span>
+                <select data-field="deptId" data-help-key="sys-user.deptId"></select></label>
+            <label><span th:text="#{sysUser.col.localeCd}">화면 언어</span>
+                <select data-field="localeCd">
+                    <option value="ko" th:text="#{myInfo.locale.ko}">한국어</option>
+                    <option value="en" th:text="#{myInfo.locale.en}">English</option>
+                </select></label>
+            <label><span th:text="#{sysUser.col.useYn}">사용</span>
+                <select data-field="useYn" data-help-key="sys-user.useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{sysUser.status}">상태</span>
+                <output id="status" class="hb-output"></output></label>
+        </form>
+
+        <p id="supplierNote" class="hb-muted" hidden th:text="#{sysUser.supplierNote}">협력사 사용자는 포털만 씁니다 — 권한그룹·부서·결재선·알림 대상이 아닙니다.</p>
+        <section class="hb-sub" id="groupsSec">
+            <h2 th:text="#{sysUser.col.groups}">권한그룹</h2>
+            <p class="hb-muted" th:text="#{sysUser.groupsNote}">잠긴 그룹은 내 권한보다 커서 넣고 뺄 수 없습니다.</p>
+            <div id="groups" class="hb-check-list" data-field="authGrpCds" data-help-key="sys-user.authGrpCds"></div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/views/admin/user-mgt.js}"></script>
+</body>
+</html>

@@ -1,0 +1,313 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 공정·라우팅 (P1 5단계, docs/20). 목록·건수·엑셀은 같은 조건·정렬 조각 -->
+<mapper namespace="io.smarthappy.module.master.routing.RoutingMapper">
+
+    <!-- ================================================================ 공정 -->
+
+    <sql id="procCols">
+        p.proc_id, p.proc_cd, p.proc_nm, p.proc_cat, p.outsrc_yn, p.sort_no, p.use_yn, p.remark, p.row_ver,
+        p.updated_at, p.updated_by,
+        (select count(distinct s.routing_id) from mst_routing_step s join mst_routing r on r.routing_id = s.routing_id
+          where s.proc_id = p.proc_id and r.status = 'RELEASED') as routing_cnt
+    </sql>
+
+    <select id="findProcs" resultType="io.smarthappy.module.master.routing.RoutingDtos$ProcRow">
+        select <include refid="procCols"/> from mst_proc p
+        <where><if test="useYn != null">p.use_yn = #{useYn}</if></where>
+        order by p.sort_no, p.proc_cd
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): 기존 목록과 같은 조건 + 빠른 찾기(코드·이름). 정렬 허용 열은 ProcSort, 끝 키 proc_id -->
+    <sql id="procGridWhere">
+        from mst_proc p
+        <where>
+            <if test="useYn != null">and p.use_yn = #{useYn}</if>
+            <if test="kw != null">and (p.proc_cd ilike #{kw} escape '\' or p.proc_nm ilike #{kw} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findProcPage" resultType="io.smarthappy.module.master.routing.RoutingDtos$ProcRow">
+        select <include refid="procCols"/> <include refid="procGridWhere"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PROC_CD'">p.proc_cd</when>
+                <when test="s.key == 'PROC_NM'">p.proc_nm</when>
+                <when test="s.key == 'PROC_CAT'">p.proc_cat</when>
+                <when test="s.key == 'ROUTING_CNT'">routing_cnt</when>
+                <when test="s.key == 'UPDATED_AT'">p.updated_at</when>
+                <otherwise>p.sort_no</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        p.proc_id
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countProcs" resultType="long">
+        select count(*) <include refid="procGridWhere"/>
+    </select>
+
+    <select id="findProc" resultType="io.smarthappy.module.master.routing.RoutingDtos$ProcRow">
+        select <include refid="procCols"/> from mst_proc p where p.proc_id = #{procId}
+    </select>
+
+    <select id="findProcByCd" resultType="io.smarthappy.module.master.routing.RoutingDtos$ProcRow">
+        select <include refid="procCols"/> from mst_proc p where p.proc_cd = #{procCd}
+    </select>
+
+    <select id="insertProc" resultType="long" flushCache="true">
+        insert into mst_proc (comp_cd, proc_cd, proc_nm, proc_cat, outsrc_yn, sort_no, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.procCd}, #{f.procNm}, #{f.procCat}, #{f.outsrcYn}, #{f.sortNo}, #{f.useYn},
+                #{f.remark}, #{by}, #{by})
+        returning proc_id
+    </select>
+
+    <update id="updateProc">
+        update mst_proc
+           set proc_nm = #{f.procNm}, proc_cat = #{f.procCat}, outsrc_yn = #{f.outsrcYn}, sort_no = #{f.sortNo},
+               use_yn = #{f.useYn}, remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where proc_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 머리 -->
+
+    <sql id="headCols">
+        r.routing_id, r.item_id, i.item_cd, i.item_nm, i.use_yn as item_use_yn, r.plant_cd, pl.plant_nm, r.alt_no, r.rev,
+        r.status, r.valid_from, r.valid_to, r.change_no, r.change_reason, r.remark, r.released_at, r.released_by,
+        r.row_ver, r.updated_at, r.updated_by,
+        (select count(*) from mst_routing_step s where s.routing_id = r.routing_id) as step_cnt,
+        (select sum(s.std_ct_sec) from mst_routing_step s where s.routing_id = r.routing_id) as total_ct_sec
+    </sql>
+
+    <sql id="from">
+        from mst_routing r
+        join mst_item i on i.item_id = r.item_id
+        join sys_plant pl on pl.comp_cd = r.comp_cd and pl.plant_cd = r.plant_cd
+    </sql>
+
+    <sql id="where">
+        <include refid="from"/>
+        <where>
+            <if test="q.itemCdLike != null">and i.item_cd like #{q.itemCdLike} escape '\'</if>
+            <if test="q.itemNmLike != null">and (i.item_nm ilike #{q.itemNmLike} escape '\' or i.spec ilike #{q.itemNmLike} escape '\')</if>
+            <if test="q.plantCd != null">and r.plant_cd = #{q.plantCd}</if>
+            <if test="q.status != null">and r.status = #{q.status}</if>
+            <if test="q.status == null and !q.withObsolete">and r.status &lt;&gt; 'OBSOLETE'</if>
+        </where>
+    </sql>
+
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ITEM_CD'">i.item_cd</when>
+                <when test="s.key == 'PLANT_CD'">r.plant_cd</when>
+                <when test="s.key == 'REV'">r.rev</when>
+                <when test="s.key == 'STATUS'">r.status</when>
+                <when test="s.key == 'VALID_FROM'">r.valid_from</when>
+                <otherwise>r.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        r.routing_id
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.master.routing.RoutingDtos$RoutingRow">
+        select <include refid="headCols"/> <include refid="where"/> <include refid="orderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.master.routing.RoutingDtos$RoutingRow" fetchSize="1000">
+        select <include refid="headCols"/> <include refid="where"/> <include refid="orderBy"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.master.routing.RoutingDtos$RoutingRow">
+        select <include refid="headCols"/> <include refid="from"/> where r.routing_id = #{id}
+    </select>
+
+    <select id="findItemByCd" resultType="io.smarthappy.module.master.routing.RoutingDtos$ItemLookup">
+        select item_id, item_cd, item_nm, spec, unit_cd, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="plantActive" resultType="boolean">
+        select exists (select 1 from sys_plant where plant_cd = #{plantCd} and use_yn = 'Y')
+    </select>
+
+    <select id="findRevs" resultType="string">
+        select rev from mst_routing where item_id = #{itemId} and plant_cd = #{plantCd} and alt_no = #{altNo}
+    </select>
+
+    <select id="findDraftId" resultType="long">
+        select routing_id from mst_routing
+         where item_id = #{itemId} and plant_cd = #{plantCd} and alt_no = #{altNo} and status = 'DRAFT'
+    </select>
+
+    <select id="insertHeader" resultType="long" flushCache="true">
+        insert into mst_routing (comp_cd, item_id, plant_cd, alt_no, rev, valid_from, change_no, change_reason, remark,
+                                 created_by, updated_by)
+        values (hb_current_comp(), #{f.itemId}, #{f.plantCd}, #{f.altNo}, #{f.rev}, #{f.validFrom}, #{f.changeNo},
+                #{f.changeReason}, #{f.remark}, #{by}, #{by})
+        returning routing_id
+    </select>
+
+    <update id="updateHeader">
+        update mst_routing
+           set rev = #{f.rev}, valid_from = #{f.validFrom}, change_no = #{f.changeNo}, change_reason = #{f.changeReason},
+               remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where routing_id = #{id} and status = 'DRAFT' and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="touch">
+        update mst_routing set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where routing_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <select id="findReleasedOverlaps" resultType="io.smarthappy.module.master.routing.RoutingDtos$RoutingRow">
+        select <include refid="headCols"/> <include refid="from"/>
+         where r.item_id = #{itemId} and r.plant_cd = #{plantCd} and r.alt_no = #{altNo} and r.status = 'RELEASED'
+           and r.routing_id &lt;&gt; #{exceptId}
+           and daterange(r.valid_from, r.valid_to, '[)') &amp;&amp; daterange(cast(#{from} as date), null, '[)')
+         order by r.valid_from
+    </select>
+
+    <update id="closeValidTo">
+        update mst_routing set valid_to = #{validTo}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where routing_id = #{id} and status = 'RELEASED'
+    </update>
+
+    <update id="release">
+        update mst_routing set status = 'RELEASED', released_at = now(), released_by = #{by},
+                               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where routing_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="obsolete">
+        update mst_routing set status = 'OBSOLETE', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where routing_id = #{id} and status in ('DRAFT', 'RELEASED') and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 단계·파라미터 -->
+
+    <select id="findSteps" resultType="io.smarthappy.module.master.routing.RoutingDtos$StepRow">
+        select s.step_id, s.routing_id, s.op_seq, s.proc_id, p.proc_cd, p.proc_nm, p.proc_cat, p.outsrc_yn,
+               p.use_yn as proc_use_yn, s.node_id, n.node_cd, n.node_nm, n.node_type, n.use_yn as node_use_yn,
+               case when s.node_id is not null then hb_equip_node_path(s.node_id) end as node_path,
+               s.std_ct_sec, s.units_per_cycle, s.setup_min, s.remark, s.row_ver
+          from mst_routing_step s
+          join mst_proc p on p.proc_id = s.proc_id
+          left join mst_equip_hier n on n.node_id = s.node_id
+         where s.routing_id = #{routingId}
+         order by s.op_seq, s.step_id
+    </select>
+
+    <select id="findParams" resultType="io.smarthappy.module.master.routing.RoutingDtos$ParamRow">
+        select m.param_id, m.step_id, m.param_cd, m.param_nm, m.unit_cd, m.unit_nm, m.target_val, m.lsl, m.usl, m.sort_no, m.row_ver
+          from mst_routing_param m join mst_routing_step s on s.step_id = m.step_id
+         where s.routing_id = #{routingId}
+         order by m.step_id, m.sort_no, m.param_cd
+    </select>
+
+    <select id="insertStep" resultType="long" flushCache="true">
+        insert into mst_routing_step (comp_cd, routing_id, op_seq, proc_id, node_id, std_ct_sec, units_per_cycle,
+                                      setup_min, remark, created_by, updated_by)
+        values (hb_current_comp(), #{routingId}, #{s.opSeq}, #{s.procId}, #{s.nodeId}, #{s.stdCtSec}, #{s.unitsPerCycle},
+                #{s.setupMin}, #{s.remark}, #{by}, #{by})
+        returning step_id
+    </select>
+
+    <update id="updateStep">
+        update mst_routing_step
+           set op_seq = #{s.opSeq}, proc_id = #{s.procId}, node_id = #{s.nodeId}, std_ct_sec = #{s.stdCtSec},
+               units_per_cycle = #{s.unitsPerCycle}, setup_min = #{s.setupMin}, remark = #{s.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where step_id = #{s.stepId} and routing_id = #{routingId}
+    </update>
+
+    <delete id="deleteStep">
+        delete from mst_routing_step where step_id = #{stepId} and routing_id = #{routingId}
+    </delete>
+
+    <select id="insertParam" resultType="long" flushCache="true">
+        insert into mst_routing_param (comp_cd, step_id, param_cd, param_nm, unit_cd, unit_nm, target_val, lsl, usl, sort_no,
+                                       created_by, updated_by)
+        values (hb_current_comp(), #{stepId}, #{p.paramCd}, #{p.paramNm}, #{p.unitCd}, #{p.unitNm}, #{p.targetVal}, #{p.lsl}, #{p.usl},
+                #{p.sortNo}, #{by}, #{by})
+        returning param_id
+    </select>
+
+    <update id="updateParam">
+        update mst_routing_param
+           set param_cd = #{p.paramCd}, param_nm = #{p.paramNm}, unit_cd = #{p.unitCd}, unit_nm = #{p.unitNm}, target_val = #{p.targetVal},
+               lsl = #{p.lsl}, usl = #{p.usl}, sort_no = #{p.sortNo},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where param_id = #{p.paramId} and step_id = #{stepId}
+    </update>
+
+    <delete id="deleteParam">
+        delete from mst_routing_param where param_id = #{paramId}
+    </delete>
+
+    <delete id="deleteParamsOfStep">
+        delete from mst_routing_param where step_id = #{stepId}
+    </delete>
+
+    <insert id="copySteps">
+        insert into mst_routing_step (comp_cd, routing_id, op_seq, proc_id, node_id, std_ct_sec, units_per_cycle,
+                                      setup_min, remark, created_by, updated_by)
+        select comp_cd, #{toId}, op_seq, proc_id, node_id, std_ct_sec, units_per_cycle, setup_min, remark, #{by}, #{by}
+          from mst_routing_step where routing_id = #{fromId}
+         order by op_seq
+    </insert>
+
+    <!-- 단계는 순번이 라우팅 안에서 유일하므로 순번으로 짝짓는다 -->
+    <insert id="copyParams">
+        insert into mst_routing_param (comp_cd, step_id, param_cd, param_nm, unit_cd, unit_nm, target_val, lsl, usl, sort_no,
+                                       created_by, updated_by)
+        select m.comp_cd, t.step_id, m.param_cd, m.param_nm,
+               case when hb_code_usable(m.comp_cd, 'MEAS_UNIT', m.unit_cd) then m.unit_cd end, m.unit_nm, m.target_val, m.lsl, m.usl, m.sort_no, #{by}, #{by}
+          from mst_routing_param m
+          join mst_routing_step f on f.step_id = m.step_id and f.routing_id = #{fromId}
+          join mst_routing_step t on t.routing_id = #{toId} and t.op_seq = f.op_seq
+    </insert>
+
+    <!-- ================================================================ 찾기·점검 -->
+
+    <sql id="placeCols">
+        n.node_id, n.plant_cd, n.node_cd, n.node_nm, n.node_type, n.use_yn, hb_equip_node_path(n.node_id) as path
+    </sql>
+
+    <select id="findPlaces" resultType="io.smarthappy.module.master.routing.RoutingDtos$PlaceRow">
+        select * from (
+            select <include refid="placeCols"/> from mst_equip_hier n
+             where n.plant_cd = #{plantCd} and n.node_type in ('LINE', 'CELL') and n.use_yn = 'Y'
+        ) x order by x.path
+    </select>
+
+    <select id="findPlace" resultType="io.smarthappy.module.master.routing.RoutingDtos$PlaceRow">
+        select <include refid="placeCols"/> from mst_equip_hier n where n.node_id = #{nodeId}
+    </select>
+
+    <select id="findPlants" resultType="io.smarthappy.module.master.equip.EquipDtos$PlantRow">
+        select plant_cd, plant_nm, addr, time_zone, sort_no, use_yn, row_ver, updated_at, updated_by, 0 as node_cnt
+          from sys_plant where use_yn = 'Y' order by sort_no, plant_cd
+    </select>
+
+    <!-- 기준일에 유효한 확정 BOM(대체 1)의 행 중 공정 순번이 이 라우팅에 없는 행 (docs/18 F9 → docs/20 4장) -->
+    <select id="unmatchedBomOps" resultType="io.smarthappy.module.master.routing.RoutingDtos$BomOpRow">
+        select b.rev as bom_rev, l.line_no, i.item_cd, i.item_nm, l.op_seq
+          from mst_bom b
+          join mst_bom_line l on l.bom_id = b.bom_id
+          join mst_item i on i.item_id = l.item_id
+         where b.item_id = #{itemId} and b.alt_no = 1 and b.status = 'RELEASED'
+           and b.valid_from &lt;= #{date} and (b.valid_to is null or b.valid_to &gt; #{date})
+           and l.op_seq is not null
+           and not exists (select 1 from mst_routing_step s where s.routing_id = #{routingId} and s.op_seq = l.op_seq)
+         order by l.line_no
+    </select>
+</mapper>

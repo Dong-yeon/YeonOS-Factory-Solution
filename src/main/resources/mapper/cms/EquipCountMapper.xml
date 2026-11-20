@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 수집 COUNT 조회·정정 (docs/25 4.36). 회사 조건은 RLS — 요청 범위(로그인 회사) 안에서만 부른다 -->
+<mapper namespace="io.smarthappy.module.cms.EquipCountMapper">
+
+    <select id="equips" resultType="io.smarthappy.module.cms.EquipCountDtos$EquipOption">
+        select e.equip_id, e.equip_cd, e.equip_nm, e.use_yn
+          from mst_equip e
+         where e.plant_cd = #{plantCd}
+         order by e.use_yn desc, e.equip_cd
+    </select>
+
+    <!-- 행 + 상태(역분개 행 / 역분개됨 / 그대로). 역분개는 원 행 하나에 하나(uq_cms_equip_count_reversal) -->
+    <sql id="cols">
+        select c.count_id, c.equip_id, e.equip_cd, e.equip_nm, c.metric_cd, c.qty, c.entry_method, t.terminal_cd as collector_cd,
+               c.event_id, c.reason, c.occurred_at, c.recorded_at, c.recorded_by, c.reversal_of_id, r.count_id as reversed_by_id,
+               case when c.reversal_of_id is not null then 'REVERSAL' when r.count_id is not null then 'CORRECTED' else 'NORMAL' end as state
+          from cms_equip_count c
+          join mst_equip e on e.equip_id = c.equip_id
+          left join sys_terminal t on t.terminal_id = c.terminal_id
+          left join cms_equip_count r on r.reversal_of_id = c.count_id
+    </sql>
+
+    <!-- 설비를 고르면 ix_cms_equip_count_equip(comp_cd, equip_id, occurred_at) 범위, 공장 전체는 설비 조인 -->
+    <sql id="where">
+         where e.plant_cd = #{plantCd}
+           and c.occurred_at &gt;= #{from} and c.occurred_at &lt; #{to}
+           <if test="equipId != null">and c.equip_id = #{equipId}</if>
+           <if test="metricCd != null">and c.metric_cd = #{metricCd}</if>
+    </sql>
+
+    <!-- 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findPage" resultType="io.smarthappy.module.cms.EquipCountDtos$CountRow">
+        <include refid="cols"/>
+        <include refid="where"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'RECORDED_AT'">c.recorded_at<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'EQUIP_CD'">e.equip_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'METRIC_CD'">c.metric_cd<if test="s.desc"> desc</if></when>
+                <otherwise>c.occurred_at<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         c.count_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*)
+          from cms_equip_count c
+          join mst_equip e on e.equip_id = c.equip_id
+        <include refid="where"/>
+    </select>
+
+    <select id="findOne" resultType="io.smarthappy.module.cms.EquipCountDtos$CountRow" flushCache="true" useCache="false">
+        <include refid="cols"/>
+         where c.count_id = #{countId}
+    </select>
+
+    <!-- 역분개 행 — 시각은 원 행 그대로(그 이벤트를 지운다), recorded_at = 지금. 원 행과 맞는지는 V140 트리거가 다시 본다 -->
+    <select id="insertReversal" resultType="long" flushCache="true">
+        insert into cms_equip_count (comp_cd, equip_id, metric_cd, qty, terminal_id, event_id, reason, occurred_at, entry_method,
+                                     recorded_by, reversal_of_id)
+        values (hb_current_comp(), #{o.equipId}, #{o.metricCd}, #{qty}, null, null, #{reason}, #{occurredAt}, 'CORRECT', #{by},
+                #{o.countId})
+        returning count_id
+    </select>
+
+</mapper>

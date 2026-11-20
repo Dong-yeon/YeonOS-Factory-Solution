@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  연계 현황·실패 재전송 (docs/36 19장). sys_outbox 는 회사별 표(RLS) — 회사 관리자는 자기 회사 것만.
+  기간은 만든 시각 [from, to) (서비스가 회사 시간대 날짜로 계산) — 인덱스 ix_sys_outbox_created. 최신순 하나(PK 로 동순위 정리).
+  재시도·종결은 조건부 UPDATE(status = 'FAIL' and close_apr_id is null) — 동시에 둘이 눌러도 한쪽만 1행.
+  CLOSED_MANUAL 은 릴레이가 집지 않는다(OutboxRelay 집는 조건 NEW·SENDING) — 여기서 바꾸는 상태는 FAIL → NEW·CLOSED_MANUAL 뿐.
+  수동 종결 결재 대기(close_apr_id)는 행을 FAIL 그대로 둔다 — 릴레이는 FAIL 을 집지 않으니 결재 중에 나가지 않는다.
+-->
+<mapper namespace="io.smarthappy.module.admin.OutboxMapper">
+
+    <sql id="where">
+        from sys_outbox o
+        where o.created_at &gt;= #{q.from} and o.created_at &lt; #{q.to}
+        <if test="q.topic != null">and o.topic = #{q.topic}</if>
+        <if test="q.status != null">and o.status = #{q.status}</if>
+        <if test="q.bizLike != null">and o.biz_key like #{q.bizLike} escape '\'</if>
+    </sql>
+
+    <select id="find" resultType="io.smarthappy.module.admin.OutboxDtos$OutboxRow">
+        <!-- 다음 시도는 릴레이가 집는 상태(NEW·SENDING)일 때만 뜻이 있다 — 보냄·실패·종결 행에 시각이 보이면 곧 다시 나가는 것처럼 읽힌다 -->
+        select o.outbox_id, o.created_at, o.topic, o.biz_key, o.status, o.attempts, o.max_attempts,
+               case when o.status in ('NEW', 'SENDING') then o.next_retry_at end as next_retry_at, o.sent_at,
+               left(o.last_error, 200) as last_error, o.retry_cnt, (o.close_apr_id is not null) as close_pending
+        <include refid="where"/>
+        order by o.created_at desc, o.outbox_id desc
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <sql id="detailCols">
+        o.outbox_id, o.message_id::text as message_id, o.created_at, o.created_by, o.topic, o.biz_key, o.status, o.attempts,
+        o.max_attempts, o.next_retry_at, o.sent_at, o.last_error, o.payload::text as payload, o.retry_cnt, o.retried_at,
+        o.retried_by, o.closed_at, o.closed_by, o.close_reason, o.close_apr_id
+    </sql>
+
+    <select id="findOne" resultType="io.smarthappy.module.admin.OutboxDtos$OutboxDetailRow">
+        select <include refid="detailCols"/>, a.status as close_apr_status
+          from sys_outbox o
+          left join apr_request a on a.apr_id = o.close_apr_id
+         where o.outbox_id = #{outboxId}
+    </select>
+
+    <select id="lockOne" resultType="io.smarthappy.module.admin.OutboxDtos$OutboxDetailRow">
+        select <include refid="detailCols"/>
+          from sys_outbox o
+         where o.outbox_id = #{outboxId}
+         for update
+    </select>
+
+    <!-- 재시도: 시도 수를 0 으로 — 상한(max_attempts)은 그대로라 다시 몇 번 실패하면 멈추는지가 처음과 같다(O5).
+         마지막 오류는 다음 결과까지 남긴다(릴레이가 보내면 지운다) -->
+    <update id="retry">
+        update sys_outbox
+           set status = 'NEW', attempts = 0, next_retry_at = now(), locked_at = null,
+               retry_cnt = retry_cnt + 1, retried_at = now(), retried_by = #{by}
+         where outbox_id = #{outboxId} and status = 'FAIL' and close_apr_id is null
+    </update>
+
+    <update id="close">
+        update sys_outbox
+           set status = 'CLOSED_MANUAL', closed_at = now(), closed_by = #{by}, close_reason = #{reason}
+         where outbox_id = #{outboxId} and status = 'FAIL' and close_apr_id is null
+    </update>
+
+    <update id="markClosePending">
+        update sys_outbox
+           set close_apr_id = #{aprId}, close_reason = #{reason}, closed_by = #{by}
+         where outbox_id = #{outboxId} and status = 'FAIL' and close_apr_id is null
+    </update>
+
+    <update id="closeApproved">
+        update sys_outbox
+           set status = 'CLOSED_MANUAL', closed_at = now()
+         where outbox_id = #{outboxId} and status = 'FAIL' and close_apr_id is not null
+    </update>
+
+    <update id="clearClosePending">
+        update sys_outbox
+           set close_apr_id = null, close_reason = null, closed_by = null
+         where outbox_id = #{outboxId} and status = 'FAIL' and close_apr_id is not null
+    </update>
+
+    <!-- ===================== 홈 카드 (FAIL 만 — ix_sys_outbox_fail) ===================== -->
+
+    <!-- 홈 카드 연계 실패(O9·O-10): 손댈 수 있는 FAIL 만 — 종결 결재가 진행 중인 행(close_apr_id)은 재시도·종결이 막혀 있고
+         결재 카드에서 세므로 빼고, 따로 failClosePending 으로 -->
+    <select id="failByTopic" resultType="io.smarthappy.module.admin.OutboxDtos$TopicCount">
+        select topic, count(*) as cnt from sys_outbox where status = 'FAIL' and close_apr_id is null
+         group by topic order by cnt desc, topic
+    </select>
+
+    <select id="failClosePending" resultType="long">
+        select count(*) from sys_outbox where status = 'FAIL' and close_apr_id is not null
+    </select>
+
+    <select id="failTop" resultType="io.smarthappy.module.admin.OutboxDtos$FailTop">
+        select outbox_id, topic, biz_key, left(last_error, 80) as last_error, created_at
+          from sys_outbox
+         where status = 'FAIL' and close_apr_id is null
+         order by created_at, outbox_id
+         limit #{limit}
+    </select>
+</mapper>

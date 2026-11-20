@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- QMS 4M 3차 — 임시 변경 복귀 확인 · 변경 효과 확인 (docs/29_P3 51장). plm_eco 는 읽지 않는다 — ECO 머리는 PLM 계약 EcoLookup -->
+<mapper namespace="io.smarthappy.module.qms.ChangeRecordMapper">
+
+    <sql id="revertCols">
+        revert_id, eco_id, revert_type, reverted_on, note, status, void_reason, voided_at, voided_by, row_ver, created_at, created_by
+    </sql>
+
+    <sql id="effectCols">
+        effect_id, eco_id, result, note, base_date, basis_n, basis_days, status, void_reason, voided_at, voided_by, row_ver, created_at, created_by
+    </sql>
+
+    <select id="findReverts" resultType="io.smarthappy.module.qms.ChangeRecordDtos$RevertRow">
+        select <include refid="revertCols"/> from qms_change_revert where eco_id = #{ecoId} order by revert_id desc
+    </select>
+
+    <select id="findEffects" resultType="io.smarthappy.module.qms.ChangeRecordDtos$EffectRow">
+        select <include refid="effectCols"/> from qms_change_effect where eco_id = #{ecoId} order by effect_id desc
+    </select>
+
+    <select id="findRevert" resultType="io.smarthappy.module.qms.ChangeRecordDtos$RevertRow">
+        select <include refid="revertCols"/> from qms_change_revert where revert_id = #{id}
+    </select>
+
+    <select id="findEffect" resultType="io.smarthappy.module.qms.ChangeRecordDtos$EffectRow">
+        select <include refid="effectCols"/> from qms_change_effect where effect_id = #{id}
+    </select>
+
+    <select id="insertRevert" resultType="long" flushCache="true">
+        insert into qms_change_revert (comp_cd, eco_id, revert_type, reverted_on, note, created_by, updated_by)
+        values (hb_current_comp(), #{ecoId}, #{type}, #{on}, #{note}, #{by}, #{by})
+        returning revert_id
+    </select>
+
+    <select id="insertEffect" resultType="long" flushCache="true">
+        insert into qms_change_effect (comp_cd, eco_id, result, note, base_date, basis_n, basis_days, created_by, updated_by)
+        values (hb_current_comp(), #{ecoId}, #{result}, #{note}, #{base}, #{n}, #{days}, #{by}, #{by})
+        returning effect_id
+    </select>
+
+    <update id="voidRevert">
+        update qms_change_revert set status = 'VOID', void_reason = #{reason}, voided_at = now(), voided_by = #{by},
+                                     row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where revert_id = #{id} and row_ver = #{rowVer} and status = 'ACTIVE'
+    </update>
+
+    <update id="voidEffect">
+        update qms_change_effect set status = 'VOID', void_reason = #{reason}, voided_at = now(), voided_by = #{by},
+                                     row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where effect_id = #{id} and row_ver = #{rowVer} and status = 'ACTIVE'
+    </update>
+
+    <select id="revertCandidates" resultType="long">
+        select c.eco_id from qms_change c
+         where c.revert_cond is not null
+           and not exists (select 1 from qms_change_revert r where r.eco_id = c.eco_id and r.status = 'ACTIVE')
+         order by c.eco_id
+         limit #{limit}
+    </select>
+
+    <!-- 영향 행 중 특성(검사계획 행은 비교하지 않는다 — 51.3 EF-2) -->
+    <select id="effectChars" resultType="io.smarthappy.module.qms.ChangeRecordDtos$EffectChar">
+        select x.line_no, ch.char_id, coalesce(i.item_cd, p.proc_cd) || '-' || ch.char_no as ref_label, ch.char_nm, ch.data_type,
+               ch.lsl, ch.usl, ch.scale, ch.unit_nm, ch.item_id, ch.proc_id
+          from qms_change_char x
+          join qms_char ch on ch.char_id = x.char_id
+          left join mst_item i on i.item_id = ch.item_id
+          left join mst_proc p on p.proc_id = ch.proc_id
+         where x.eco_id = #{ecoId}
+         order by x.line_no
+    </select>
+
+    <!-- 살아 있는 측정값만(무효 행·무효된 원래 행 제외 — SPC 와 같은 조건), 판정 확정 검사만. 기준 시각 정각은 "뒤" -->
+    <select id="meas" resultType="io.smarthappy.module.qms.ChangeRecordDtos$MeasPoint">
+        select m.value, m.ok_yn
+          from qms_insp_meas m
+          join qms_insp_line x on x.insp_line_id = m.insp_line_id and x.char_id = #{charId}
+          join qms_insp h on h.insp_id = x.insp_id and h.status = 'JUDGED'
+         where m.void_of_id is null
+           and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+           <choose>
+               <when test="dataType == 'ATTRIBUTE'">and m.ok_yn is not null</when>
+               <otherwise>and m.value is not null</otherwise>
+           </choose>
+           <if test="itemIds != null and !itemIds.isEmpty()">and h.item_id in
+               <foreach collection="itemIds" item="x" open="(" separator="," close=")">#{x}</foreach></if>
+           <choose>
+               <when test="after">and m.occurred_at &gt;= #{base} order by m.occurred_at, m.meas_id</when>
+               <otherwise>and m.occurred_at &lt; #{base} order by m.occurred_at desc, m.meas_id desc</otherwise>
+           </choose>
+         limit #{n}
+    </select>
+
+    <!-- 품목별 [from, to): 판정 확정 검사 수·NG 수(검사 발생 시각), 부적합(취소 제외) 건수·수량(부적합 발생 시각) -->
+    <select id="itemCounts" resultType="io.smarthappy.module.qms.ChangeRecordDtos$ItemCounts">
+        select i.item_id, i.item_cd, i.item_nm, i.unit_cd,
+               (select count(*) from qms_insp h where h.item_id = i.item_id and h.status = 'JUDGED'
+                   and h.occurred_at &gt;= #{from} and h.occurred_at &lt; #{to}) as insp_cnt,
+               (select count(*) from qms_insp h where h.item_id = i.item_id and h.status = 'JUDGED' and h.result = 'NG'
+                   and h.occurred_at &gt;= #{from} and h.occurred_at &lt; #{to}) as insp_ng,
+               (select count(*) from qms_ncr n where n.item_id = i.item_id and n.status &lt;&gt; 'CANCELLED'
+                   and n.occurred_at &gt;= #{from} and n.occurred_at &lt; #{to}) as ncr_cnt,
+               (select coalesce(sum(n.nc_qty), 0) from qms_ncr n where n.item_id = i.item_id and n.status &lt;&gt; 'CANCELLED'
+                   and n.occurred_at &gt;= #{from} and n.occurred_at &lt; #{to}) as ncr_qty
+          from mst_item i
+         where i.item_id in <foreach collection="itemIds" item="x" open="(" separator="," close=")">#{x}</foreach>
+         order by i.item_cd
+    </select>
+</mapper>

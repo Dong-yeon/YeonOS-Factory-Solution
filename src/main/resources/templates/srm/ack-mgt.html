@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  납기 회신 (srm-ack) — SRM 1부 S5 (docs/31 4.5, D4). 협력사 포털이 없어 회신은 내부에서 대신 넣는다(또는 엑셀 회신 올리기).
+  발주 행마다 약속 납기·수량(분할 줄), 저장할 때마다 새 회신 묶음(순번 + 1) — 이전 묶음은 그대로, 가장 최신이 유효.
+  발주를 개정하면 이전 개정의 회신은 "이전 개정" 으로 남고 다시 회신을 받아야 한다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">납기 회신</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="srm-po-status" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{srm.ack.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,thisWeek,last7,last30,thisMonth,lastMonth" data-default="last30" data-max-days="366"></div>
+    <fieldset class="hb-seg">
+        <legend th:text="#{srm.ack.state}">회신</legend>
+        <label><input type="radio" name="state" value="OPEN" checked><span th:text="#{srm.ack.state.OPEN}">진행 중</span></label>
+        <label><input type="radio" name="state" value="NO_ACK"><span th:text="#{srm.ack.state.NO_ACK}">회신 없음</span></label>
+        <label><input type="radio" name="state" value="ACKED"><span th:text="#{srm.ack.state.ACKED}">회신 받음</span></label>
+        <label><input type="radio" name="state" value="ALL"><span th:text="#{common.all}">전체</span></label>
+    </fieldset>
+    <label><span th:text="#{srm.ack.keyword}">번호·협력사</span><input name="keyword" maxlength="100"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{import.button}">엑셀 올리기</button>
+        </div>
+        <div id="ackGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{srm.ack.select}">왼쪽에서 발주를 고르세요.</p>
+        <p id="stateLine" class="hb-wide" role="status"></p>
+
+        <section class="hb-sub" id="entryBox" hidden>
+            <h2 th:text="#{srm.ack.entry}">회신 입력</h2>
+            <form id="ackForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{srm.ack.col.ackByNm}">회신자</span><input data-field="ackByNm" maxlength="100"></label>
+                <label><span th:text="#{srm.ack.col.ackOn}">회신일</span><input data-field="ackOn" type="date" data-help-key="srm-ack.ackOn"></label>
+                <label class="hb-wide"><span th:text="#{srm.ack.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+            </form>
+            <div id="linesErrorBox" hidden><p id="linesError" class="hb-field-error"></p></div>
+            <div id="lines"></div>
+            <div class="hb-toolbar">
+                <button type="button" id="saveBtn" th:text="#{srm.ack.save}">회신 저장</button>
+            </div>
+            <!-- 거절 기록은 저장 줄과 떨어진 자리(docs/40 P1 ④), 사유는 누를 때 대화상자로 받는다 -->
+            <div class="hb-toolbar">
+                <button type="button" id="rejectBtn" class="hb-btn-danger-outline" th:text="#{srm.ack.reject}">거절로 기록</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="poLinesBox" hidden>
+            <h2 th:text="#{srm.ack.poLines}">발주 행 · 유효 회신</h2>
+            <table class="hb-cmp-table" id="poLines">
+                <thead><tr>
+                    <th th:text="#{srm.ack.col.lineNo}">행</th>
+                    <th th:text="#{srm.ack.col.item}">품목</th>
+                    <th th:text="#{srm.ack.col.openQty}">열린 수량</th>
+                    <th th:text="#{srm.ack.col.dueDate}">요구 납기</th>
+                    <th th:text="#{srm.ack.col.promised}">약속</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+
+        <section class="hb-sub" id="histBox" hidden>
+            <h2 th:text="#{srm.ack.history}">회신 이력</h2>
+            <ul id="histList"></ul>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/srm/srm-ui.js}"></script>
+<script th:src="@{/js/views/srm/ack-mgt.js}"></script>
+</body>
+</html>

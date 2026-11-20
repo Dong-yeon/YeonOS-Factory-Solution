@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- P3 QMS 2부 Q8b 봉쇄 (docs/29_P3 12.8) — LOT 보류·해제는 서비스가 MES LotHoldPort 로(lot_id 오름차순) -->
+<mapper namespace="io.smarthappy.module.qms.ContainMapper">
+
+    <sql id="cols">
+        c.contain_id, c.contain_no, c.item_id, i.item_cd, i.item_nm, c.ncr_id, n.ncr_no, c.from_date, c.to_date, c.reason, c.status, c.lot_cnt,
+        (select count(*) from qms_contain_lot x where x.contain_id = c.contain_id and x.released_at is null) as held_cnt,
+        c.closed_at, c.created_at, c.created_by, c.row_ver
+    </sql>
+    <sql id="from">
+        from qms_contain c
+        join mst_item i on i.item_id = c.item_id
+        left join qms_ncr n on n.ncr_id = c.ncr_id
+    </sql>
+
+    <!-- 목록·그리드가 같은 조건(UI 단계 3, 결정 #45) -->
+    <sql id="listWhere">
+        <where>
+            <if test="keywordLike != null">and (c.contain_no ilike #{keywordLike} escape '\' or i.item_cd ilike #{keywordLike} escape '\'
+                or n.ncr_no ilike #{keywordLike} escape '\' or c.reason ilike #{keywordLike} escape '\')</if>
+            <if test="status != null">and c.status = #{status}</if>
+        </where>
+    </sql>
+
+    <select id="findList" resultType="io.smarthappy.module.qms.ContainDtos$ContainRow">
+        select <include refid="cols"/> <include refid="from"/> <include refid="listWhere"/>
+        order by c.created_at desc, c.contain_id desc
+        limit #{limit}
+    </select>
+
+    <!-- 그리드: 정렬은 허용 enum 키만(choose) + 마지막 PK -->
+    <select id="findPage" resultType="io.smarthappy.module.qms.ContainDtos$ContainRow">
+        select <include refid="cols"/> <include refid="from"/> <include refid="listWhere"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CONTAIN_NO'">c.contain_no</when>
+                <when test="s.key == 'ITEM_CD'">i.item_cd</when>
+                <when test="s.key == 'FROM_DATE'">c.from_date</when>
+                <when test="s.key == 'STATUS'">c.status</when>
+                <otherwise>c.created_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        c.contain_id desc
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countList" resultType="long">
+        select count(*) <include refid="from"/> <include refid="listWhere"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.ContainDtos$ContainRow">
+        select <include refid="cols"/> <include refid="from"/> where c.contain_id = #{id}
+    </select>
+
+    <select id="findLots" resultType="io.smarthappy.module.qms.ContainDtos$ContainLotRow">
+        select x.contain_lot_id, x.lot_id, l.lot_no, l.qty_created, l.unit_cd, l.occurred_at, x.released_at, x.released_by, x.release_reason
+          from qms_contain_lot x join lot_master l on l.lot_id = x.lot_id
+         where x.contain_id = #{id}
+         order by l.occurred_at, x.lot_id
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.qms.ContainDtos$ItemRef">
+        select item_id, item_cd, item_nm from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="findNcrByNo" resultType="io.smarthappy.module.qms.ContainDtos$NcrRef">
+        select ncr_id, item_id from qms_ncr where ncr_no = #{ncrNo}
+    </select>
+
+    <select id="findCandidates" resultType="io.smarthappy.module.qms.ContainDtos$LotRow">
+        select lot_id, lot_no, item_id, origin, qty_created, unit_cd, occurred_at
+          from lot_master
+         where item_id = #{itemId} and occurred_at &gt;= #{from} and occurred_at &lt; #{to}
+         order by occurred_at, lot_id
+         limit #{limit}
+    </select>
+
+    <select id="findLotsByIds" resultType="io.smarthappy.module.qms.ContainDtos$LotRow">
+        select lot_id, lot_no, item_id, origin, qty_created, unit_cd, occurred_at
+          from lot_master
+         where lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="nextId" resultType="long">
+        select nextval(pg_get_serial_sequence('qms_contain', 'contain_id'))
+    </select>
+
+    <insert id="insert">
+        insert into qms_contain (contain_id, comp_cd, contain_no, item_id, ncr_id, from_date, to_date, reason, lot_cnt, created_by, updated_by)
+        values (#{id}, hb_current_comp(), #{no}, #{itemId}, #{ncrId}, #{from}, #{to}, #{reason}, #{lotCnt}, #{by}, #{by})
+    </insert>
+
+    <insert id="insertLot">
+        insert into qms_contain_lot (comp_cd, contain_id, lot_id, created_by) values (hb_current_comp(), #{id}, #{lotId}, #{by})
+    </insert>
+
+    <update id="releaseLot">
+        update qms_contain_lot set released_at = now(), released_by = #{by}, release_reason = #{reason}
+         where contain_id = #{id} and lot_id = #{lotId} and released_at is null
+    </update>
+
+    <select id="lockContain" resultType="java.lang.Long" flushCache="true" useCache="false">
+        select contain_id from qms_contain where contain_id = #{id} for update
+    </select>
+
+    <select id="heldCount" resultType="int" flushCache="true" useCache="false">
+        select count(*) from qms_contain_lot where contain_id = #{id} and released_at is null
+    </select>
+
+    <update id="close">
+        update qms_contain set status = 'CLOSED', closed_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where contain_id = #{id} and status = 'OPEN'
+    </update>
+</mapper>

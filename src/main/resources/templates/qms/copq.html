@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  COPQ 품질 비용 (qms-copq) — docs/29_P3 29장 1단계. 회계 원장 아님(관리용 추정).
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 책임자(WEB), 월 마감 뒤 한 번. 직접 치는 값 = 조회 달 범위·수동 비용 행(월·구분·항목·금액·비고).
+  서버가 채우는 값 = 종결 NCR 처리(폐기·재작업·선별) × 그때 품목 표준단가. 단가 없음은 금액 빈칸 + 건수(0원으로 세지 않음).
+-->
+<body class="hb-page hb-page-scroll" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">COPQ 품질 비용</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{qms.copq.fromMonth}">시작 달</span>
+        <input type="month" name="fromMonth" min="2000-01" max="2999-12" required data-help-key="qms-copq.fromMonth"></label>
+    <label><span th:text="#{qms.copq.toMonth}">끝 달</span>
+        <input type="month" name="toMonth" min="2000-01" max="2999-12" required data-help-key="qms-copq.toMonth"></label>
+    <div class="hb-sp-actions">
+        <button type="button" id="exportBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" th:text="#{qms.copq.excel}">엑셀</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<p class="hb-qms-copq-note" role="note" th:text="#{qms.copq.notLedger}">회계 원장 아님(관리용 추정) — 금액 = 수량 × 그때 품목 표준단가, 단가 없는 줄은 금액을 비우고 건수만 셉니다.</p>
+
+<section class="hb-sub">
+    <h2 th:text="#{qms.copq.monthly}">월별 합계</h2>
+    <div class="hb-qms-copq-scroll">
+        <table class="hb-table" id="monthTable">
+            <thead><tr>
+                <th th:text="#{qms.copq.col.month}">달</th>
+                <th class="hb-num" th:text="#{code.QMS_COPQ_CAT.PREVENTION}">예방</th>
+                <th class="hb-num" th:text="#{code.QMS_COPQ_CAT.APPRAISAL}">평가</th>
+                <th class="hb-num" th:text="#{code.QMS_COPQ_CAT.INTERNAL}">내부 실패</th>
+                <th class="hb-num" th:text="#{code.QMS_COPQ_CAT.EXTERNAL}">외부 실패</th>
+                <th class="hb-num" th:text="#{qms.copq.col.total}">합계</th>
+                <th class="hb-num" th:text="#{qms.copq.col.unpriced}">단가 없음</th>
+            </tr></thead>
+            <tbody></tbody>
+            <tfoot></tfoot>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub">
+    <h2 th:text="#{qms.copq.lines}">원장 내역 (종결 NCR 처리·생산 실적 불량)</h2>
+    <p class="hb-muted" th:text="#{qms.copq.linesHint}">특채(그대로 사용)·반품은 비용으로 세지 않습니다. 고객 클레임 NCR 은 외부 실패입니다.</p>
+    <p class="hb-muted" th:text="#{qms.copq.prdHint}">생산 실적 불량은 그 달 말 표준단가로 셉니다. 실적 정정은 정정한 달에 반영되어 음수로 보일 수 있습니다.</p>
+    <p class="hb-qms-copq-note" role="note" th:text="#{qms.copq.dupNote}">같은 불량이 두 출처(NCR 처리·생산 실적)에 함께 보일 수 있습니다 — 합계가 겹칠 수 있습니다.</p>
+    <div class="hb-qms-copq-scroll">
+        <table class="hb-table" id="lineTable">
+            <thead><tr>
+                <th th:text="#{qms.copq.col.month}">달</th>
+                <th th:text="#{qms.copq.col.category}">구분</th>
+                <th th:text="#{qms.copq.col.source}">출처</th>
+                <th th:text="#{qms.copq.col.item}">품목</th>
+                <th class="hb-num" th:text="#{qms.copq.col.qty}">수량</th>
+                <th class="hb-num" th:text="#{qms.copq.col.price}">표준단가</th>
+                <th class="hb-num" th:text="#{qms.copq.col.amount}">금액</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub">
+    <h2 th:text="#{qms.copq.costs}">수동 비용</h2>
+    <p class="hb-muted" th:text="#{qms.copq.costsHint}">원장에서 뽑지 못하는 비용(교육·검사 인건비·클레임 배상 등)을 달마다 적습니다.</p>
+    <form id="costForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+        <label><span th:text="#{qms.copq.col.month}">달</span>
+            <input type="month" data-field="costMonth" min="2000-01" max="2999-12" required data-help-key="qms-copq.costMonth"></label>
+        <label><span th:text="#{qms.copq.col.category}">구분</span>
+            <select data-field="category" data-hb="select" data-code="QMS_COPQ_CAT" data-blank="select" required></select></label>
+        <label class="hb-wide"><span th:text="#{qms.copq.col.costItem}">항목</span>
+            <input data-field="costItem" maxlength="100" required data-help-key="qms-copq.costItem"></label>
+        <label><span th:text="#{qms.copq.col.amount}">금액</span>
+            <input data-field="amount" data-hb="number" data-scale="2" data-pad="false" data-min="0" data-max="9999999999999999.99" required
+                   data-help-key="qms-copq.amount"></label>
+        <label class="hb-wide"><span th:text="#{qms.copq.col.note}">비고</span>
+            <input data-field="note" maxlength="500"></label>
+    </form>
+    <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+        <span id="costMode" class="hb-muted" th:text="#{qms.copq.creating}">새 비용 행</span>
+        <button type="button" id="costNewBtn" class="hb-btn-secondary" th:text="#{common.new}">신규</button>
+        <button type="button" id="costSaveBtn" th:text="#{common.save}">저장</button>
+    </div>
+    <div class="hb-qms-copq-scroll">
+        <table class="hb-table" id="costTable">
+            <thead><tr>
+                <th th:text="#{qms.copq.col.month}">달</th>
+                <th th:text="#{qms.copq.col.category}">구분</th>
+                <th th:text="#{qms.copq.col.costItem}">항목</th>
+                <th class="hb-num" th:text="#{qms.copq.col.amount}">금액</th>
+                <th th:text="#{qms.copq.col.note}">비고</th>
+                <th th:text="#{qms.copq.col.actions}">작업</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/views/qms/copq.js}"></script>
+</body>
+</html>

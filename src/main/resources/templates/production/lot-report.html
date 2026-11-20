@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  LOT 역추적 보고서 (prd-lot-report) — MES P2 7b (docs/25 4.10, 06 M2 감사 대응). LOT 번호 → 머리(LOT·잔량·보류·입고) + 어디서 왔나 +
+  어디로 갔나 + 생산 이력 + 공정 조건 + 완료판정 + 설비 상태 + 입고. [인쇄] = 브라우저 인쇄(PDF 저장, D17). 조회만.
+-->
+<body data-table-menu="" class="hb-page hb-page-app hb-page-report" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">LOT 역추적 보고서</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{prdRpt.lotNo}">LOT 번호</span>
+        <input name="lotNo" maxlength="60" required data-help-key="prd-lot-report.lotNo"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-rpt" id="report">
+    <div class="hb-toolbar hb-rpt-tools">
+        <button type="button" id="printBtn" class="hb-btn-secondary" disabled th:text="#{prdRpt.print}">인쇄</button>
+    </div>
+    <p id="empty" class="hb-muted" th:text="#{prdRpt.empty}">LOT 번호를 넣고 조회하세요(라벨 스캔 가능).</p>
+    <section class="hb-rpt-sec" id="headSec" hidden>
+        <h2 id="rptTitle"></h2>
+        <dl class="hb-info hb-rpt-head" id="head"></dl>
+        <p class="hb-muted" id="generated"></p>
+    </section>
+    <section class="hb-rpt-sec" hidden data-sec="back"><h2 th:text="#{prdRpt.back}">어디서 왔나 (역추적)</h2><div class="hb-rpt-body"></div></section>
+    <section class="hb-rpt-sec" hidden data-sec="production"><h2 th:text="#{prdRpt.production}">생산 이력</h2><div class="hb-rpt-body"></div></section>
+    <section class="hb-rpt-sec" hidden data-sec="params"><h2 th:text="#{prdRpt.params}">공정 조건 (파라미터 실측)</h2><div class="hb-rpt-body"></div></section>
+    <section class="hb-rpt-sec" hidden data-sec="closes"><h2 th:text="#{prdRpt.closes}">공정 완료판정</h2><div class="hb-rpt-body"></div></section>
+    <section class="hb-rpt-sec" hidden data-sec="states"><h2 th:text="#{prdRpt.states}">설비 상태 구간</h2><div class="hb-rpt-body"></div></section>
+    <section class="hb-rpt-sec" hidden data-sec="receipts"><h2 th:text="#{prdRpt.receipts}">입고</h2><div class="hb-rpt-body"></div></section>
+    <section class="hb-rpt-sec" hidden data-sec="fwd"><h2 th:text="#{prdRpt.fwd}">어디로 갔나 (정추적)</h2><div class="hb-rpt-body"></div></section>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/production/lot-report.js}"></script>
+</body>
+</html>

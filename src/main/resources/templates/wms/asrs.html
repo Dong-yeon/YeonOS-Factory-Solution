@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  자동창고 (wms-asrs) — 장비 연동 E4 (docs/65 23·25장). 보기: 요청(입고·출고 요청·보내기·긴급·라인·사건) / 용기(내용 정의·사건) / 대사(차이·바로 조정).
+  사용성 체크(docs/11 4.3): 주 사용자 = 창고 담당(WEB·PDA). 용기에 담을 내용을 정의한 뒤 입고 요청 → WES 가 랙에 넣으면 원장 반영.
+  직접 치는 값 = 용기 코드·칸·품번·LOT·수량. 판정(원장 반영·격리·늦은 상태)은 서버, 랙 안 위치는 WES 주인(Q2).
+  예외 = 투입구 재고 부족(409), 요청이 걸린 용기 수정(409), 보낸 뒤 취소(409 — WES 가 주인), 출고 수량 부족(409).
+  긴급 표시·대사 조정은 APPROVE(Q-E4-1·4) — 조정 원장은 재고 조정 서비스 경유.
+  자동창고·용기 유형 마스터는 이번 조각에서 API 만(화면은 다음 조각).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/wms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">자동창고</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <fieldset class="hb-seg">
+        <legend th:text="#{wmsAsrs.view}">보기</legend>
+        <label><input type="radio" name="tab" value="REQ" checked><span th:text="#{wmsAsrs.tabReq}">요청</span></label>
+        <label><input type="radio" name="tab" value="CTR"><span th:text="#{wmsAsrs.tabCtr}">용기</span></label>
+        <label><input type="radio" name="tab" value="RCN"><span th:text="#{wmsAsrs.tabRecon}">대사</span></label>
+    </fieldset>
+    <label><span th:text="#{wmsAsrs.asrs}">자동창고</span><select name="asrsId" id="asrsSel"></select></label>
+    <label><span th:text="#{wmsAsrs.ctrStatus}">용기 상태</span>
+        <select name="status" data-hb="select" data-code="WMS_CTR_STATUS" data-blank="all"></select></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newInBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{wmsAsrs.newIn}">입고 요청</button>
+            <button type="button" id="newOutBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{wmsAsrs.newOut}">출고 요청</button>
+            <button type="button" id="urgentStatBtn" class="hb-btn-secondary" th:text="#{wmsAsrs.urgentStats}">긴급 건수</button>
+        </div>
+        <div id="reqWrap" class="hb-replace-host">
+            <table class="hb-cmp-table">
+                <thead><tr>
+                    <th th:text="#{wmsAsrs.col.req}">요청</th>
+                    <th th:text="#{wmsAsrs.col.type}">유형</th>
+                    <th th:text="#{wmsAsrs.col.send}">보내기</th>
+                    <th th:text="#{wmsAsrs.col.progress}">진행</th>
+                    <th class="hb-num" th:text="#{wmsAsrs.col.lines}">라인</th>
+                    <th th:text="#{wmsAsrs.col.created}">만든 시각</th>
+                </tr></thead>
+                <tbody id="reqRows"></tbody>
+            </table>
+        </div>
+        <div id="rcnWrap" class="hb-replace-host" hidden>
+            <table class="hb-cmp-table">
+                <thead><tr>
+                    <th th:text="#{wmsAsrs.col.recon}">대사</th>
+                    <th th:text="#{wmsAsrs.asrs}">자동창고</th>
+                    <th th:text="#{wmsAsrs.col.snap}">WES 스냅숏</th>
+                    <th class="hb-num" th:text="#{wmsAsrs.col.ctrCnt}">용기</th>
+                    <th class="hb-num" th:text="#{wmsAsrs.col.skipped}">건너뜀</th>
+                    <th class="hb-num" th:text="#{wmsAsrs.col.diffOpen}">차이(열림)</th>
+                    <th th:text="#{wmsAsrs.col.finished}">끝난 시각</th>
+                </tr></thead>
+                <tbody id="rcnRows"></tbody>
+            </table>
+        </div>
+        <div id="ctrWrap" class="hb-replace-host" hidden>
+            <table class="hb-cmp-table">
+                <thead><tr>
+                    <th th:text="#{wmsAsrs.col.ctr}">용기</th>
+                    <th th:text="#{wmsAsrs.col.ctrType}">유형</th>
+                    <th th:text="#{wmsAsrs.ctrStatus}">용기 상태</th>
+                    <th class="hb-num" th:text="#{wmsAsrs.col.contentRows}">내용</th>
+                    <th th:text="#{wmsAsrs.col.mixed}">LOT 섞임</th>
+                </tr></thead>
+                <tbody id="ctrRows"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="mode" class="hb-muted"></p>
+
+        <!-- 입고 요청 만들기 -->
+        <form id="inForm" class="hb-form" autocomplete="off" hidden>
+            <label class="hb-wide"><span th:text="#{wmsAsrs.ctrCds}">용기 코드(줄마다 하나)</span>
+                <textarea data-field="ctrCds" rows="5" data-help-key="wms-asrs.ctrCds"></textarea></label>
+            <label class="hb-wide"><span th:text="#{wmsLabel.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+            <div class="hb-wide hb-toolbar">
+                <button type="button" id="inSaveBtn" th:text="#{common.save}">저장</button>
+            </div>
+        </form>
+
+        <!-- 출고 요청 만들기 -->
+        <form id="outForm" class="hb-form" autocomplete="off" hidden>
+            <label class="hb-wide"><span th:text="#{wmsAsrs.outLines}">라인(줄마다 품번,LOT,수량)</span>
+                <textarea data-field="lines" rows="5" spellcheck="false" data-help-key="wms-asrs.outLines"></textarea></label>
+            <label class="hb-wide"><span th:text="#{wmsLabel.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+            <div class="hb-wide hb-toolbar">
+                <button type="button" id="outSaveBtn" th:text="#{common.save}">저장</button>
+            </div>
+        </form>
+
+        <!-- 요청 상세 -->
+        <div id="reqPane" hidden>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="sendBtn" th:text="#{wmsAsrs.send}">보내기</button>
+                <button type="button" id="cancelBtn" class="hb-btn-danger-outline" th:text="#{wmsAsrs.cancel}">취소</button>
+            </div>
+            <div class="hb-toolbar" th:if="${actions.contains('APPROVE')}">
+                <button type="button" id="urgentBtn" class="hb-btn-secondary" th:text="#{wmsAsrs.urgent}">긴급 표시</button>
+            </div>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table">
+                    <thead><tr>
+                        <th class="hb-num">#</th>
+                        <th th:text="#{wmsAsrs.col.ctrOrItem}">용기·품목</th>
+                        <th class="hb-num" th:text="#{wmsAsrs.col.qty}">수량</th>
+                        <th th:text="#{wmsAsrs.col.lineStatus}">라인 상태</th>
+                        <th th:text="#{wmsAsrs.col.wes}">WES</th>
+                        <th class="hb-num" th:text="#{wmsAsrs.col.doneQty}">반영 수량</th>
+                    </tr></thead>
+                    <tbody id="lineRows"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 용기 상세: 내용 정의 -->
+        <form id="ctrForm" class="hb-form" autocomplete="off" hidden>
+            <label class="hb-wide"><span th:text="#{wmsAsrs.contents}">내용(줄마다 칸,품번,LOT,수량)</span>
+                <textarea data-field="contents" rows="6" spellcheck="false" data-help-key="wms-asrs.contents"></textarea></label>
+            <div class="hb-wide hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="ctrSaveBtn" th:text="#{wmsAsrs.defineContents}">내용 저장</button>
+            </div>
+        </form>
+
+        <!-- 대사 상세: 차이 줄 -->
+        <div id="rcnPane" hidden>
+            <div class="hb-toolbar" th:if="${actions.contains('APPROVE')}">
+                <button type="button" id="adjustBtn" th:text="#{wmsAsrs.adjust}">바로 조정</button>
+                <button type="button" id="dismissBtn" class="hb-btn-secondary" th:text="#{wmsAsrs.dismiss}">우리 쪽이 맞음</button>
+            </div>
+            <p id="diffPick" class="hb-muted"></p>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table">
+                    <thead><tr>
+                        <th th:text="#{wmsAsrs.col.ctr}">용기</th>
+                        <th class="hb-num" th:text="#{wmsAsrs.col.slot}">칸</th>
+                        <th th:text="#{wmsAsrs.col.ctrOrItem}">용기·품목</th>
+                        <th class="hb-num" th:text="#{wmsAsrs.col.ourQty}">우리</th>
+                        <th class="hb-num" th:text="#{wmsAsrs.col.wesQty}">WES</th>
+                        <th th:text="#{wmsAsrs.col.kind}">종류</th>
+                        <th th:text="#{wmsAsrs.col.diffStatus}">처리</th>
+                    </tr></thead>
+                    <tbody id="diffRows"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <details id="eventBox" hidden>
+            <summary th:text="#{wmsAsrs.events}">사건</summary>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table">
+                    <thead><tr>
+                        <th th:text="#{wmsJob.ev.at}">시각</th>
+                        <th th:text="#{wmsJob.ev.event}">사건</th>
+                        <th th:text="#{wmsAsrs.col.wes}">WES</th>
+                        <th th:text="#{wmsJob.ev.reason}">사유</th>
+                    </tr></thead>
+                    <tbody id="eventRows"></tbody>
+                </table>
+            </div>
+        </details>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/wms/asrs.js}"></script>
+</body>
+</html>

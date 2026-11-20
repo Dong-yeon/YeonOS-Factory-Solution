@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  BOM 전개 조회 (mst-bom-tree) — P1 3b (docs/18 Q1~Q3·Q6). 조회 전용.
+  사용성 체크(docs/11 4.3): 주 사용자 = 생산관리·구매(자재 준비량), 생산기술(구조 확인). 직접 치는 값 = 품목코드·기준일·생산 수량.
+  보기 = 단계별(바로 아래) / 다단(들여쓰기, 펼침·접기) / 합산(말단 자재별 총 필요량 — 자재 준비 근거).
+  예외 = 기준일에 확정 BOM 없음(오류 문구), 환산 없는 단위(행 표시), 레벨·행 상한 초과(오류 — 잘린 결과를 보이지 않음).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">BOM 전개 조회</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{mstBom.col.itemCd}">모품목 코드</span>
+        <input name="itemCd" maxlength="40" required data-help-key="mst-bom-tree.itemCd"></label>
+    <label><span th:text="#{bomTree.date}">기준일</span>
+        <input name="date" type="date" data-help-key="mst-bom-tree.date"></label>
+    <label><span th:text="#{bomTree.qty}">생산 수량</span>
+        <input name="qty" data-hb="number" data-scale="6" data-pad="false" data-min="0.000001" data-max="999999999999"
+               data-default="1" value="1" data-help-key="mst-bom-tree.qty"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{bomTree.view}">보기</legend>
+        <label><input type="radio" name="view" value="SINGLE"><span th:text="#{bomTree.view.SINGLE}">단계별</span></label>
+        <label><input type="radio" name="view" value="MULTI" checked><span th:text="#{bomTree.view.MULTI}">다단</span></label>
+        <label><input type="radio" name="view" value="SUM"><span th:text="#{bomTree.view.SUM}">합산</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-toolbar hb-tree-tools">
+    <span id="summary" class="hb-muted hb-tree-summary"></span>
+    <button type="button" id="expandBtn" class="hb-btn-secondary" th:text="#{bomTree.expandAll}">모두 펼치기</button>
+    <button type="button" id="collapseBtn" class="hb-btn-secondary" th:text="#{bomTree.collapse}">1레벨만</button>
+    <button type="button" id="toWhereBtn" class="hb-btn-secondary" th:title="#{bomUi.toWhere.hint}" th:text="#{bomUi.toWhere}">역전개</button>
+    <button type="button" id="toMgtBtn" class="hb-btn-secondary" th:title="#{bomUi.toMgt.hint}" th:text="#{bomUi.toMgt}">BOM 관리</button>
+    <button type="button" id="excelBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" th:text="#{bomTree.excel}">엑셀</button>
+</div>
+<div id="tree" class="hb-grid-host"></div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.tree.js}"></script>
+<script th:src="@{/js/views/master/bom-ui.js}"></script>
+<script th:src="@{/js/views/master/bom-tree.js}"></script>
+</body>
+</html>

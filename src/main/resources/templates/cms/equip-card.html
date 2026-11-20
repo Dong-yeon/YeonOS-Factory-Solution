@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설비 이력 카드 (cms-equip-card) — CMS C17 (docs/33 13.5). 조회·엑셀만.
+  설비 한 대 × 기간(공장 현지 날짜, 최대 1년) → 요약(프로필·설치 자산·작업지시/점검/예비품 집계·카운터) + 이력 한 표.
+  `?equip=설비코드` 로 설비를 고정해 연다(설비 프로필 상세의 "이력 카드 열기").
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설비 이력 카드</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.card.equipFind}">설비 찾기</span><input id="equipKw" maxlength="100" th:placeholder="#{cms.card.equipFindHint}"></label>
+    <label><span th:text="#{cms.card.equip}">설비</span><select name="equipCd" id="equipSel" required data-help-key="cms-equip-card.equip"></select></label>
+    <label><span th:text="#{cms.card.from}">시작일</span><input name="from" id="fromIn" type="date" required></label>
+    <label><span th:text="#{cms.card.to}">종료일</span><input name="to" id="toIn" type="date" required></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.card.col.kind}">종류</legend>
+        <label><input type="radio" name="kind" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="kind" value="MWO"><span th:text="#{code.CMS_HIST_KIND.MWO}">작업지시</span></label>
+        <label><input type="radio" name="kind" value="CHK"><span th:text="#{code.CMS_HIST_KIND.CHK}">점검</span></label>
+        <label><input type="radio" name="kind" value="PART"><span th:text="#{code.CMS_HIST_KIND.PART}">예비품</span></label>
+        <label><input type="radio" name="kind" value="RESET"><span th:text="#{code.CMS_HIST_KIND.RESET}">카운터 리셋</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<p id="pick" class="hb-muted" th:text="#{cms.card.pick}">설비와 기간을 고르고 조회하세요.</p>
+
+<section class="hb-sub" id="summary" hidden aria-labelledby="sumTitle">
+    <h2 id="sumTitle"></h2>
+    <p id="profileLine" class="hb-muted"></p>
+    <div class="hb-replace-host">
+        <table class="hb-cmp-table" id="counts">
+            <thead><tr>
+                <th th:text="#{cms.card.sum.mwo}">작업지시</th>
+                <th class="hb-num" th:text="#{cms.card.sum.bm}" data-help-key="cms-equip-card.bm">고장</th>
+                <th class="hb-num" th:text="#{cms.card.sum.open}">진행 중</th>
+                <th class="hb-num" th:text="#{cms.card.sum.down}" data-help-key="cms-equip-card.down">정지(분)</th>
+                <th th:text="#{cms.card.sum.chk}" data-help-key="cms-equip-card.chk">점검</th>
+                <th class="hb-num" th:text="#{cms.card.sum.overdue}">지연</th>
+                <th th:text="#{cms.card.sum.part}">사용 예비품</th>
+                <th class="hb-num" th:text="#{cms.card.sum.reset}">카운터 리셋</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    <h3 th:text="#{cms.profile.installed}">지금 설치된 금형·지그·게이지</h3>
+    <table class="hb-cmp-table hb-plant-table" id="installed">
+        <thead><tr>
+            <th th:text="#{cms.profile.col.asset}">자산</th>
+            <th th:text="#{cms.profile.col.assetType}">유형</th>
+            <th th:text="#{cms.profile.col.installedAt}">설치</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+    <h3 th:text="#{cms.card.counters}">카운터(지금 누적)</h3>
+    <table class="hb-cmp-table hb-plant-table" id="counters">
+        <thead><tr>
+            <th th:text="#{cms.card.col.counter}">카운터</th>
+            <th th:text="#{cms.card.col.target}">대상</th>
+            <th class="hb-num" th:text="#{cms.card.col.total}">누적</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+</section>
+
+<section class="hb-sub" id="historyBox" hidden aria-labelledby="histTitle">
+    <div class="hb-toolbar">
+        <h2 id="histTitle" th:text="#{cms.card.history}">이력</h2>
+        <button type="button" id="openMwo" class="hb-btn-secondary" disabled th:text="#{cms.card.openMwo}">작업지시 열기</button>
+    </div>
+    <div id="histGrid" class="hb-grid-host"></div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/equip-card.js}"></script>
+</body>
+</html>

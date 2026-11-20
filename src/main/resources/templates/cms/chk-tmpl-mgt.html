@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  점검표 (cms-chk-tmpl) — CMS 1부 C2 (docs/33 4.3, D8). 머리(코드·이름·대상 종류·설비 클래스) + 항목 표(한 벌 저장).
+  리비전이 없다 — 점검 예정이 만들어질 때 항목·기준을 복사해 가므로, 고쳐도 이미 만든 점검과 지난 기록은 그대로다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">점검표</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.fail.keyword}">코드·이름</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y" checked><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="tmplGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.tmpl.selectOrNew}">왼쪽에서 점검표를 고르거나 신규를 누르세요.</p>
+        <form id="tmplForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{cms.fail.col.failCd}">코드</span>
+                <input data-field="tmplCd" maxlength="20" required data-help-key="cms-chk-tmpl.tmplCd"></label>
+            <label class="hb-wide-2"><span th:text="#{cms.fail.col.failNm}">이름</span>
+                <input data-field="tmplNm" maxlength="100" required></label>
+            <label><span th:text="#{cms.tmpl.col.targetKind}">대상 종류</span>
+                <select data-field="targetKind">
+                    <option value="EQUIP" th:text="#{cms.mwo.equip}">설비</option>
+                    <option value="ASSET" th:text="#{cms.mwo.asset}">금형·지그</option>
+                </select></label>
+            <label><span th:text="#{cms.fail.col.equipClass}">설비 클래스</span>
+                <select data-field="equipClassCd" id="classSel" data-help-key="cms-chk-tmpl.equipClassCd"></select></label>
+            <label><span th:text="#{cms.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+
+        <section class="hb-sub" id="itemSection" hidden>
+            <h2 th:text="#{cms.tmpl.items}">점검 항목</h2>
+            <p class="hb-muted" th:text="#{cms.tmpl.itemsGuide}">순번 순서로 점검합니다. 수치 판정은 하한·상한 중 하나 이상(경계 포함 합격).</p>
+            <!-- 항목 하나 = 작은 폼 블록(좁은 상세 패널에서 표는 칸이 한 글자로 줄어든다 — 브라우저 확인에서 발견) -->
+            <div id="items"></div>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="addItemBtn" class="hb-btn-secondary" th:text="#{cms.tmpl.addItem}">항목 추가</button>
+                <button type="button" id="saveItemsBtn" th:text="#{cms.tmpl.saveItems}">항목 저장</button>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/chk-tmpl-mgt.js}"></script>
+</body>
+</html>

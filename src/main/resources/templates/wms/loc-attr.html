@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  로케이션 속성 (wms-loc) — P4 1부 W1 (docs/30). 장비 계층(P1)의 창고·로케이션 노드에 WMS 속성을 붙인다.
+  사용성 체크(docs/11 4.3): 주 사용자 = 물류·창고 담당(WEB). 처음 한 번 구성하고 가끔 고친다.
+  직접 치는 값 = 피킹 순서·비고뿐, 나머지는 선택. 같은 랙 아래 수십 칸은 "하위에도 적용"·"피킹 순서 다시 매기기"로 한 번에.
+  예외 = 사용 중지 노드에 처음 속성 붙이기(거부), 구역·라인 노드(목록에 안 나옴, API 는 칸 오류), 두 사람이 같은 노드 동시 저장(409).
+  스캔 확인 칸 = 키보드 웨지 스캐너로 라벨을 찍어 "무엇으로 읽히나"를 본다(저장 없음).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">로케이션 속성</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{wmsLoc.plant}">공장</span>
+        <select name="plantCd" id="plantSel" data-help-key="wms-loc.plantCd"></select></label>
+    <label class="hb-check"><input type="checkbox" name="withUnused" value="true">
+        <span th:text="#{wmsLoc.withUnused}">사용 중지 포함</span></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<form id="scanForm" class="hb-search" autocomplete="off">
+    <label class="hb-wide"><span th:text="#{wmsLoc.scan}">스캔 확인</span>
+        <input id="scanText" maxlength="512" th:placeholder="#{wmsLoc.scanPlaceholder}" data-help-key="wms-loc.scan"></label>
+    <div class="hb-sp-actions">
+        <button type="submit" id="scanBtn" class="hb-btn-secondary" th:text="#{wmsLoc.scanCheck}">확인</button>
+    </div>
+    <output id="scanResult" class="hb-msg" aria-live="polite"></output>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar hb-tree-tools">
+            <span id="summary" class="hb-muted hb-tree-summary"></span>
+            <button type="button" id="expandBtn" class="hb-btn-secondary" th:text="#{bomTree.expandAll}">모두 펼치기</button>
+            <button type="button" id="collapseBtn" class="hb-btn-secondary" th:text="#{bomTree.collapse}">1레벨만</button>
+            <button type="button" id="excelBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" th:text="#{bomTree.excel}">엑셀</button>
+        </div>
+        <div id="tree" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="renumberBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{wmsLoc.renumber}">하위 피킹 순서 다시 매기기</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{wmsLoc.selectFirst}">왼쪽에서 창고·로케이션을 고르세요.</p>
+        <form id="attrForm" class="hb-form" autocomplete="off">
+            <label class="hb-wide"><span th:text="#{wmsLoc.col.path}">경로</span>
+                <output id="path" class="hb-output"></output></label>
+            <label><span th:text="#{wmsLoc.col.locUsage}">용도</span>
+                <select data-field="locUsage" data-help-key="wms-loc.locUsage"></select></label>
+            <label><span th:text="#{wmsLoc.col.defaultStatus}">기본 재고 상태</span>
+                <select data-field="defaultStatus" data-help-key="wms-loc.defaultStatus"></select></label>
+            <label id="feedBox" hidden><span th:text="#{wmsLoc.col.feedNodeId}">보급 라인</span>
+                <select data-field="feedNodeId" data-help-key="wms-loc.feedNodeId"></select></label>
+            <label><span th:text="#{wmsLoc.col.stockYn}">재고 둠</span>
+                <select data-field="stockYn" data-help-key="wms-loc.stockYn">
+                    <option value="Y" th:text="#{wmsLoc.yes}">예</option>
+                    <option value="N" th:text="#{wmsLoc.no}">아니오</option>
+                </select></label>
+            <label><span th:text="#{wmsLoc.col.pickSeq}">피킹 순서</span>
+                <input data-field="pickSeq" data-hb="number" data-scale="0" data-min="0" data-max="999999" data-pad="false"
+                       data-help-key="wms-loc.pickSeq"></label>
+            <label><span th:text="#{wmsLoc.col.mixItemYn}">품목 혼적</span>
+                <select data-field="mixItemYn" data-help-key="wms-loc.mixItemYn">
+                    <option value="Y" th:text="#{wmsLoc.allow}">허용</option>
+                    <option value="N" th:text="#{wmsLoc.deny}">금지</option>
+                </select></label>
+            <label><span th:text="#{wmsLoc.col.mixLotYn}">LOT 혼적</span>
+                <select data-field="mixLotYn">
+                    <option value="Y" th:text="#{wmsLoc.allow}">허용</option>
+                    <option value="N" th:text="#{wmsLoc.deny}">금지</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{wmsLoc.col.remark}">비고</span>
+                <textarea data-field="remark" maxlength="500" rows="2"></textarea></label>
+            <label class="hb-check hb-wide"><input type="checkbox" data-field="applyToChildren" data-help-key="wms-loc.applyToChildren">
+                <span th:text="#{wmsLoc.applyToChildren}">하위 창고·로케이션에도 용도·혼적·기본 상태 적용</span></label>
+            <label class="hb-wide"><span th:text="#{wmsLoc.barcode}">라벨 바코드 값</span>
+                <output id="barcode" class="hb-output"></output></label>
+        </form>
+        <form id="allowForm" class="hb-form" autocomplete="off">
+            <p class="hb-wide hb-muted" th:text="#{wmsLoc.allowTitle}">적치 허용 품목군</p>
+            <p id="allowInfo" class="hb-wide hb-muted" role="status"></p>
+            <div id="allowList" class="hb-wide hb-check-list" data-help-key="wms-loc.allow"></div>
+            <div class="hb-wide hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="allowSaveBtn" class="hb-btn-secondary" th:text="#{wmsLoc.allowSave}">허용 품목군 저장</button>
+            </div>
+        </form>
+        <form id="printForm" class="hb-form" autocomplete="off" th:if="${actions.contains('PRINT')}">
+            <p class="hb-wide hb-muted" th:text="#{wmsLoc.printTitle}">로케이션 라벨 인쇄</p>
+            <label><span th:text="#{wmsLoc.printer}">프린터</span>
+                <select id="printPrinter" data-help-key="wms-loc.printer"></select></label>
+            <label><span th:text="#{wmsLoc.template}">템플릿</span>
+                <select id="printTpl"></select></label>
+            <label><span th:text="#{wmsLoc.copies}">장수</span>
+                <input id="printCopies" data-hb="number" data-scale="0" data-min="1" data-max="99" data-pad="false" value="1"></label>
+            <label class="hb-check"><input type="checkbox" id="printChildren">
+                <span th:text="#{wmsLoc.printChildren}">하위 포함</span></label>
+            <div class="hb-wide hb-toolbar">
+                <button type="button" id="printBtn" class="hb-btn-secondary" th:text="#{wmsLoc.print}">라벨 인쇄</button>
+            </div>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.tree.js}"></script>
+<script th:src="@{/js/views/wms/loc-attr.js}"></script>
+</body>
+</html>

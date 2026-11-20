@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{page.forbidden.title}">권한 없음</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+</head>
+<body class="hb-page">
+<h1 th:text="#{page.forbidden.title}">권한 없음</h1>
+<p th:text="#{page.forbidden.message}">이 화면을 볼 권한이 없습니다. 관리자에게 문의하세요.</p>
+</body>
+</html>

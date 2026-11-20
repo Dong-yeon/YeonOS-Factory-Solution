@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  협력사 정보 (srm-supplier) — SRM 1부 S1 (docs/31 D2·D3). 협력사 = 구매·겸용 거래처 + SRM 확장 칸.
+  거래처 기본정보(이름·사업자번호·연락처)는 거래처관리가 주인이라 여기서는 읽기만 한다.
+  인증서는 갱신할 때 새 행(이력), 단가는 새 단가 = 새 행(끝 없는 이전 단가는 전날로 자동 마감).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">협력사 정보</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{srm.sup.keyword}">코드·이름</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{srm.sup.col.tradeStatus}">거래 상태</span>
+        <select name="tradeStatus" data-hb="select" data-code="TRADE_STATUS" data-blank="all"></select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{srm.sup.col.registered}">등록</legend>
+        <label><input type="radio" name="registered" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="registered" value="Y"><span th:text="#{srm.sup.registeredY}">등록</span></label>
+        <label><input type="radio" name="registered" value="N"><span th:text="#{srm.sup.registeredN}">미등록</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div id="supGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{srm.sup.select}">왼쪽에서 거래처를 고르세요.</p>
+        <dl id="custInfo" class="hb-form" hidden>
+            <dt th:text="#{srm.sup.col.custCd}">코드</dt><dd id="infoCd"></dd>
+            <dt th:text="#{srm.sup.col.custNm}">이름</dt><dd id="infoNm"></dd>
+            <dt th:text="#{srm.sup.col.bizNo}">사업자번호</dt><dd id="infoBiz"></dd>
+            <dt th:text="#{srm.sup.col.tel}">전화</dt><dd id="infoTel"></dd>
+        </dl>
+        <form id="supForm" class="hb-form" autocomplete="off" hidden>
+            <label><span th:text="#{srm.sup.col.tradeStatus}">거래 상태</span>
+                <select data-field="tradeStatus" data-hb="select" data-code="TRADE_STATUS" data-help-key="srm-supplier.tradeStatus"></select></label>
+            <label><span th:text="#{srm.sup.col.statusReason}">상태 사유</span>
+                <input data-field="statusReason" maxlength="500"></label>
+            <label><span th:text="#{srm.sup.col.currency}">기본 통화</span>
+                <select data-field="currencyCd" data-hb="select" data-code="CURRENCY"></select></label>
+            <label><span th:text="#{srm.sup.col.payTerms}">결제 조건</span>
+                <select data-field="payTermsCd" data-hb="select" data-code="PAY_TERMS" data-blank="select"></select></label>
+            <label><span th:text="#{srm.sup.col.buyer}">구매 담당(아이디)</span>
+                <input data-field="buyerLoginId" maxlength="50"></label>
+            <label><span th:text="#{srm.sup.col.country}">국가</span>
+                <input data-field="countryCd" maxlength="2" data-help-key="srm-supplier.countryCd"></label>
+            <label><span th:text="#{srm.sup.col.controlCountry}">지배 주체 국가</span>
+                <input data-field="controlCountryCd" maxlength="2" data-help-key="srm-supplier.controlCountryCd"></label>
+            <label><span th:text="#{srm.sup.col.secAssessedOn}">보안 진단일</span>
+                <input type="date" data-field="secAssessedOn" data-help-key="srm-supplier.secAssessedOn"></label>
+            <label class="hb-wide"><span th:text="#{srm.sup.col.remark}">비고</span>
+                <input data-field="remark" maxlength="1000"></label>
+        </form>
+
+        <!-- 품질 요약(최근 90일) — 보기만. 입고 PPM 은 평가 RECV_PPM 과 같은 계산(QMS 계약) -->
+        <section class="hb-sub" id="qualityBox" hidden>
+            <h2 th:text="#{srm.sup.quality.title}">품질 요약(최근 90일)</h2>
+            <dl class="hb-form" id="qualityList"></dl>
+        </section>
+
+        <section class="hb-sub" id="extra" hidden>
+            <h2 th:text="#{srm.cert.title}">인증서</h2>
+            <table class="hb-cmp-table hb-plant-table" id="certs">
+                <thead><tr>
+                    <th th:text="#{srm.cert.col.type}">유형</th>
+                    <th th:text="#{srm.cert.col.no}">번호</th>
+                    <th th:text="#{srm.cert.col.issuedOn}">발행</th>
+                    <th th:text="#{srm.cert.col.expiresOn}">만료</th>
+                    <th th:text="#{srm.cert.col.state}">상태</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <div id="certFiles" class="hb-sub" hidden>
+                <p id="certFilesTitle" class="hb-muted"></p>
+                <ul id="certFileList"></ul>
+                <label th:if="${actions.contains('SAVE')}"><span th:text="#{srm.cert.attach}">파일 올리기</span>
+                    <input type="file" id="certFileInput"></label>
+            </div>
+            <form id="certForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{srm.cert.col.type}">유형</span>
+                    <select data-field="certTypeCd" data-hb="select" data-code="SUPPLIER_CERT" data-blank="select"></select></label>
+                <label><span th:text="#{srm.cert.col.no}">번호</span><input data-field="certNo" maxlength="100"></label>
+                <label><span th:text="#{srm.cert.col.issuer}">발급 기관</span><input data-field="issuerNm" maxlength="200"></label>
+                <label><span th:text="#{srm.cert.col.issuedOn}">발행</span><input type="date" data-field="issuedOn"></label>
+                <label><span th:text="#{srm.cert.col.expiresOn}">만료</span>
+                    <input type="date" data-field="expiresOn" data-help-key="srm-supplier.expiresOn"></label>
+                <div class="hb-toolbar">
+                    <button type="button" id="addCertBtn" class="hb-btn-secondary" th:text="#{srm.cert.add}">인증서 추가</button>
+                </div>
+            </form>
+
+            <h2 th:text="#{srm.src.title}">공급 품목</h2>
+            <table class="hb-cmp-table hb-plant-table" id="sources">
+                <thead><tr>
+                    <th th:text="#{srm.src.col.item}">품목</th>
+                    <th th:text="#{srm.src.col.supplierItemCd}">협력사 품번</th>
+                    <th th:text="#{srm.src.col.leadDays}">리드타임(일)</th>
+                    <th th:text="#{srm.src.col.moq}">최소 발주</th>
+                    <th th:text="#{srm.src.col.priority}">우선순위</th>
+                    <th th:text="#{srm.src.col.useYn}">사용</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <form id="srcForm" class="hb-form" autocomplete="off">
+                <p id="srcMode" class="hb-muted hb-wide"></p>
+                <label><span th:text="#{srm.src.col.itemCd}">품목 코드</span>
+                    <input data-field="itemCd" maxlength="40" list="itemList" data-help-key="srm-supplier.itemCd"></label>
+                <label><span th:text="#{srm.src.col.supplierItemCd}">협력사 품번</span><input data-field="supplierItemCd" maxlength="60"></label>
+                <label><span th:text="#{srm.src.col.supplierItemNm}">협력사 품명</span><input data-field="supplierItemNm" maxlength="200"></label>
+                <label><span th:text="#{srm.src.col.leadDays}">리드타임(일)</span>
+                    <input data-field="leadDays" data-hb="number" data-scale="0" data-min="0" data-max="365"></label>
+                <label><span th:text="#{srm.src.col.moq}">최소 발주</span>
+                    <input data-field="moq" data-hb="number" data-scale="6" data-pad="false" data-help-key="srm-supplier.moq"></label>
+                <label><span th:text="#{srm.src.col.orderMult}">발주 배수</span>
+                    <input data-field="orderMult" data-hb="number" data-scale="6" data-pad="false"></label>
+                <label><span th:text="#{srm.src.col.priority}">우선순위</span>
+                    <input data-field="priority" data-hb="number" data-scale="0" data-min="1" data-max="9" data-help-key="srm-supplier.priority"></label>
+                <label><span th:text="#{srm.src.col.useYn}">사용</span>
+                    <select data-field="useYn">
+                        <option value="Y" th:text="#{yn.Y}">사용</option>
+                        <option value="N" th:text="#{yn.N}">미사용</option>
+                    </select></label>
+                <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                    <button type="button" id="srcSaveBtn" class="hb-btn-secondary" th:text="#{srm.src.save}">공급 품목 저장</button>
+                    <button type="button" id="srcNewBtn" class="hb-btn-ghost" th:text="#{srm.src.new}">새로 입력</button>
+                </div>
+            </form>
+
+            <h2 th:text="#{srm.price.title}">단가</h2>
+            <table class="hb-cmp-table hb-plant-table" id="prices">
+                <thead><tr>
+                    <th th:text="#{srm.src.col.item}">품목</th>
+                    <th th:text="#{srm.price.col.currency}">통화</th>
+                    <th th:text="#{srm.price.col.unitPrice}">단가</th>
+                    <th th:text="#{srm.price.col.validFrom}">시작</th>
+                    <th th:text="#{srm.price.col.validTo}">끝</th>
+                    <th th:text="#{srm.price.col.state}">상태</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <form id="priceForm" class="hb-form" autocomplete="off">
+                <p id="priceMode" class="hb-muted hb-wide"></p>
+                <label><span th:text="#{srm.src.col.itemCd}">품목 코드</span>
+                    <input data-field="itemCd" maxlength="40" list="itemList"></label>
+                <label><span th:text="#{srm.price.col.currency}">통화</span>
+                    <select data-field="currencyCd" data-hb="select" data-code="CURRENCY"></select></label>
+                <label><span th:text="#{srm.price.col.unitPrice}">단가</span>
+                    <input data-field="unitPrice" data-hb="number" data-scale="4" data-pad="false" data-help-key="srm-supplier.unitPrice"></label>
+                <label><span th:text="#{srm.price.col.validFrom}">시작</span><input type="date" data-field="validFrom"></label>
+                <label><span th:text="#{srm.price.col.validTo}">끝</span>
+                    <input type="date" data-field="validTo" data-help-key="srm-supplier.validTo"></label>
+                <label><span th:text="#{srm.src.col.useYn}">사용</span>
+                    <select data-field="useYn">
+                        <option value="Y" th:text="#{yn.Y}">사용</option>
+                        <option value="N" th:text="#{yn.N}">미사용</option>
+                    </select></label>
+                <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                    <button type="button" id="priceSaveBtn" class="hb-btn-secondary" th:text="#{srm.price.save}">단가 저장</button>
+                    <button type="button" id="priceNewBtn" class="hb-btn-ghost" th:text="#{srm.src.new}">새로 입력</button>
+                </div>
+            </form>
+            <datalist id="itemList"></datalist>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/srm/srm-ui.js}"></script>
+<script th:src="@{/js/views/srm/supplier-mgt.js}"></script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  권한·메뉴. 회사별 테이블(sys_user_auth, sys_auth_group, sys_auth_prog, sys_menu)은 RLS 가 회사를 거른다.
+  권한 = 사용자가 속한 "사용 중" 권한그룹들의 합집합, 단 프로그램이 정의한 액션(sys_prog.actions)과 사용 중인 프로그램만.
+  관리자 그룹(admin_yn = 'Y', docs/36 4.1)의 구성원은 행 없이 사용 중인 모든 프로그램의 모든 액션 — 회사 생성 뒤 추가된 화면도.
+  개인 화면(sys_prog.self_service_yn = 'Y', docs/36 Q13 — 알림함처럼 자기 데이터만 다루는 화면)은 로그인한 모든 회사 사용자에게 모든 액션.
+  협력사 포털 사용자(user_type SUPPLIER, docs/42)는 개인 화면도 없다 — 권한 그룹에도 못 들어가니(트리거) 아무 화면 권한이 없다.
+-->
+<mapper namespace="io.smarthappy.platform.auth.AuthMapper">
+
+    <!-- 회사 사용자인가 (개인 화면 조건 — 협력사 포털 사용자 제외) -->
+    <sql id="isInternal">
+        exists (select 1 from sys_user xu where xu.user_id = #{userId} and xu.user_type = 'INTERNAL')
+    </sql>
+
+    <!-- 화면이 속한 모듈을 이 회사가 쓰는가 (docs/80) — 행이 없으면 켜짐. 관리자·개인 화면 분기 밖에서 거른다 -->
+    <sql id="moduleOn">
+        not exists (select 1 from sys_comp_module xm where xm.module_cd = p.module_cd and xm.use_yn = 'N')
+    </sql>
+
+    <!-- 사용 중 관리자 그룹 소속인가 -->
+    <sql id="isAdmin">
+        exists (select 1 from sys_user_auth xa
+                  join sys_auth_group xg on xg.comp_cd = xa.comp_cd and xg.auth_grp_cd = xa.auth_grp_cd
+                                        and xg.use_yn = 'Y' and xg.admin_yn = 'Y'
+                 where xa.user_id = #{userId})
+    </sql>
+
+    <select id="findActions" resultType="string">
+        select distinct ap.action_cd
+          from sys_user_auth ua
+          join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd and g.use_yn = 'Y'
+          join sys_auth_prog ap on ap.comp_cd = ua.comp_cd and ap.auth_grp_cd = ua.auth_grp_cd
+          join sys_prog p on p.prog_cd = ap.prog_cd and p.use_yn = 'Y'
+         where ua.user_id = #{userId}
+           and ap.prog_cd = #{progCd}
+           and ap.action_cd = any (p.actions)
+           and <include refid="moduleOn"/>
+        union
+        select unnest(p.actions)
+          from sys_prog p
+         where p.prog_cd = #{progCd}
+           and p.use_yn = 'Y'
+           and <include refid="moduleOn"/>
+           and ((p.self_service_yn = 'Y' and <include refid="isInternal"/>) or <include refid="isAdmin"/>)
+    </select>
+
+    <!-- 역할별 홈: 사용 중 권한그룹의 home_prog_cd 중 조회 권한이 있는 첫 화면 (그룹 정렬순) -->
+    <select id="findHomeProg" resultType="string">
+        select g.home_prog_cd
+          from sys_user_auth ua
+          join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd and g.use_yn = 'Y'
+          join sys_prog p on p.prog_cd = g.home_prog_cd and p.use_yn = 'Y'
+         where ua.user_id = #{userId}
+           and <include refid="moduleOn"/>
+           and ((p.self_service_yn = 'Y' and <include refid="isInternal"/>) or <include refid="isAdmin"/> or exists (select 1 from sys_user_auth ua2
+                         join sys_auth_group g2 on g2.comp_cd = ua2.comp_cd and g2.auth_grp_cd = ua2.auth_grp_cd and g2.use_yn = 'Y'
+                         join sys_auth_prog ap on ap.comp_cd = ua2.comp_cd and ap.auth_grp_cd = ua2.auth_grp_cd
+                        where ua2.user_id = #{userId} and ap.prog_cd = g.home_prog_cd and ap.action_cd = 'SEARCH'))
+         order by g.sort_no, g.auth_grp_cd
+         limit 1
+    </select>
+
+    <select id="findSearchableProgs" resultType="string">
+        select distinct ap.prog_cd
+          from sys_user_auth ua
+          join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd and g.use_yn = 'Y'
+          join sys_auth_prog ap on ap.comp_cd = ua.comp_cd and ap.auth_grp_cd = ua.auth_grp_cd
+          join sys_prog p on p.prog_cd = ap.prog_cd and p.use_yn = 'Y'
+         where ua.user_id = #{userId}
+           and ap.action_cd = 'SEARCH'
+           and <include refid="moduleOn"/>
+        union
+        select p.prog_cd
+          from sys_prog p
+         where p.use_yn = 'Y'
+           and 'SEARCH' = any (p.actions)
+           and <include refid="moduleOn"/>
+           and ((p.self_service_yn = 'Y' and <include refid="isInternal"/>) or <include refid="isAdmin"/>)
+    </select>
+
+    <select id="findProg" resultType="io.smarthappy.platform.auth.ProgInfo">
+        select prog_cd, prog_nm_key, view_path, module_cd
+          from sys_prog
+         where prog_cd = #{progCd}
+           and use_yn = 'Y'
+    </select>
+
+    <select id="findMenus" resultType="io.smarthappy.platform.auth.MenuRow">
+        select m.menu_id, m.parent_id, m.menu_nm, m.menu_nm_key, m.prog_cd, p.prog_nm_key, m.sort_no
+          from sys_menu m
+          left join sys_prog p on p.prog_cd = m.prog_cd
+         where m.use_yn = 'Y'
+           and (m.prog_cd is null or p.use_yn = 'Y')
+         order by m.sort_no, m.menu_id
+    </select>
+</mapper>

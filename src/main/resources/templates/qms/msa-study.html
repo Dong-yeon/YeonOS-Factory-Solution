@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  GRR 연구 (qms-msa) — P3 QMS Q2b (docs/29 D9). 계량형 평균·범위법 / 계수형 일치율.
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 담당(WEB). 연구는 계측기마다 1년에 한 번 안팎, 원자료는 보통 엑셀에 먼저 적어 둔다.
+  직접 치는 값 = 계측기·특성·방법·모양(측정자·부품·반복)과 원자료 — 엑셀 같은 모양을 붙여 넣을 수 있다.
+  서버가 채우는 값 = 연구 번호(채번), 연구일(비우면 오늘), 계산 결과(EV·AV·GRR·PV·TV·%·ndc·판정), 공차(확정 때 특성에서).
+  예외 = 원자료가 덜 찬 연구는 확정 불가, 확정·취소 뒤에는 볼 수만 있다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">GRR 연구</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.msa.keyword}">연구 번호·계측기</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{qms.msa.col.method}">방법</span>
+        <select name="method" data-hb="select" data-code="MSA_METHOD" data-blank="all"></select></label>
+    <label><span th:text="#{qms.msa.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="MSA_STATUS" data-blank="all"></select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="msaGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="completeBtn" class="hb-btn-secondary" th:if="${actions.contains('APPROVE')}" th:text="#{qms.msa.complete}">확정</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            <!-- 되돌릴 수 없는 동작은 저장과 떨어진 오른쪽 끝(docs/40 P1 ④) -->
+            <div class="hb-qms-danger-zone">
+                <button type="button" id="cancelStudyBtn" class="hb-btn-danger-outline" th:if="${actions.contains('SAVE')}" th:text="#{qms.msa.cancel}">연구 취소</button>
+            </div>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.msa.select}">왼쪽에서 연구를 고르거나 신규를 누르세요.</p>
+
+        <form id="studyForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{qms.msa.col.assetCd}">계측기</span><select data-field="assetCd" required></select></label>
+            <label><span th:text="#{qms.msa.col.charLabel}">특성</span><select data-field="charId"></select></label>
+            <label><span th:text="#{qms.msa.col.method}">방법</span>
+                <select data-field="method" data-hb="select" data-code="MSA_METHOD" data-blank="select" required></select></label>
+            <label><span th:text="#{qms.msa.col.studyDate}">연구일</span><input data-field="studyDate" type="date"></label>
+            <label><span th:text="#{qms.msa.col.appraiserCnt}">측정자 수</span>
+                <input data-field="appraiserCnt" data-hb="number" data-scale="0" data-min="2" data-max="3" data-pad="false"></label>
+            <label><span th:text="#{qms.msa.col.partCnt}">부품 수</span>
+                <input data-field="partCnt" data-hb="number" data-scale="0" data-min="2" data-max="50" data-pad="false"
+                       data-help-key="qms-msa.partCnt"></label>
+            <label><span th:text="#{qms.msa.col.trialCnt}">반복 수</span>
+                <input data-field="trialCnt" data-hb="number" data-scale="0" data-min="2" data-max="3" data-pad="false"></label>
+            <div id="basisBox">
+                <label><span th:text="#{qms.msa.col.basis}">%GRR 기준</span>
+                    <select data-field="basis" data-hb="select" data-code="MSA_BASIS" data-blank="select" data-help-key="qms-msa.basis"></select></label>
+            </div>
+            <div id="sigmaBox">
+                <label><span th:text="#{qms.msa.col.processSigma}">공정 표준편차(선택)</span>
+                    <input data-field="processSigma" data-hb="number" data-scale="6" data-min="0.000001" data-max="999999" data-pad="false"
+                           data-help-key="qms-msa.processSigma"></label>
+            </div>
+            <label class="hb-wide"><span th:text="#{qms.msa.col.appraisers}">측정자 이름(쉼표로)</span>
+                <input data-field="appraisers" maxlength="200"></label>
+            <label class="hb-wide"><span th:text="#{qms.msa.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+
+        <section class="hb-sub" id="dataSection">
+            <h2><span th:text="#{qms.msa.data}">원자료</span> <span id="filled" class="hb-muted"></span></h2>
+            <p class="hb-muted" th:text="#{qms.msa.dataHint}">행 = 측정자 × 반복, 열 = 부품.</p>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table hb-qms-msa-grid" id="dataTable"><thead></thead><tbody></tbody></table>
+            </div>
+            <div class="hb-qms-paste" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{qms.msa.paste}">엑셀 붙여넣기</span><textarea id="pasteBox" rows="3"></textarea></label>
+                <button type="button" id="pasteBtn" class="hb-btn-secondary" th:text="#{qms.msa.pasteBtn}">칸에 채우기</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="resultSection" hidden>
+            <h2 th:text="#{qms.msa.result}">계산 결과</h2>
+            <p id="resultNote" class="hb-muted"></p>
+            <p id="verdictLine" class="hb-qms-status" hidden></p>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="resultTable"><tbody></tbody></table>
+            </div>
+            <div class="hb-qms-table-wrap" id="anovaBox" hidden>
+                <p id="anovaNote" class="hb-muted"></p>
+                <table class="hb-cmp-table" id="anovaTable">
+                    <thead><tr>
+                        <th th:text="#{qms.msa.anova.source}">변동 요인</th><th>df</th><th>SS</th><th>MS</th><th>F</th><th>p</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/msa-study.js}"></script>
+</body>
+</html>

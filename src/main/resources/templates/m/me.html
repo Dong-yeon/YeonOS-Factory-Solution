@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{m/layout :: head(#{m.tab.me})}"></head>
+<!--
+  모바일 내 정보 (docs/74 화면 6). 이름·회사, 화면 언어(sys-my-info 저장 권한 — 기존 API), 로그아웃(사무 화면과 같은 /logout).
+  비밀번호 변경·2단계 인증·알림 받기 등록은 사무 화면 "내 정보"에서.
+-->
+<body class="hb-m" th:data-today="${today}">
+<header th:replace="~{m/layout :: header(#{m.tab.me})}"></header>
+<main class="m-main">
+    <dl class="m-kv">
+        <dt th:text="#{m.me.name}">이름</dt><dd th:text="${mUser.userNm}">홍길동</dd>
+        <dt th:text="#{m.me.loginId}">아이디</dt><dd th:text="${mUser.loginId}">admin</dd>
+        <dt th:text="#{m.me.comp}">회사</dt><dd th:text="${mUser.compCd}">DEMO</dd>
+    </dl>
+
+    <label class="m-field" th:if="${can.locale}"><span th:text="#{myInfo.locale}">화면 언어</span>
+        <select id="localeSel" th:data-current="${mUser.localeCd}">
+            <option value="ko" th:text="#{myInfo.locale.ko}" th:selected="${mUser.localeCd == 'ko'}">한국어</option>
+            <option value="en" th:text="#{myInfo.locale.en}" th:selected="${mUser.localeCd == 'en'}">English</option>
+        </select></label>
+    <p id="msg" class="m-msg" role="status" aria-live="polite"></p>
+
+    <div class="m-btn-row">
+        <a class="m-btn" th:href="@{/main}" th:text="#{m.me.desktop}">PC 화면으로</a>
+    </div>
+    <form th:action="@{/logout}" method="post" class="m-form-logout">
+        <button type="submit" class="m-danger" th:text="#{main.logout}">로그아웃</button>
+    </form>
+</main>
+<nav th:replace="~{m/layout :: tabs}"></nav>
+<th:block th:replace="~{m/layout :: scripts}"></th:block>
+<script th:src="@{/js/views/m/m-me.js}"></script>
+</body>
+</html>

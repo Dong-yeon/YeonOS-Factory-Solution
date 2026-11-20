@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- P3 QMS 2부 Q7 초품(셋업 검증) (docs/29_P3 12.3). PLM 표는 읽지 않는다 — 첫 LOT 목록·ECO 머리는 계약(EcoTrace·EcoLookup) -->
+<mapper namespace="io.smarthappy.module.qms.SetupMapper">
+
+    <sql id="cols">
+        v.verif_id, v.eco_id, v.lot_id, l.lot_no, v.insp_id, h.insp_no, h.insp_type, v.result, v.status, v.note, v.void_reason,
+        v.created_at, v.created_by, v.row_ver
+    </sql>
+    <sql id="from">
+        from qms_setup_verif v join lot_master l on l.lot_id = v.lot_id join qms_insp h on h.insp_id = v.insp_id
+    </sql>
+
+    <select id="findRecent" resultType="io.smarthappy.module.qms.SetupDtos$VerdictRow">
+        select <include refid="cols"/> <include refid="from"/> order by v.created_at desc, v.verif_id desc limit #{limit}
+    </select>
+
+    <select id="findActive" resultType="io.smarthappy.module.qms.SetupDtos$VerdictRow">
+        select <include refid="cols"/> <include refid="from"/> where v.eco_id = #{ecoId} and v.status = 'ACTIVE'
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.SetupDtos$VerdictRow">
+        select <include refid="cols"/> <include refid="from"/> where v.verif_id = #{id}
+    </select>
+
+    <select id="judgedInsps" resultType="io.smarthappy.module.qms.SetupDtos$InspOption">
+        select insp_id, lot_id, insp_no, insp_type, result, judged_at from qms_insp
+         where status = 'JUDGED' and lot_id in
+         <foreach collection="lotIds" item="x" open="(" separator="," close=")">#{x}</foreach>
+         order by judged_at desc
+    </select>
+
+    <select id="findInsp" resultType="io.smarthappy.module.qms.SetupDtos$InspRef">
+        select insp_id, lot_id, status, result from qms_insp where insp_id = #{id}
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into qms_setup_verif (comp_cd, eco_id, lot_id, insp_id, result, note, created_by, updated_by)
+        values (hb_current_comp(), #{ecoId}, #{lotId}, #{inspId}, #{result}, #{note}, #{by}, #{by})
+        returning verif_id
+    </select>
+
+    <update id="voidVerdict">
+        update qms_setup_verif set status = 'VOID', void_reason = #{reason}, voided_at = now(), voided_by = #{by},
+                                   row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where verif_id = #{id} and status = 'ACTIVE' and row_ver = #{rowVer}
+    </update>
+
+    <select id="counts" resultType="io.smarthappy.module.qms.SetupDtos$Counts">
+        select count(*) filter (where result = 'OK') as ok, count(*) filter (where result = 'NG') as ng
+          from qms_setup_verif where eco_id = #{ecoId} and status = 'ACTIVE'
+    </select>
+</mapper>

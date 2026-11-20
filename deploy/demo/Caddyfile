@@ -1,0 +1,14 @@
+# 공개 데모 리버스 프록시 — DOMAIN 이 도메인이면 Let's Encrypt 자동 발급, localhost 면 내부 인증서(로컬 시험용)
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:8090
+	# 앱이 내려가 있을 때(매일 초기화·배포 중) 빈 오류 대신 안내
+	handle_errors 502 503 504 {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "YeonOS 데모를 점검 중입니다 (매일 04:00 KST 초기화·배포). 1~2분 뒤 다시 접속해 주세요." 503
+	}
+	log {
+		output stdout
+		format console
+	}
+}

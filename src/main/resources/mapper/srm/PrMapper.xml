@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 구매요청 (SRM S2, docs/31 4장) — 회사 범위는 RLS, 쓰기의 comp_cd 는 hb_current_comp() -->
+<mapper namespace="io.smarthappy.module.srm.pr.PrMapper">
+
+    <!-- ================================================================ 선택지 -->
+
+    <select id="findPlants" resultType="io.smarthappy.module.srm.pr.PrDtos$PlantOption">
+        select plant_cd, plant_nm, use_yn from sys_plant where use_yn = 'Y' order by sort_no, plant_cd
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.srm.pr.PrDtos$ItemRef">
+        select item_id, item_cd, unit_cd, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="unitScale" resultType="integer">
+        select coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = #{unitCd}),
+                        (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = #{unitCd}))
+    </select>
+
+    <!-- 등록된 협력사만(거래처 코드로) -->
+    <select id="findSupplier" resultType="io.smarthappy.module.srm.pr.PrDtos$SupplierRef">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status
+          from mst_cust c join srm_supplier s on s.cust_id = c.cust_id
+         where c.cust_cd = #{custCd}
+    </select>
+
+    <select id="searchItems" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$ItemOption">
+        select item_id, item_cd, item_nm, unit_cd, use_yn from mst_item
+         where use_yn = 'Y'
+        <if test="keywordLike != null">and (item_cd ilike #{keywordLike} escape '\' or item_nm ilike #{keywordLike} escape '\')</if>
+         order by item_cd
+         limit 50
+    </select>
+
+    <select id="findOpenSuppliers" resultType="io.smarthappy.module.srm.pr.PrDtos$SupplierRef">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status
+          from mst_cust c join srm_supplier s on s.cust_id = c.cust_id
+         where s.trade_status &lt;&gt; 'BLOCKED' and c.use_yn = 'Y'
+         order by c.cust_cd
+         limit 2000
+    </select>
+
+    <!-- ================================================================ 구매요청 -->
+
+    <sql id="prCols">
+        p.pr_id, p.pr_no, p.pr_date, p.plant_cd, pl.plant_nm, p.req_user_id, ru.login_id as req_login_id, ru.user_nm as req_user_nm,
+        p.dept_nm, p.need_date, p.reason, p.status, p.decided_by, du.user_nm as decided_by_nm, p.decided_at, p.reject_reason,
+        p.cancel_reason, (select count(*) from srm_pr_line l where l.pr_id = p.pr_id) as line_cnt,
+        p.row_ver, p.updated_at, p.updated_by
+    </sql>
+    <sql id="prFrom">
+          from srm_pr p
+          left join sys_plant pl on pl.plant_cd = p.plant_cd
+          left join sys_user ru on ru.user_id = p.req_user_id
+          left join sys_user du on du.user_id = p.decided_by
+    </sql>
+
+    <!-- 목록·grid 공통 조건(c = PrCrit) — 요청일 기간 필수(서비스가 DateRanges 로 검사) -->
+    <sql id="prWhere">
+         where p.pr_date between #{c.from} and #{c.to}
+        <if test="c.status != null">and p.status = #{c.status}</if>
+        <if test="c.plantCd != null">and p.plant_cd = #{c.plantCd}</if>
+        <if test="c.keywordLike != null">
+           and (p.pr_no ilike #{c.keywordLike} escape '\' or p.reason ilike #{c.keywordLike} escape '\'
+                or exists (select 1 from srm_pr_line l join mst_item i on i.item_id = l.item_id
+                            where l.pr_id = p.pr_id and (i.item_cd ilike #{c.keywordLike} escape '\' or i.item_nm ilike #{c.keywordLike} escape '\')))
+        </if>
+    </sql>
+
+    <select id="findPrs" resultType="io.smarthappy.module.srm.pr.PrDtos$PrRow">
+        select <include refid="prCols"/>
+        <include refid="prFrom"/>
+        <include refid="prWhere"/>
+         order by p.pr_date desc, p.pr_id desc
+         limit 2000
+    </select>
+
+    <!-- grid(UI 단계 3 ①, docs/31 5.2) — 정렬은 허용 목록 enum 이름으로만 고른다(문자열 치환 없이), 마지막에 PK -->
+    <select id="findPrPage" resultType="io.smarthappy.module.srm.pr.PrDtos$PrRow">
+        select <include refid="prCols"/>
+        <include refid="prFrom"/>
+        <include refid="prWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PR_NO'">p.pr_no</when>
+                <when test="s.key == 'PLANT'">pl.plant_nm is null, pl.plant_nm</when>
+                <when test="s.key == 'REQUESTER'">ru.user_nm is null, ru.user_nm</when>
+                <when test="s.key == 'NEED_DATE'">p.need_date is null, p.need_date</when>
+                <when test="s.key == 'LINE_CNT'">(select count(*) from srm_pr_line l where l.pr_id = p.pr_id)</when>
+                <when test="s.key == 'STATUS'">p.status</when>
+                <otherwise>p.pr_date</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         p.pr_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countPrs" resultType="long">
+        select count(*) <include refid="prFrom"/> <include refid="prWhere"/>
+    </select>
+
+    <select id="findPr" resultType="io.smarthappy.module.srm.pr.PrDtos$PrRow">
+        select <include refid="prCols"/>
+        <include refid="prFrom"/>
+         where p.pr_id = #{id}
+    </select>
+
+    <select id="lockPr" resultType="io.smarthappy.module.srm.pr.PrDtos$PrRow" flushCache="true">
+        select p.pr_id, p.pr_no, p.status, p.req_user_id, p.row_ver from srm_pr p where p.pr_id = #{id} for update
+    </select>
+
+    <select id="findLines" resultType="io.smarthappy.module.srm.pr.PrDtos$PrLineRow">
+        select l.pr_line_id, l.pr_id, l.line_no, l.item_id, i.item_cd, i.item_nm, i.use_yn as item_use_yn,
+               trim_scale(l.qty)::text as qty, l.unit_cd, l.need_date, l.pref_cust_id, c.cust_cd as pref_cust_cd,
+               c.cust_nm as pref_cust_nm, l.remark, l.line_status
+          from srm_pr_line l
+          join mst_item i on i.item_id = l.item_id
+          left join mst_cust c on c.cust_id = l.pref_cust_id
+         where l.pr_id = #{prId}
+         order by l.line_no
+    </select>
+
+    <select id="insertPr" resultType="long" flushCache="true">
+        insert into srm_pr (comp_cd, pr_no, pr_date, plant_cd, req_user_id, dept_nm, need_date, reason, created_by, updated_by)
+        values (hb_current_comp(), #{prNo}, #{prDate}, #{f.plantCd}, #{reqUserId}, #{f.deptNm}, #{f.needDate}, #{f.reason}, #{by}, #{by})
+        returning pr_id
+    </select>
+
+    <!-- 한 벌 저장 = 머리 row_ver 증가(행이 바뀌어도) — 동시 편집 409 -->
+    <update id="updatePr">
+        update srm_pr
+           set plant_cd = #{f.plantCd}, dept_nm = #{f.deptNm}, need_date = #{f.needDate}, reason = #{f.reason},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where pr_id = #{id} and row_ver = #{f.rowVer} and status = 'DRAFT'
+    </update>
+
+    <select id="nextLineNo" resultType="int">
+        select coalesce(max(line_no), 0) + 1 from srm_pr_line where pr_id = #{prId}
+    </select>
+
+    <insert id="insertLine">
+        insert into srm_pr_line (comp_cd, pr_id, line_no, item_id, qty, unit_cd, need_date, pref_cust_id, remark, created_by, updated_by)
+        values (hb_current_comp(), #{prId}, #{lineNo}, #{f.itemId}, #{f.qty}, #{f.unitCd}, #{f.needDate}, #{f.prefCustId}, #{f.remark},
+                #{by}, #{by})
+    </insert>
+
+    <!-- 바뀐 행만 UPDATE(감사 로그가 바뀌지 않은 행으로 채워지지 않게) -->
+    <update id="updateLine">
+        update srm_pr_line
+           set item_id = #{f.itemId}, qty = #{f.qty}, unit_cd = #{f.unitCd}, need_date = #{f.needDate},
+               pref_cust_id = #{f.prefCustId}, remark = #{f.remark}, updated_at = now(), updated_by = #{by}
+         where pr_line_id = #{f.prLineId}
+           and ((item_id, qty, unit_cd) is distinct from (#{f.itemId}::bigint, #{f.qty}::numeric, #{f.unitCd}::varchar)
+                or need_date is distinct from #{f.needDate}::date or pref_cust_id is distinct from #{f.prefCustId}::bigint
+                or remark is distinct from #{f.remark}::varchar)
+    </update>
+
+    <delete id="deleteLine">
+        delete from srm_pr_line where pr_line_id = #{prLineId}
+    </delete>
+
+    <select id="countLivePoLines" resultType="int">
+        select count(*) from srm_po_line l join srm_pr_line r on r.pr_line_id = l.pr_line_id join srm_po p on p.po_id = l.po_id
+         where r.pr_id = #{prId} and p.status &lt;&gt; 'CANCELLED' and l.line_status &lt;&gt; 'CANCELLED'
+    </select>
+
+    <update id="changeStatus">
+        update srm_pr
+           set status = #{to},
+               decided_by = case when #{to} in ('APPROVED', 'REJECTED') then #{decidedBy}::bigint else decided_by end,
+               decided_at = case when #{to} in ('APPROVED', 'REJECTED') then now() else decided_at end,
+               reject_reason = case when #{to} = 'REJECTED' then #{rejectReason} else reject_reason end,
+               cancel_reason = case when #{to} = 'CANCELLED' then #{cancelReason} else cancel_reason end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where pr_id = #{id} and status = #{from} and row_ver = #{rowVer}
+    </update>
+</mapper>

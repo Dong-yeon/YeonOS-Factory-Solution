@@ -1,0 +1,417 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 출하 전 검수 (docs/78) — 회사 범위는 RLS. wms_ship·wms_ship_line·mst_item·mst_item_class·mst_cust·qms_ncr·sys_file 은 읽기만 -->
+<mapper namespace="io.smarthappy.module.qms.preship.PreshipMapper">
+
+    <!-- 출하 품목마다 쓸 양식: 사용 중 + 사용 중 항목 1개 이상, 품목 양식이 있으면 그것, 없으면 품목군 양식 -->
+    <sql id="tplOfItem">
+        coalesce(
+            (select t.tpl_id from qms_preship_tpl t
+              where t.item_id = i.item_id and t.use_yn = 'Y'
+                and exists (select 1 from qms_preship_tpl_line tl where tl.tpl_id = t.tpl_id and tl.use_yn = 'Y')),
+            (select t.tpl_id from qms_preship_tpl t
+              where i.item_class_id is not null and t.item_class_id = i.item_class_id and t.use_yn = 'Y'
+                and exists (select 1 from qms_preship_tpl_line tl where tl.tpl_id = t.tpl_id and tl.use_yn = 'Y')))
+    </sql>
+
+    <!-- ================================================================ 양식 -->
+
+    <sql id="tplCols">
+        t.tpl_id, t.tpl_cd, t.tpl_nm, t.item_id, t.item_class_id,
+        case when t.item_id is not null then 'ITEM' else 'CLASS' end as target_type,
+        coalesce(i.item_cd, c.class_cd) as target_cd, coalesce(i.item_nm, c.class_nm) as target_nm,
+        (select count(*) from qms_preship_tpl_line l where l.tpl_id = t.tpl_id and l.use_yn = 'Y') as line_cnt,
+        t.remark, t.use_yn, t.row_ver, t.updated_at, t.updated_by
+    </sql>
+
+    <sql id="tplFrom">
+        from qms_preship_tpl t
+        left join mst_item i on i.item_id = t.item_id
+        left join mst_item_class c on c.class_id = t.item_class_id
+        <where>
+            <if test="useYn != null">t.use_yn = #{useYn}</if>
+            <if test="kw != null">and (t.tpl_cd ilike #{kw} escape '\' or t.tpl_nm ilike #{kw} escape '\'
+                or i.item_cd ilike #{kw} escape '\' or c.class_cd ilike #{kw} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findTplPage" resultType="io.smarthappy.module.qms.preship.PreshipDtos$TplRow">
+        select <include refid="tplCols"/> <include refid="tplFrom"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CD'">t.tpl_cd</when>
+                <when test="s.key == 'NM'">t.tpl_nm</when>
+                <when test="s.key == 'TARGET'">coalesce(i.item_cd, c.class_cd)</when>
+                <otherwise>t.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        t.tpl_id
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countTpl" resultType="long">
+        select count(*) <include refid="tplFrom"/>
+    </select>
+
+    <select id="findTpl" resultType="io.smarthappy.module.qms.preship.PreshipDtos$TplRow">
+        select <include refid="tplCols"/>
+          from qms_preship_tpl t
+          left join mst_item i on i.item_id = t.item_id
+          left join mst_item_class c on c.class_id = t.item_class_id
+         where t.tpl_id = #{id}
+    </select>
+
+    <select id="findTplLines" resultType="io.smarthappy.module.qms.preship.PreshipDtos$TplLine">
+        select l.tpl_line_id, l.seq, l.grp_nm, l.check_text, l.na_allowed_yn, l.photo_req_yn, l.use_yn, l.row_ver
+          from qms_preship_tpl_line l
+         where l.tpl_id = #{id}
+         order by l.use_yn desc, l.seq, l.tpl_line_id
+    </select>
+
+    <select id="itemIdByCd" resultType="long">
+        select item_id from mst_item where item_cd = #{cd} and use_yn = 'Y'
+    </select>
+
+    <select id="classIdByCd" resultType="long">
+        select class_id from mst_item_class where class_cd = #{cd} and use_yn = 'Y'
+    </select>
+
+    <select id="insertTpl" resultType="long" flushCache="true">
+        insert into qms_preship_tpl (comp_cd, tpl_cd, tpl_nm, item_id, item_class_id, remark, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.tplCd}, #{f.tplNm}, #{f.itemId}, #{f.itemClassId}, #{f.remark}, #{f.useYn}, #{by}, #{by})
+        returning tpl_id
+    </select>
+
+    <update id="updateTpl">
+        update qms_preship_tpl
+           set tpl_nm = #{f.tplNm}, item_id = #{f.itemId}, item_class_id = #{f.itemClassId}, remark = #{f.remark}, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tpl_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="insertTplLine" resultType="long" flushCache="true">
+        insert into qms_preship_tpl_line (comp_cd, tpl_id, seq, grp_nm, check_text, na_allowed_yn, photo_req_yn, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{tplId}, #{l.seq}, #{l.grpNm}, #{l.checkText}, #{l.naAllowedYn}, #{l.photoReqYn}, #{l.useYn}, #{by}, #{by})
+        returning tpl_line_id
+    </select>
+
+    <update id="updateTplLine">
+        update qms_preship_tpl_line
+           set seq = #{l.seq}, grp_nm = #{l.grpNm}, check_text = #{l.checkText}, na_allowed_yn = #{l.naAllowedYn},
+               photo_req_yn = #{l.photoReqYn}, use_yn = #{l.useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tpl_line_id = #{l.tplLineId} and tpl_id = #{tplId}
+           and (seq, grp_nm, check_text, na_allowed_yn, photo_req_yn, use_yn)
+               is distinct from (#{l.seq}, #{l.grpNm}::varchar, #{l.checkText}::varchar, #{l.naAllowedYn}::char(1), #{l.photoReqYn}::char(1), #{l.useYn}::char(1))
+    </update>
+
+    <update id="disableTplLines">
+        update qms_preship_tpl_line
+           set use_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tpl_id = #{tplId} and use_yn = 'Y'
+        <if test="keep != null and keep.size() > 0">
+           and tpl_line_id not in <foreach collection="keep" item="k" open="(" separator="," close=")">#{k}</foreach>
+        </if>
+    </update>
+
+    <!-- ================================================================ 출하 목록·검수 -->
+
+    <sql id="shipCols">
+        s.ship_id, s.ship_no, s.plant_cd, s.plan_date, cu.cust_nm, s.status as ship_status,
+        case when exists (select 1 from wms_ship_line sl join mst_item i on i.item_id = sl.item_id
+                           where sl.ship_id = s.ship_id and <include refid="tplOfItem"/> is not null) then 'Y' else 'N' end as required_yn,
+        h.insp_id, h.insp_no, coalesce(h.status, 'NONE') as insp_status,
+        coalesce((select count(*) from qms_preship_result r where r.insp_id = h.insp_id), 0) as result_cnt,
+        coalesce((select count(*) from qms_preship_result r where r.insp_id = h.insp_id and r.judge is not null), 0) as judged_cnt,
+        coalesce((select count(*) from qms_preship_punch p where p.insp_id = h.insp_id and p.status = 'OPEN'), 0) as open_punch_cnt
+    </sql>
+
+    <sql id="shipFrom">
+        from wms_ship s
+        join mst_cust cu on cu.cust_id = s.cust_id
+        left join qms_preship_insp h on h.ship_id = s.ship_id and h.status &lt;&gt; 'CANCELLED'
+        where s.status &lt;&gt; 'CANCELLED'
+          and s.plan_date between #{from} and #{to}
+        <if test="kw != null">and (s.ship_no ilike #{kw} escape '\' or cu.cust_nm ilike #{kw} escape '\' or h.insp_no ilike #{kw} escape '\')</if>
+        <if test="insp != null">and coalesce(h.status, 'NONE') = #{insp}</if>
+        <if test="req">and exists (select 1 from wms_ship_line sl join mst_item i on i.item_id = sl.item_id
+                                    where sl.ship_id = s.ship_id and <include refid="tplOfItem"/> is not null)</if>
+    </sql>
+
+    <select id="findShipPage" resultType="io.smarthappy.module.qms.preship.PreshipDtos$ShipRow">
+        select <include refid="shipCols"/> <include refid="shipFrom"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'NO'">s.ship_no</when>
+                <when test="s.key == 'CUST'">cu.cust_nm</when>
+                <when test="s.key == 'INSP_STATUS'">coalesce(h.status, 'NONE')</when>
+                <otherwise>s.plan_date</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        s.ship_id
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countShip" resultType="long">
+        select count(*) <include refid="shipFrom"/>
+    </select>
+
+    <select id="findShip" resultType="io.smarthappy.module.qms.preship.PreshipDtos$ShipRow">
+        select <include refid="shipCols"/>
+          from wms_ship s
+          join mst_cust cu on cu.cust_id = s.cust_id
+          left join qms_preship_insp h on h.ship_id = s.ship_id and h.status &lt;&gt; 'CANCELLED'
+         where s.ship_id = #{shipId}
+    </select>
+
+    <select id="lockShip" resultType="string">
+        select s.status from wms_ship s where s.ship_id = #{shipId} for share
+    </select>
+
+    <select id="requiredItems" resultType="io.smarthappy.module.qms.preship.PreshipDtos$RequiredItem">
+        select x.item_id, x.item_cd, x.tpl_id
+          from (select distinct i.item_id, i.item_cd, <include refid="tplOfItem"/> as tpl_id
+                  from wms_ship_line sl join mst_item i on i.item_id = sl.item_id
+                 where sl.ship_id = #{shipId}) x
+         where x.tpl_id is not null
+         order by x.item_cd, x.item_id
+    </select>
+
+    <select id="insertInsp" resultType="long" flushCache="true">
+        insert into qms_preship_insp (comp_cd, insp_no, ship_id, created_by, updated_by)
+        values (hb_current_comp(), #{no}, #{shipId}, #{by}, #{by})
+        returning insp_id
+    </select>
+
+    <insert id="insertResults">
+        insert into qms_preship_result (comp_cd, insp_id, item_id, tpl_id, tpl_line_id, seq, grp_nm, check_text, na_allowed_yn, photo_req_yn,
+                                        created_by, updated_by)
+        select hb_current_comp(), #{inspId}, #{itemId}, l.tpl_id, l.tpl_line_id, l.seq, l.grp_nm, l.check_text, l.na_allowed_yn, l.photo_req_yn,
+               #{by}, #{by}
+          from qms_preship_tpl_line l
+         where l.tpl_id = #{tplId} and l.use_yn = 'Y'
+         order by l.seq, l.tpl_line_id
+    </insert>
+
+    <sql id="headCols">
+        h.insp_id, h.insp_no, h.ship_id, s.ship_no, s.status as ship_status, h.status, h.inspector_nm, h.witness_nm, h.remark,
+        h.done_at, h.done_by, h.cancel_reason, h.row_ver, h.created_at, h.created_by
+    </sql>
+
+    <select id="findInsp" resultType="io.smarthappy.module.qms.preship.PreshipDtos$InspHead">
+        select <include refid="headCols"/> from qms_preship_insp h join wms_ship s on s.ship_id = h.ship_id where h.insp_id = #{inspId}
+    </select>
+
+    <select id="findLiveInspOfShip" resultType="io.smarthappy.module.qms.preship.PreshipDtos$InspHead">
+        select <include refid="headCols"/> from qms_preship_insp h join wms_ship s on s.ship_id = h.ship_id
+         where h.ship_id = #{shipId} and h.status &lt;&gt; 'CANCELLED'
+    </select>
+
+    <select id="lockInsp" resultType="io.smarthappy.module.qms.preship.PreshipDtos$InspHead">
+        select <include refid="headCols"/> from qms_preship_insp h join wms_ship s on s.ship_id = h.ship_id
+         where h.insp_id = #{inspId}
+         for update of h
+    </select>
+
+    <select id="shareInsp" resultType="io.smarthappy.module.qms.preship.PreshipDtos$InspHead">
+        select <include refid="headCols"/> from qms_preship_insp h join wms_ship s on s.ship_id = h.ship_id
+         where h.insp_id = #{inspId}
+         for share of h
+    </select>
+
+    <sql id="resultCols">
+        r.result_id, r.insp_id, r.item_id, i.item_cd, i.item_nm, r.seq, r.grp_nm, r.check_text, r.na_allowed_yn, r.photo_req_yn,
+        r.judge, r.remark, r.judged_at, r.judged_by, r.row_ver,
+        (select count(*) from sys_file f where f.target_type = 'qms-preship' and f.target_id = r.result_id::varchar and f.use_yn = 'Y') as file_cnt,
+        p.punch_id as open_punch_id, p.ship_allow_yn as open_punch_allow_yn
+    </sql>
+
+    <select id="findResults" resultType="io.smarthappy.module.qms.preship.PreshipDtos$ResultRow">
+        select <include refid="resultCols"/>
+          from qms_preship_result r
+          join mst_item i on i.item_id = r.item_id
+          left join qms_preship_punch p on p.result_id = r.result_id and p.status = 'OPEN'
+         where r.insp_id = #{inspId}
+         order by i.item_cd, r.item_id, r.seq, r.result_id
+    </select>
+
+    <select id="findResult" resultType="io.smarthappy.module.qms.preship.PreshipDtos$ResultRow">
+        select <include refid="resultCols"/>
+          from qms_preship_result r
+          join mst_item i on i.item_id = r.item_id
+          left join qms_preship_punch p on p.result_id = r.result_id and p.status = 'OPEN'
+         where r.result_id = #{resultId}
+    </select>
+
+    <select id="countFiles" resultType="int">
+        select count(*) from sys_file f where f.target_type = 'qms-preship' and f.target_id = #{resultId}::varchar and f.use_yn = 'Y'
+    </select>
+
+    <update id="judge">
+        update qms_preship_result
+           set judge = #{judge}, remark = #{remark}, judged_at = now(), judged_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where result_id = #{resultId} and row_ver = #{rowVer}
+    </update>
+
+    <select id="openPunchOf" resultType="long">
+        select punch_id from qms_preship_punch where result_id = #{resultId} and status = 'OPEN'
+    </select>
+
+    <select id="insertPunch" resultType="long" flushCache="true">
+        insert into qms_preship_punch (comp_cd, insp_id, result_id, issue_text, created_by, updated_by)
+        values (hb_current_comp(), #{inspId}, #{resultId}, #{issue}, #{by}, #{by})
+        returning punch_id
+    </select>
+
+    <update id="updateHead">
+        update qms_preship_insp
+           set inspector_nm = #{inspector}, witness_nm = #{witness}, remark = #{remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_id = #{inspId} and row_ver = #{rowVer}
+    </update>
+
+    <update id="markDone">
+        update qms_preship_insp
+           set status = 'DONE', done_at = now(), done_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_id = #{inspId} and status = 'OPEN'
+    </update>
+
+    <update id="markOpen">
+        update qms_preship_insp
+           set status = 'OPEN', done_at = null, done_by = null, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_id = #{inspId} and status = 'DONE'
+    </update>
+
+    <update id="markCancelled">
+        update qms_preship_insp
+           set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_id = #{inspId} and status = 'OPEN'
+    </update>
+
+    <select id="countUnjudged" resultType="int">
+        select count(*) from qms_preship_result where insp_id = #{inspId} and judge is null
+    </select>
+
+    <select id="countBlockingPunch" resultType="int">
+        select count(*) from qms_preship_punch where insp_id = #{inspId} and status = 'OPEN' and ship_allow_yn = 'N'
+    </select>
+
+    <!-- ================================================================ 미결 -->
+
+    <sql id="punchCols">
+        p.punch_id, p.insp_id, h.insp_no, h.status as insp_status, h.ship_id, s.ship_no, s.status as ship_status, p.result_id,
+        i.item_cd, i.item_nm, r.grp_nm, r.check_text, r.photo_req_yn, p.status, p.issue_text, p.action_text, p.closed_at, p.closed_by,
+        p.ship_allow_yn, p.allow_reason, p.allowed_at, p.allowed_by, p.ncr_id, n.ncr_no,
+        (select count(*) from sys_file f where f.target_type = 'qms-preship' and f.target_id = r.result_id::varchar and f.use_yn = 'Y') as file_cnt,
+        p.row_ver, p.created_at, p.created_by, r.row_ver as result_row_ver
+    </sql>
+
+    <sql id="punchJoin">
+        from qms_preship_punch p
+        join qms_preship_insp h on h.insp_id = p.insp_id
+        join wms_ship s on s.ship_id = h.ship_id
+        join qms_preship_result r on r.result_id = p.result_id
+        join mst_item i on i.item_id = r.item_id
+        left join qms_ncr n on n.ncr_id = p.ncr_id
+    </sql>
+
+    <sql id="punchWhere">
+        <include refid="punchJoin"/>
+        where h.status &lt;&gt; 'CANCELLED'
+        <if test="status != null">and p.status = #{status}</if>
+        <if test="kw != null">and (s.ship_no ilike #{kw} escape '\' or h.insp_no ilike #{kw} escape '\' or i.item_cd ilike #{kw} escape '\'
+            or r.check_text ilike #{kw} escape '\')</if>
+    </sql>
+
+    <select id="findPunchPage" resultType="io.smarthappy.module.qms.preship.PreshipDtos$PunchRow">
+        select <include refid="punchCols"/> <include refid="punchWhere"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'SHIP'">s.ship_no</when>
+                <when test="s.key == 'ITEM'">i.item_cd</when>
+                <when test="s.key == 'STATUS'">p.status</when>
+                <otherwise>p.created_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        p.punch_id
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countPunch" resultType="long">
+        select count(*) <include refid="punchWhere"/>
+    </select>
+
+    <select id="findPunch" resultType="io.smarthappy.module.qms.preship.PreshipDtos$PunchRow">
+        select <include refid="punchCols"/> <include refid="punchJoin"/> where p.punch_id = #{punchId}
+    </select>
+
+    <select id="lockPunch" resultType="io.smarthappy.module.qms.preship.PreshipDtos$PunchRow">
+        select <include refid="punchCols"/> <include refid="punchJoin"/> where p.punch_id = #{punchId}
+        for update of p
+    </select>
+
+    <update id="closePunch">
+        update qms_preship_punch
+           set status = 'CLOSED', action_text = #{action}, closed_at = now(), closed_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where punch_id = #{punchId} and row_ver = #{rowVer} and status = 'OPEN'
+    </update>
+
+    <update id="allowPunch">
+        update qms_preship_punch
+           set ship_allow_yn = 'Y', allow_reason = #{reason}, allowed_at = now(), allowed_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where punch_id = #{punchId} and row_ver = #{rowVer} and status = 'OPEN' and ship_allow_yn = 'N'
+    </update>
+
+    <update id="linkNcr">
+        update qms_preship_punch
+           set ncr_id = #{ncrId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where punch_id = #{punchId} and row_ver = #{rowVer}
+    </update>
+
+    <select id="ncrIdByNo" resultType="long">
+        select ncr_id from qms_ncr where ncr_no = #{no}
+    </select>
+
+    <update id="recheckOk">
+        update qms_preship_result
+           set judge = 'OK', judged_at = now(), judged_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where result_id = #{resultId} and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 출하 확정 확인·첨부 잠금 -->
+
+    <select id="requiredItemIds" resultType="long">
+        select distinct i.item_id
+          from wms_ship_line sl join mst_item i on i.item_id = sl.item_id
+         where sl.ship_id = #{shipId} and <include refid="tplOfItem"/> is not null
+         order by i.item_id
+    </select>
+
+    <select id="liveInsp" resultType="io.smarthappy.module.qms.preship.PreshipDtos$LiveInsp">
+        select h.insp_id, h.insp_no, h.status,
+               (select count(*) from qms_preship_punch p where p.insp_id = h.insp_id and p.status = 'OPEN' and p.ship_allow_yn = 'N') as blocking_punch_cnt
+          from qms_preship_insp h
+         where h.ship_id = #{shipId} and h.status &lt;&gt; 'CANCELLED'
+    </select>
+
+    <select id="coveredItemIds" resultType="long">
+        select distinct item_id from qms_preship_result where insp_id = #{inspId} order by item_id
+    </select>
+
+    <select id="fileLockState" resultType="string">
+        select case when h.status = 'DONE'
+                    then 'DONE:' || case when exists (select 1 from qms_preship_punch p where p.result_id = r.result_id and p.status = 'OPEN')
+                                         then 'Y' else 'N' end
+                    else h.status end
+          from qms_preship_result r join qms_preship_insp h on h.insp_id = r.insp_id
+         where r.result_id = #{resultId}
+    </select>
+</mapper>

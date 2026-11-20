@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{portal/layout :: head(#{portal.srm.menu.asn})}"></head>
+<!--
+  협력사 포털 — 납품 통지(ASN) 입력·확정 + 납품서 인쇄 (docs/42 7장 3, docs/31 4.13 P-2).
+  내 ASN 만(서버가 로그인 소속으로 거름). 새 ASN: 공장 → 그 공장의 내 열린 발주 행 → 행마다 수량·공급사 LOT·유통기한 → 저장(작성 중) → 확정(보냄).
+  포털에서 만든(출처 PORTAL) 것만 고치고·확정·취소한다 — 거래 회사가 넣은 ASN 은 보기만. 거래 정지면 새 입력은 서버가 409.
+  취소 사유는 칸으로 받는다(브라우저 대화상자 없음).
+-->
+<body data-table-menu="" class="pt-page sp-page">
+<header th:replace="~{portal/layout :: header}"></header>
+<div class="pt-body">
+    <nav th:replace="~{portal/layout :: nav}"></nav>
+    <main class="pt-main">
+        <link rel="stylesheet" th:href="@{/css/views/srm-portal.css}">
+        <h1 th:text="#{portal.srm.menu.asn}">납품 통지(ASN)</h1>
+        <p class="pt-muted" th:text="#{portal.srm.asn.sub}">보낼 물건을 미리 알리고 납품서를 인쇄해 물건과 함께 보냅니다.</p>
+
+        <form id="search" class="sp-search" autocomplete="off">
+            <label><span th:text="#{portal.srm.asn.from}">기간 시작</span><input type="date" name="from" required></label>
+            <label><span th:text="#{portal.srm.asn.to}">기간 끝</span><input type="date" name="to" required></label>
+            <label><span th:text="#{portal.srm.col.status}">상태</span>
+                <select name="status" id="statusSel"><option value="" th:text="#{portal.srm.all}">전체</option></select></label>
+            <label><span th:text="#{portal.srm.asn.keyword}">ASN·납품서 번호</span><input name="keyword" maxlength="100"></label>
+            <button type="submit" th:text="#{common.search}">조회</button>
+            <button type="button" class="sp-secondary" id="newBtn" th:text="#{portal.srm.asn.new}">새 납품 통지</button>
+        </form>
+        <p id="listMsg" class="sp-msg" role="alert" hidden></p>
+        <div class="sp-scroll">
+            <table class="sp-table" id="asnTable">
+                <thead><tr>
+                    <th th:text="#{portal.srm.asn.col.asnNo}">ASN 번호</th>
+                    <th th:text="#{portal.srm.col.plant}">공장</th>
+                    <th th:text="#{portal.srm.asn.col.ship}">출하일</th>
+                    <th th:text="#{portal.srm.asn.col.eta}">도착 예정일</th>
+                    <th th:text="#{portal.srm.asn.col.ref}">납품서 번호</th>
+                    <th th:text="#{portal.srm.col.status}">상태</th>
+                    <th th:text="#{portal.srm.asn.col.source}">입력</th>
+                    <th th:text="#{portal.srm.asn.col.lines}">행</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <section id="detail" class="sp-detail" hidden>
+            <h2 id="detailTitle">납품 통지</h2>
+            <p id="detailInfo" class="pt-muted"></p>
+            <form id="asnForm" autocomplete="off">
+                <div class="sp-fields">
+                    <label><span th:text="#{portal.srm.col.plant}">공장</span><select data-field="plantCd" id="plantSel"></select></label>
+                    <label><span th:text="#{portal.srm.asn.col.ship}">출하일</span><input type="date" data-field="shipDate"></label>
+                    <label><span th:text="#{portal.srm.asn.col.eta}">도착 예정일</span><input type="date" data-field="etaDate"></label>
+                    <label><span th:text="#{portal.srm.asn.col.ref}">납품서 번호</span><input data-field="supplierRef" maxlength="60"></label>
+                    <label class="sp-span"><span th:text="#{portal.srm.asn.carrier}">운송 메모(차량·기사 등)</span><input data-field="carrierMemo" maxlength="200"></label>
+                    <label class="sp-span"><span th:text="#{portal.srm.asn.remark}">메모</span><input data-field="remark" maxlength="1000"></label>
+                </div>
+                <p class="pt-muted" id="lineHint" th:text="#{portal.srm.asn.lineHint}">보낼 행에 수량을 넣으세요(비운 행은 빠집니다). 같은 발주 행을 LOT 별로 나누려면 줄 추가.</p>
+                <div class="sp-scroll">
+                    <table class="sp-table" id="lineTable">
+                        <thead><tr>
+                            <th th:text="#{portal.srm.asn.col.po}">발주 · 행</th>
+                            <th th:text="#{portal.srm.col.item}">품목</th>
+                            <th th:text="#{portal.srm.asn.col.notifiable}">보낼 수 있는 양</th>
+                            <th th:text="#{portal.srm.asn.col.qty}">수량</th>
+                            <th th:text="#{portal.srm.asn.col.lot}">공급사 LOT</th>
+                            <th th:text="#{portal.srm.asn.col.mfg}">제조일</th>
+                            <th th:text="#{portal.srm.asn.col.expiry}">유통기한</th>
+                            <th th:text="#{portal.srm.asn.col.pack}">포장 수</th>
+                            <th></th>
+                        </tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                <ul id="asnMsg" class="sp-msg" role="alert" hidden></ul>
+                <p id="asnOk" class="sp-ok" role="status" hidden></p>
+                <div class="sp-actions">
+                    <button type="submit" id="saveBtn" th:text="#{portal.srm.asn.save}">저장(작성 중)</button>
+                    <button type="button" id="sendBtn" th:text="#{portal.srm.asn.send}">확정해 보내기</button>
+                    <a id="printLink" class="sp-badge" target="_blank" rel="noopener" th:text="#{portal.srm.asn.print}">납품서 인쇄</a>
+                </div>
+                <div class="sp-fields" id="cancelBox">
+                    <label class="sp-span"><span th:text="#{portal.srm.asn.cancelReason}">취소 사유</span><input id="cancelReason" maxlength="500"></label>
+                    <div><button type="button" class="sp-danger" id="cancelBtn" th:text="#{portal.srm.asn.cancel}">이 납품 통지 취소</button></div>
+                </div>
+            </form>
+        </section>
+    </main>
+</div>
+<th:block th:replace="~{portal/layout :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/views/srm/portal-asn.js}"></script>
+</body>
+</html>

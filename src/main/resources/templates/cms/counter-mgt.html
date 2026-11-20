@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  사용량 카운터 (cms-counter) — CMS 1부 C3 (docs/33 4.4, D4). 설비·금형·지그의 타수·사이클·가동 시간 카운터와 읽기 기록.
+  "지금 계기 값"을 넣으면 직전 계기 값과의 차이가 구간 증가량이 된다(줄었으면 리셋 확인). 누적 = 증가량 합(무효 제외).
+  기록은 고치지 않고 무효만(마지막 행부터, DELETE 권한). 입력하면 같은 트랜잭션에서 사용량 예방점검 예정이 생길 수 있다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">사용량 카운터</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.counter.keyword}">카운터·대상</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{cms.mwo.col.targetType}">대상 종류</span>
+        <select name="targetType">
+            <option value="" th:text="#{common.all}">전체</option>
+            <option value="EQUIP" th:text="#{cms.mwo.equip}">설비</option>
+            <option value="ASSET" th:text="#{cms.mwo.asset}">금형·지그</option>
+        </select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y" checked><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="counterGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.counter.selectOrNew}">왼쪽에서 카운터를 고르거나 신규를 누르세요.</p>
+        <p id="stateLine" class="hb-muted"></p>
+        <form id="counterForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{cms.counter.col.counterCd}">카운터 코드</span><input data-field="counterCd" maxlength="30" required></label>
+            <label class="hb-wide-2"><span th:text="#{cms.counter.col.counterNm}">카운터 이름</span><input data-field="counterNm" maxlength="100" required></label>
+            <label><span th:text="#{cms.mwo.col.targetType}">대상 종류</span>
+                <select data-field="targetType">
+                    <option value="EQUIP" th:text="#{cms.mwo.equip}">설비</option>
+                    <option value="ASSET" th:text="#{cms.mwo.asset}">금형·지그</option>
+                </select></label>
+            <label><span th:text="#{cms.mwo.col.target}">대상</span>
+                <input data-field="targetCd" maxlength="30" list="targetList"></label>
+            <datalist id="targetList"></datalist>
+            <label><span th:text="#{cms.counter.col.kind}">종류</span>
+                <select data-field="counterKind" data-hb="select" data-code="CMS_COUNTER_KIND"></select></label>
+            <label><span th:text="#{cms.tmpl.col.unit}">단위</span><input data-field="unitNm" maxlength="20"></label>
+            <label><span th:text="#{cms.tmpl.col.scale}">자릿수</span>
+                <input data-field="scale" data-hb="number" data-scale="0" data-min="0" data-max="6" data-pad="false" data-help-key="cms-counter.scale"></label>
+            <label><span th:text="#{cms.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+        <section class="hb-sub" id="readSection" hidden>
+            <h2 th:text="#{cms.counter.read}">읽기 입력</h2>
+            <form id="readForm" class="hb-form" autocomplete="off">
+                <fieldset class="hb-seg hb-wide">
+                    <legend th:text="#{cms.counter.inputMode}">입력</legend>
+                    <label><input type="radio" name="mode" value="GAUGE" checked><span th:text="#{cms.counter.mode.GAUGE}">지금 계기 값</span></label>
+                    <label><input type="radio" name="mode" value="DELTA"><span th:text="#{cms.counter.mode.DELTA}">증가량 직접</span></label>
+                </fieldset>
+                <label class="hb-wide"><span id="valueLabel" th:text="#{cms.counter.mode.GAUGE}">지금 계기 값</span>
+                    <input id="readValue" data-field="gaugeValue" inputmode="decimal" maxlength="24" data-help-key="cms-counter.gaugeValue"></label>
+                <label class="hb-wide"><span th:text="#{cms.counter.col.readAt}">읽은 시각(비우면 지금)</span>
+                    <input type="datetime-local" data-field="readAt"></label>
+                <label class="hb-check" id="resetBox" hidden><input type="checkbox" data-field="resetYn" value="Y">
+                    <span th:text="#{cms.counter.reset}">계기가 리셋·교체됨(0부터 다시 셈)</span></label>
+                <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+            </form>
+            <p id="readPreview" class="hb-muted" role="status"></p>
+            <div class="hb-toolbar">
+                <button type="button" id="readBtn" th:text="#{cms.counter.readBtn}">입력</button>
+            </div>
+        </section>
+        <section class="hb-sub" id="historySection" hidden>
+            <h2 th:text="#{cms.counter.history}">읽기 기록</h2>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table hb-plant-table" id="readings">
+                    <thead><tr>
+                        <th th:text="#{cms.counter.col.readTime}">읽은 시각</th>
+                        <th th:text="#{cms.counter.col.gauge}">계기 값</th>
+                        <th th:text="#{cms.counter.col.delta}">증가량</th>
+                        <th th:text="#{cms.counter.col.total}">누적</th>
+                        <th th:text="#{cms.counter.col.recordedBy}">입력</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/counter-mgt.js}"></script>
+</body>
+</html>

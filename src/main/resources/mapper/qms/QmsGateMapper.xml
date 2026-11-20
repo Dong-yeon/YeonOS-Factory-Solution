@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 착수 게이트 QMS 규칙 (P3 QMS 2부 Q9, docs/29_P3 12.11) — 읽기만, 잠금 없음(MES 착수 트랜잭션 안에서 불림) -->
+<mapper namespace="io.smarthappy.module.qms.QmsGateMapper">
+
+    <select id="findLiveVerifs" resultType="io.smarthappy.module.qms.QmsGateMapper$VerifKey">
+        select eco_id, lot_id, result from qms_setup_verif
+         where status = 'ACTIVE' and lot_id in
+        <foreach collection="lotIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findOpenNcrs" resultType="io.smarthappy.module.qms.QmsGateMapper$OpenNcr">
+        select lot_id, ncr_no from qms_ncr
+         where status in ('OPEN', 'PENDING') and lot_id in
+        <foreach collection="lotIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by lot_id, ncr_id
+    </select>
+
+    <select id="findItemClassId" resultType="long">
+        select item_class_id from mst_item where item_id = #{itemId}
+    </select>
+
+    <!-- VISUAL = 육안(게이지 없이 측정 — InspService 와 같은 규칙) -->
+    <select id="findPlanGaugeClasses" resultType="string">
+        select distinct gauge_class from qms_insp_plan_line
+         where insp_plan_id = #{planId} and gauge_class is not null and gauge_class &lt;&gt; 'VISUAL'
+         order by gauge_class
+    </select>
+
+    <!-- 사용 중 게이지 + 최근 유효 교정(교정일 → id 순 마지막) — 판정은 GaugeStatus -->
+    <select id="findGauges" resultType="io.smarthappy.module.qms.QmsGateMapper$GaugeRef">
+        select a.gauge_class, a.use_yn, lc.result as last_result, lc.next_due_date
+          from mst_phys_asset a
+          left join lateral (
+               select c.result, c.next_due_date
+                 from qms_gauge_calib c
+                where c.asset_id = a.asset_id and c.void_yn = 'N'
+                order by c.calib_date desc, c.calib_id desc
+                limit 1) lc on true
+         where a.asset_type = 'GAUGE' and a.use_yn = 'Y' and a.gauge_class in
+        <foreach collection="classes" item="c" open="(" separator="," close=")">#{c}</foreach>
+    </select>
+</mapper>

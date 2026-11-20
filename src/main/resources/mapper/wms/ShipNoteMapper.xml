@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 출하 특이사항 (docs/56) — 규칙·확인. 고객은 wms_ship.cust_id, 품목은 wms_ship_line.item_id(영업 표는 읽지 않는다) -->
+<mapper namespace="io.smarthappy.module.wms.shipnote.ShipNoteMapper">
+
+    <!-- 규칙 n 이 출하 s 의 줄 l(품목 i)에 걸린다 — 조건이 비면 전체. 출하 목록 열(ShipMapper.headCols)도 이 조각을 쓴다 -->
+    <sql id="matchOn">
+        n.use_yn = 'Y'
+        and (n.cust_id is null or n.cust_id = s.cust_id)
+        and (n.item_class_id is null or n.item_class_id = i.item_class_id)
+        and (n.item_id is null or n.item_id = l.item_id)
+    </sql>
+
+    <!-- 현재 버전 확인이 있다 -->
+    <sql id="ackedNow">
+        exists (select 1 from wms_ship_note_ack a where a.ship_id = s.ship_id and a.note_id = n.note_id and a.note_ver = n.row_ver)
+    </sql>
+
+    <sql id="noteCols">
+        n.note_id, n.cust_id, c.cust_cd, c.cust_nm, n.item_class_id, k.class_cd, k.class_nm, n.item_id, i.item_cd, i.item_nm,
+        n.title, n.body, n.ack_required_yn, n.use_yn, n.sort_no, n.row_ver, n.updated_at, n.updated_by
+    </sql>
+
+    <sql id="noteFrom">
+          from wms_ship_note n
+          left join mst_cust c on c.cust_id = n.cust_id
+          left join mst_item_class k on k.class_id = n.item_class_id
+          left join mst_item i on i.item_id = n.item_id
+    </sql>
+
+    <sql id="gridWhere">
+        <include refid="noteFrom"/>
+         where 1 = 1
+        <if test="useYn != null"> and n.use_yn = #{useYn}</if>
+        <if test="ackRequiredYn != null"> and n.ack_required_yn = #{ackRequiredYn}</if>
+        <if test="q != null">
+           and (n.title ilike '%' || #{q} || '%' escape '\' or c.cust_cd ilike '%' || #{q} || '%' escape '\' or c.cust_nm ilike '%' || #{q} || '%' escape '\'
+                or i.item_cd ilike '%' || #{q} || '%' escape '\' or k.class_cd ilike '%' || #{q} || '%' escape '\')
+        </if>
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.wms.shipnote.ShipNoteDtos$Note">
+        select <include refid="noteCols"/> <include refid="gridWhere"/>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'TITLE'">n.title</when>
+                <when test="o.key == 'CUST_CD'">c.cust_cd</when>
+                <when test="o.key == 'UPDATED_AT'">n.updated_at</when>
+                <otherwise>n.sort_no</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        n.note_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="count" resultType="long">select count(*) <include refid="gridWhere"/></select>
+
+    <select id="findNote" resultType="io.smarthappy.module.wms.shipnote.ShipNoteDtos$Note">
+        select <include refid="noteCols"/> <include refid="noteFrom"/> where n.note_id = #{id}
+    </select>
+
+    <select id="classes" resultType="io.smarthappy.module.wms.shipnote.ShipNoteDtos$ClassOpt">
+        select class_id, class_cd, class_nm from mst_item_class where use_yn = 'Y' order by sort_no, class_cd
+    </select>
+
+    <select id="custIdByCode" resultType="long">
+        select cust_id from mst_cust where cust_cd = #{custCd} and cust_type in ('SALES', 'BOTH')
+    </select>
+
+    <select id="classIdByCode" resultType="long">
+        select class_id from mst_item_class where class_cd = #{classCd}
+    </select>
+
+    <select id="itemIdByCode" resultType="long">
+        select item_id from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into wms_ship_note (comp_cd, cust_id, item_class_id, item_id, title, body, ack_required_yn, use_yn, sort_no, created_by, updated_by)
+        values (hb_current_comp(), #{f.custId}, #{f.itemClassId}, #{f.itemId}, #{f.title}, #{f.body}, #{f.ackRequiredYn}, #{f.useYn}, #{f.sortNo},
+                #{by}, #{by})
+        returning note_id
+    </select>
+
+    <!-- 낙관적 락 — 버전이 오르면 옛 확인은 무효(다시 확인) -->
+    <update id="update">
+        update wms_ship_note
+           set cust_id = #{f.custId}, item_class_id = #{f.itemClassId}, item_id = #{f.itemId}, title = #{f.title}, body = #{f.body},
+               ack_required_yn = #{f.ackRequiredYn}, use_yn = #{f.useYn}, sort_no = #{f.sortNo},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where note_id = #{f.noteId} and row_ver = #{rowVer}
+    </update>
+
+    <select id="matchShip" resultType="io.smarthappy.module.wms.shipnote.ShipNoteDtos$MatchRow">
+        select n.note_id, n.title, n.body, n.ack_required_yn, n.row_ver as note_ver, c.cust_cd, k.class_cd, ni.item_cd, l.ship_line_id,
+               a.acked_at, a.acked_by, w.worker_nm as ack_worker_nm
+          from wms_ship s
+          join wms_ship_line l on l.ship_id = s.ship_id
+          join mst_item i on i.item_id = l.item_id
+          join wms_ship_note n on <include refid="matchOn"/>
+          left join mst_cust c on c.cust_id = n.cust_id
+          left join mst_item_class k on k.class_id = n.item_class_id
+          left join mst_item ni on ni.item_id = n.item_id
+          left join wms_ship_note_ack a on a.ship_id = s.ship_id and a.note_id = n.note_id and a.note_ver = n.row_ver
+          left join mst_worker w on w.worker_id = a.worker_id
+         where s.ship_id = #{shipId}
+         order by n.sort_no, n.note_id, l.line_no
+    </select>
+
+    <insert id="insertAck">
+        insert into wms_ship_note_ack (comp_cd, ship_id, note_id, note_ver, worker_id, acked_by)
+        values (hb_current_comp(), #{shipId}, #{noteId}, #{noteVer}, #{workerId}, #{by})
+        on conflict (ship_id, note_id, note_ver) do nothing
+    </insert>
+</mapper>

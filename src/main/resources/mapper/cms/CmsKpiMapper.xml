@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 2부 C9 — 설비 KPI 원값 (docs/33 11.8). 합만 낸다 — 비율은 EquipKpi 가 합한 분자 ÷ 합한 분모로.
+     실적은 원래 행(설비·발생 시각 기준)만 읽고 정정된 것은 뺀다. 설비 없이 넣은 실적은 설비 KPI 에 들어가지 않는다 -->
+<mapper namespace="io.smarthappy.module.cms.CmsKpiMapper">
+
+    <select id="raw" resultType="io.smarthappy.module.cms.CmsKpiMapper$RawRow">
+        with iv as (
+            select s.equip_id, coalesce(nr.state_cat, s.state_cat) as cat,
+                   floor(extract(epoch from least(coalesce(s.end_at, #{until}::timestamptz), #{until}::timestamptz)
+                                            - greatest(s.start_at, #{from}::timestamptz)))::bigint as sec,
+                   (s.start_at &gt;= #{from} and s.start_at &lt; #{until}) as started
+              from cms_equip_state_log s
+              join mst_equip e on e.equip_id = s.equip_id
+              left join cms_state_note n on n.state_log_id = s.state_log_id and n.void_yn = 'N'
+              left join cms_state_reason nr on nr.reason_id = n.reason_id
+             where e.plant_cd = #{plantCd} and s.start_at &lt; #{until} and (s.end_at is null or s.end_at &gt; #{from})
+        ), st as (
+            select equip_id, sum(sec) as covered_sec,
+                   coalesce(sum(sec) filter (where cat = 'UNKNOWN'), 0) as unknown_sec,
+                   coalesce(sum(sec) filter (where cat = 'NST'), 0) as nst_sec,
+                   coalesce(sum(sec) filter (where cat = 'SDT'), 0) as sdt_sec,
+                   coalesce(sum(sec) filter (where cat = 'UDT'), 0) as udt_sec,
+                   coalesce(sum(sec) filter (where cat = 'PRD'), 0) as prd_sec,
+                   count(*) filter (where cat = 'UDT' and started) as failures
+              from iv group by equip_id
+        ), rs as (
+            select r.equip_id,
+                   sum(r.good_qty) as good_qty,
+                   sum(r.good_qty + r.scrap_qty + r.rework_qty + r.repair_qty) as total_qty,
+                   coalesce(sum(wp.std_ct_sec / wp.units_per_cycle * (r.good_qty + r.scrap_qty + r.rework_qty + r.repair_qty)), 0) as ideal_sec,
+                   coalesce(sum(wp.std_ct_sec / wp.units_per_cycle * r.good_qty), 0) as ideal_good_sec,
+                   count(*) filter (where wp.std_ct_sec is null) as ct_missing
+              from prd_result r
+              join prd_wo_proc wp on wp.wo_proc_id = r.wo_proc_id
+              join mst_equip e on e.equip_id = r.equip_id
+             where e.plant_cd = #{plantCd} and r.occurred_at &gt;= #{from} and r.occurred_at &lt; #{until}
+               -- 원래 실적만, 되돌려진 것은 뺀다: 역분개 행은 설비가 비고 시각이 정정 시각이라 설비·기간 합에 안 잡힌다(MES D27 과 같은 규칙)
+               and r.reversal_of_id is null
+               and not exists (select 1 from prd_result v where v.reversal_of_id = r.result_id)
+             group by r.equip_id
+        )
+        select e.equip_id, e.equip_cd, e.equip_nm, h.node_cd, h.node_nm,
+               coalesce(st.covered_sec, 0) as covered_sec, coalesce(st.unknown_sec, 0) as unknown_sec, coalesce(st.nst_sec, 0) as nst_sec,
+               coalesce(st.sdt_sec, 0) as sdt_sec, coalesce(st.udt_sec, 0) as udt_sec, coalesce(st.prd_sec, 0) as prd_sec,
+               coalesce(st.failures, 0) as failures, coalesce(rs.ideal_sec, 0) as ideal_sec, coalesce(rs.ideal_good_sec, 0) as ideal_good_sec,
+               coalesce(rs.ct_missing, 0) as ct_missing, coalesce(rs.good_qty, 0) as good_qty, coalesce(rs.total_qty, 0) as total_qty,
+               pf.ideal_ct_sec
+          from mst_equip e
+          left join mst_equip_hier h on h.node_id = e.node_id
+          left join cms_equip_profile pf on pf.equip_id = e.equip_id
+          left join st on st.equip_id = e.equip_id
+          left join rs on rs.equip_id = e.equip_id
+         where e.plant_cd = #{plantCd} and (e.use_yn = 'Y' or st.equip_id is not null or rs.equip_id is not null)
+            <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\')</if>
+         order by h.node_cd nulls last, e.equip_cd
+         limit 2001
+    </select>
+
+    <!-- 수집 COUNT 순합(docs/33 14장, C9 수집 기준) — [from, until) 에 발생한 원 행 + 그 역분개(있으면 -원 qty). 역분개는 원 행 발생 시각으로 센다:
+         정정을 언제 넣든 기간 합이 같다(실적 C9 규칙과 같은 효과). 회사는 RLS, 설비 범위는 ix_cms_equip_count_equip, 역분개 찾기는 uq_cms_equip_count_reversal -->
+    <select id="countSums" resultType="io.smarthappy.module.cms.CmsKpiMapper$CountRow">
+        select c.equip_id,
+               coalesce(sum(c.qty + coalesce(v.qty, 0)) filter (where c.metric_cd = 'GOOD'), 0) as good_qty,
+               coalesce(sum(c.qty + coalesce(v.qty, 0)) filter (where c.metric_cd = 'SCRAP'), 0) as scrap_qty
+          from cms_equip_count c
+          join mst_equip e on e.equip_id = c.equip_id
+          left join cms_equip_count v on v.reversal_of_id = c.count_id
+         where e.plant_cd = #{plantCd} and c.reversal_of_id is null
+           and c.occurred_at &gt;= #{from} and c.occurred_at &lt; #{until}
+         group by c.equip_id
+    </select>
+
+    <!-- 점검 실행(작업지시 없는 CHECK 방식)·PM 작업지시 중 [from, until) 에 끝난 것. 사용량 주기는 완료 사용량으로(C3) -->
+    <select id="pmDone" resultType="io.smarthappy.module.cms.CmsKpiMapper$PmRow">
+        select c.equip_id, c.due_date, c.performed_at as done_at, c.due_usage, c.done_usage
+          from cms_chk_run c join mst_equip e on e.equip_id = c.equip_id
+         where e.plant_cd = #{plantCd} and c.mwo_id is null and c.status = 'DONE'
+           and c.performed_at &gt;= #{from} and c.performed_at &lt; #{until}
+        union all
+        select m.equip_id, m.due_date, m.finished_at, null, null
+          from cms_mwo m join mst_equip e on e.equip_id = m.equip_id
+         where e.plant_cd = #{plantCd} and m.mwo_type = 'PM' and m.status in ('DONE', 'CLOSED') and m.due_date is not null
+           and m.finished_at &gt;= #{from} and m.finished_at &lt; #{until}
+    </select>
+</mapper>

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{portal/layout :: head(#{portal.srm.asnPrint.title})}"></head>
+<!--
+  협력사 포털 — 납품서 인쇄 (docs/42 7장 3, docs/31 4.11.4). ASN 화면에서 ?asnId= 로 연다(메뉴 없음, 머리글·메뉴 없이 종이 한 장).
+  스캔 키 ASN:{asn_no}(WMS 입고 화면이 읽는 모양)를 글자로 크게 — 내부 납품서 인쇄(srm-asn-print)와 같은 모양, 자료는 포털 API(내 ASN 만).
+-->
+<body class="pt-page sp-page" th:data-supplier="|${supplier.custCd} · ${supplier.custNm}|">
+<link rel="stylesheet" th:href="@{/css/views/srm-portal.css}">
+<main class="sp-print">
+    <div class="sp-actions sp-noprint" id="printBar">
+        <button type="button" id="printBtn" th:text="#{portal.srm.asnPrint.print}">인쇄</button>
+        <span id="msg" role="status"></span>
+    </div>
+    <h1 id="docTitle" th:text="#{portal.srm.asnPrint.title}">납품서</h1>
+    <p id="scanKey" class="sp-scan-key"></p>
+    <dl id="docInfo"></dl>
+    <div class="sp-scroll">
+        <table class="sp-table" id="docLines">
+            <thead><tr>
+                <th th:text="#{portal.srm.col.lineNo}">행</th>
+                <th th:text="#{portal.srm.asn.col.po}">발주 · 행</th>
+                <th th:text="#{portal.srm.col.item}">품목</th>
+                <th th:text="#{portal.srm.asn.col.qty}">수량</th>
+                <th th:text="#{portal.srm.asn.col.lot}">공급사 LOT</th>
+                <th th:text="#{portal.srm.asn.col.expiry}">유통기한</th>
+                <th th:text="#{portal.srm.asn.col.pack}">포장 수</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</main>
+<th:block th:replace="~{portal/layout :: scripts}"></th:block>
+<script th:src="@{/js/views/srm/portal-asn-print.js}"></script>
+</body>
+</html>

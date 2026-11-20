@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  자격 관리 (mst-qual) — P2 1단계 (docs/25 4.2). 자격(용접·크레인·검사원 …) + 그 자격이 필요한 공정.
+  공정별 요구의 "차단/경고" 는 공장 정책 QUAL_GATE_MODE 가 상한 — 정책이 경고면 차단 요구도 경고로 동작한다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">자격 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <label class="hb-check"><input type="checkbox" id="withUnused">
+                <span th:text="#{qual.withUnused}">사용 중지 포함</span></label>
+        </div>
+        <div id="qualGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qual.selectOrNew}">왼쪽에서 자격을 고르거나 신규를 누르세요.</p>
+        <form id="qualForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{qual.col.qualCd}">자격 코드</span>
+                <input data-field="qualCd" maxlength="20" required data-help-key="mst-qual.qualCd"></label>
+            <label class="hb-wide-2"><span th:text="#{qual.col.qualNm}">자격명</span>
+                <input data-field="qualNm" maxlength="100" required></label>
+            <label><span th:text="#{qual.col.validMonths}">유효(개월)</span>
+                <input data-field="validMonths" data-hb="number" data-scale="0" data-min="1" data-max="600" data-pad="false"
+                       data-help-key="mst-qual.validMonths"></label>
+            <label><span th:text="#{qual.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{qual.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{qual.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+        <section class="hb-sub" id="reqSection" hidden>
+            <h2 th:text="#{qual.reqs}">이 자격이 필요한 공정</h2>
+            <table class="hb-cmp-table hb-plant-table" id="reqs">
+                <thead><tr>
+                    <th th:text="#{qual.col.proc}">공정</th>
+                    <th th:text="#{qual.col.gateMode}">자격 없을 때</th>
+                    <th th:text="#{qual.col.useYn}">사용</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <form id="reqForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{qual.col.proc}">공정</span>
+                    <select data-field="procCd" id="procSel"></select></label>
+                <label><span th:text="#{qual.col.gateMode}">자격 없을 때</span>
+                    <select data-field="gateMode" data-help-key="mst-qual.gateMode">
+                        <option value="WARN" th:text="#{code.GATE_MODE.WARN}">경고</option>
+                        <option value="BLOCK" th:text="#{code.GATE_MODE.BLOCK}">차단</option>
+                    </select></label>
+                <div class="hb-toolbar">
+                    <button type="button" id="addReqBtn" class="hb-btn-secondary" th:text="#{qual.addReq}">공정 추가</button>
+                </div>
+            </form>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/mes/mes-ui.js}"></script>
+<script th:src="@{/js/views/master/qual-mgt.js}"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  홈 카드 집계 (docs/37 6장). 회사 조건은 RLS(조건에 회사 식을 쓰지 않는다). 수량은 trim_scale 글자.
+  지시: 공장을 고르면(5단계) plant_cd 조건 + 공장 날짜(today 인자). ix_prd_wo_plan (comp_cd, plan_start, wo_id) 범위 + 상태 필터. 끝난 지시가 많아지면 부분 인덱스 제안(docs/37 H5).
+-->
+<mapper namespace="io.smarthappy.module.production.ProductionHomeMapper">
+
+    <select id="woTodaySummary" resultType="io.smarthappy.module.production.ProductionHomeMapper$WoTodaySummary">
+        with w as (
+            select wo_id, plan_start, plan_end
+              from prd_wo
+             where status in ('RELEASED', 'IN_PROGRESS')
+               <if test="plantCd != null">and plant_cd = #{plantCd}</if>
+        )
+        select (select count(*) from w where w.plan_start &lt;= #{today}) as wo_cnt,
+               (select count(*) from w where w.plan_end &lt; #{today}) as overdue_cnt,
+               (select count(*) from prd_wo_proc p join w on w.wo_id = p.wo_id where p.status = 'RUN') as run_cnt,
+               (select count(*) from prd_wo_proc p join w on w.wo_id = p.wo_id where p.status = 'PAUSE') as pause_cnt
+    </select>
+
+    <select id="woTodayTop" resultType="io.smarthappy.module.production.ProductionHomeMapper$WoTodayRow">
+        select w.wo_no, i.item_cd, i.item_nm, trim_scale(w.plan_qty)::text as plan_qty, w.unit_cd, w.status, w.plan_end, w.plan_start
+          from prd_wo w
+          join mst_item i on i.item_id = w.item_id
+         where w.status in ('RELEASED', 'IN_PROGRESS')
+           and w.plan_start &lt;= #{today}
+           <if test="plantCd != null">and w.plant_cd = #{plantCd}</if>
+         order by w.priority, w.plan_start, w.wo_id
+         limit #{limit}
+    </select>
+
+    <select id="lotHoldCount" resultType="long">
+        select count(*)
+          from lot_master m
+         where m.hold_yn = 'Y'
+           and hb_lot_balance(m.lot_id) &gt; 0
+    </select>
+
+    <select id="lotHoldTop" resultType="io.smarthappy.module.production.ProductionHomeMapper$LotHoldRow">
+        select m.lot_no, i.item_cd, trim_scale(hb_lot_balance(m.lot_id))::text as balance, m.unit_cd, m.hold_reason,
+               (m.created_at at time zone #{zone})::date as created_on   -- 회사 날짜(LOT 목록 기간이 회사 시간대로 자른다 — DB 세션 시간대 금지)
+          from lot_master m
+          join mst_item i on i.item_id = m.item_id
+         where m.hold_yn = 'Y'
+           and hb_lot_balance(m.lot_id) &gt; 0
+         -- 오래 묵은 보류 먼저(6단계, docs/37 18.2): 살아 있는 보류 근거(V109 lot_hold) 중 가장 이른 held_at.
+         -- updated_at 은 보류 동기화·버전 증가마다 바뀌어 순서가 흔들린다. 근거 행이 없던 옛 보류는 맨 앞(null first)
+         order by (select min(h.held_at) from lot_hold h where h.lot_id = m.lot_id and h.released_at is null) nulls first, m.lot_id
+         limit #{limit}
+    </select>
+</mapper>

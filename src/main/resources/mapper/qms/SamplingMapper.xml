@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 샘플링 계획·AQL 표 (P3 QMS Q1, docs/29). 목록·건수·엑셀은 같은 조건·정렬 조각 -->
+<mapper namespace="io.smarthappy.module.qms.SamplingMapper">
+
+    <sql id="cols">
+        s.sampling_plan_id, s.plan_cd, s.plan_nm, s.method, s.fixed_n, s.pct, s.std_cd, s.insp_level, s.severity, s.aql,
+        s.ac, s.re, s.sort_no, s.use_yn, s.remark, s.row_ver, s.updated_at, s.updated_by,
+        (select count(distinct p.insp_plan_id) from qms_insp_plan_line l join qms_insp_plan p on p.insp_plan_id = l.insp_plan_id
+          where l.sampling_plan_id = s.sampling_plan_id and p.status &lt;&gt; 'DRAFT') as locked_cnt,
+        (select count(distinct p.insp_plan_id) from qms_insp_plan_line l join qms_insp_plan p on p.insp_plan_id = l.insp_plan_id
+          where l.sampling_plan_id = s.sampling_plan_id and p.status = 'DRAFT') as draft_cnt
+    </sql>
+
+    <sql id="where">
+        from qms_sampling_plan s
+        <where>
+            <if test="q.keywordLike != null">and (s.plan_cd ilike #{q.keywordLike} escape '\' or s.plan_nm ilike #{q.keywordLike} escape '\')</if>
+            <if test="q.method != null">and s.method = #{q.method}</if>
+            <if test="!q.withUnused">and s.use_yn = 'Y'</if>
+        </where>
+    </sql>
+
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'PLAN_CD'">s.plan_cd</when>
+                <when test="o.key == 'PLAN_NM'">s.plan_nm</when>
+                <when test="o.key == 'METHOD'">s.method</when>
+                <when test="o.key == 'SORT_NO'">s.sort_no</when>
+                <otherwise>s.updated_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        s.sampling_plan_id
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.QmsDtos$SamplingRow">
+        select <include refid="cols"/> <include refid="where"/> <include refid="orderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.qms.QmsDtos$SamplingRow" fetchSize="1000">
+        select <include refid="cols"/> <include refid="where"/> <include refid="orderBy"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.QmsDtos$SamplingRow">
+        select <include refid="cols"/> from qms_sampling_plan s where s.sampling_plan_id = #{id}
+    </select>
+
+    <select id="findByCd" resultType="io.smarthappy.module.qms.QmsDtos$SamplingRow">
+        select <include refid="cols"/> from qms_sampling_plan s where s.plan_cd = #{planCd}
+    </select>
+
+    <select id="findActive" resultType="io.smarthappy.module.qms.QmsDtos$SamplingRow">
+        select <include refid="cols"/> from qms_sampling_plan s where s.use_yn = 'Y' order by s.sort_no, s.plan_cd
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into qms_sampling_plan (comp_cd, plan_cd, plan_nm, method, fixed_n, pct, std_cd, insp_level, severity, aql, ac, re,
+                                       sort_no, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.planCd}, #{f.planNm}, #{f.method}, #{f.fixedN}, #{f.pct}, #{f.stdCd}, #{f.inspLevel},
+                #{f.severity}, #{f.aql}, #{f.ac}, #{f.re}, #{f.sortNo}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning sampling_plan_id
+    </select>
+
+    <update id="update">
+        update qms_sampling_plan
+           set plan_nm = #{f.planNm}, method = #{f.method}, fixed_n = #{f.fixedN}, pct = #{f.pct}, std_cd = #{f.stdCd},
+               insp_level = #{f.inspLevel}, severity = #{f.severity}, aql = #{f.aql}, ac = #{f.ac}, re = #{f.re},
+               sort_no = #{f.sortNo}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where sampling_plan_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ AQL 표 -->
+
+    <select id="findStds" resultType="string">
+        select std_cd from qms_aql_table union select std_cd from qms_aql_plan_row order by 1
+    </select>
+
+    <select id="findLetters" resultType="io.smarthappy.module.qms.QmsDtos$AqlLetterRow">
+        select aql_table_id, std_cd, insp_level, lot_from, lot_to, code_letter, use_yn, row_ver
+          from qms_aql_table
+         where std_cd = #{stdCd} <if test="activeOnly">and use_yn = 'Y'</if>
+         order by array_position(array['I','II','III','S1','S2','S3','S4']::varchar[], insp_level), lot_from
+    </select>
+
+    <select id="findPlanRows" resultType="io.smarthappy.module.qms.QmsDtos$AqlPlanRowView">
+        select aql_row_id, std_cd, severity, code_letter, aql, sample_size, ac, re, use_yn, row_ver
+          from qms_aql_plan_row
+         where std_cd = #{stdCd} <if test="activeOnly">and use_yn = 'Y'</if>
+         order by array_position(array['NORMAL','TIGHTENED','REDUCED']::varchar[], severity), code_letter, aql
+    </select>
+
+    <select id="hasLetters" resultType="boolean">
+        select exists (select 1 from qms_aql_table where std_cd = #{stdCd} and insp_level = #{inspLevel} and use_yn = 'Y')
+    </select>
+
+    <select id="hasPlanRows" resultType="boolean">
+        select exists (select 1 from qms_aql_plan_row where std_cd = #{stdCd} and severity = #{severity} and aql = #{aql}
+                          and use_yn = 'Y')
+    </select>
+</mapper>

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  출하 (wms-ship) — P4 2부 B6a (docs/30 12.7). 고객의 열린 수주 행으로 지시 → 피킹(제안 칸 → 출하 대기 STAGING 이동) → 출하 확정.
+  사용성 체크(docs/11 4.3): 주 사용자 = 출하 담당(WEB — PDA 피킹은 B7). 직접 치는 값 = 고객 코드·지시 수량·피킹 수량(제안을 고침)·취소 사유.
+  피킹은 합격분(AVAILABLE)만, 출발 칸은 차감 전략(W4) 제안에서. 확정은 누른 순간 만든 요청 id 로 한 번만.
+  예외 = 남은 수량 초과·다른 고객 행, 재고 부족(409), 보류 LOT(확정 거부), 고객 승인 전 변경 LOT(409, 정책), 수주가 줄어 초과(409),
+  다른 사람이 먼저 바꿈(409 — 다시 조회). 출하 취소(확정 뒤)는 승인 권한.
+  팔레트(B6b, 12.10): 피킹을 골라 OPEN 팔레트에 담기·빼기 → 닫기(SSCC 부여·팔레트 라벨) → 필요하면 다시 열기(사유). 빈 팔레트만 취소.
+  예외 = 닫힌 팔레트의 피킹 취소·빼기(먼저 다시 열기), 빈 팔레트 닫기, 팔레트 필수 공장에서 덜 담긴 출하 확정(409).
+  운송 정보·사진(docs/58, W-7): 운송사·차량 번호·송장 번호(DRAFT·PICKING·SHIPPED 에서 고침 — 송장은 출하 뒤에도), 사진·증빙은 플랫폼 첨부
+  (대상 = 이 화면·지시 id, 취소된 지시는 잠김 409). 예외 = 다른 사람이 먼저 고침(409 — 다시 조회), 너무 긴 값·제어문자(400).
+  팔레트 스캔(B6b-2): PLT:{번호} 또는 SSCC(GS1 (00)·숫자 18/20자리) → 그 출하 지시를 열고 팔레트 행을 표시. 검사 숫자 틀림 400, 없음 404.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">출하</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{wmsShip.plant}">공장</span><select name="plantCd" id="plantSel" required></select></label>
+    <label><span th:text="#{wmsShip.status}">상태</span>
+        <select name="status" data-hb="select" data-code="WMS_SHIP_STATUS" data-blank="all"></select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<form id="scanForm" class="hb-search" autocomplete="off">
+    <label class="hb-wide"><span th:text="#{wmsShip.scan}">팔레트 스캔</span>
+        <input id="scanText" maxlength="512" th:placeholder="#{wmsShip.scanPlaceholder}" data-help-key="wms-ship.scan"></label>
+    <div class="hb-sp-actions">
+        <button type="submit" id="scanBtn" class="hb-btn-secondary" th:text="#{wmsShip.scanOpen}">열기</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="shipGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="shipInfo" class="hb-muted" th:text="#{wmsShip.selectFirst}">왼쪽에서 출하를 고르거나 신규를 누르세요.</p>
+        <!-- 출하 특이사항(docs/56) — 이 지시에 걸린 규칙, 확인 필수는 [확인] 전 피킹·확정 불가(서버) -->
+        <section id="noteBox" class="hb-notice" hidden>
+            <h3 th:text="#{wmsShip.notes}">출하 특이사항</h3>
+            <ul id="noteList" class="hb-plain-list"></ul>
+        </section>
+
+        <div id="newBox" hidden>
+            <form id="newForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{wmsShip.custCd}">고객 코드</span>
+                    <input data-field="custCd" maxlength="40" data-help-key="wms-ship.custCd"></label>
+                <label><span th:text="#{wmsShip.stage}">출하 대기 위치</span><select data-field="stageNodeId" id="stageSel"></select></label>
+                <label><span th:text="#{wmsShip.col.planDate}">출하 예정일</span><input data-field="planDate" type="date"></label>
+                <label><span th:text="#{wmsShip.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+                <div class="hb-wide hb-toolbar">
+                    <button type="button" id="loadOrdersBtn" class="hb-btn-secondary" th:text="#{wmsShip.loadOrders}">수주 행 불러오기</button>
+                </div>
+            </form>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="orderLines">
+                    <thead><tr>
+                        <th th:text="#{wmsShip.col.order}">수주</th>
+                        <th th:text="#{wmsShip.col.item}">품목</th>
+                        <th class="hb-num" th:text="#{wmsShip.col.open}">남은 수량</th>
+                        <th th:text="#{wmsShip.col.shipQty}">지시 수량</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="hb-toolbar">
+                <button type="button" id="createBtn" th:text="#{common.save}">저장</button>
+            </div>
+        </div>
+
+        <div id="actBox" class="hb-toolbar" hidden>
+            <button type="button" id="confirmBtn" th:if="${actions.contains('SAVE')}" th:text="#{wmsShip.confirm}" data-help-key="wms-ship.confirm">출하 확정</button>
+            <button type="button" id="unpickBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{wmsShip.unpick}">고른 피킹 취소</button>
+            <div class="hb-danger-zone">
+                <button type="button" id="undoBtn" class="hb-btn-danger-outline" th:if="${actions.contains('APPROVE')}" th:text="#{wmsShip.undo}">출하 취소</button>
+                <button type="button" id="cancelBtn" class="hb-btn-danger-outline" th:if="${actions.contains('SAVE')}" th:text="#{wmsShip.cancel}">지시 취소</button>
+            </div>
+        </div>
+
+        <form id="labelForm" class="hb-form" autocomplete="off" hidden>
+            <label><span th:text="#{wmsShip.printer}">출하 라벨 프린터</span><select data-field="printerId"></select></label>
+            <label><span th:text="#{wmsShip.tpl}">템플릿</span><select data-field="tplId"></select></label>
+            <label><span th:text="#{wmsShip.copies}">매수</span>
+                <input data-field="copies" data-hb="number" data-scale="0" data-min="1" data-max="20" inputmode="numeric"></label>
+        </form>
+
+        <div class="hb-replace-host" id="lineHost" hidden>
+            <table class="hb-cmp-table" id="lines">
+                <thead><tr>
+                    <th th:text="#{wmsShip.col.order}">수주</th>
+                    <th th:text="#{wmsShip.col.item}">품목</th>
+                    <th class="hb-num" th:text="#{wmsShip.col.qty}">지시</th>
+                    <th class="hb-num" th:text="#{wmsShip.col.picked}">피킹</th>
+                    <th class="hb-num" th:text="#{wmsShip.col.shipped}">출하</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div id="stockBox" hidden>
+            <h2 id="stockTitle"></h2>
+            <form id="stockForm" class="hb-search" autocomplete="off">
+                <label class="hb-wide"><span th:text="#{wmsShip.stockScan}">위치·LOT 스캔</span>
+                    <input id="stockScan" maxlength="512" th:placeholder="#{wmsShip.stockScanPlaceholder}" data-help-key="wms-ship.stock"></label>
+                <div class="hb-sp-actions">
+                    <button type="submit" id="stockFindBtn" class="hb-btn-secondary" th:text="#{wmsShip.stockFind}">찾기</button>
+                    <button type="button" id="stockCloseBtn" class="hb-btn-ghost" th:text="#{common.close}">닫기</button>
+                </div>
+            </form>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="stockRows">
+                    <thead><tr>
+                        <th th:text="#{wmsShip.col.from}">출발 칸·LOT</th>
+                        <th class="hb-num" th:text="#{wmsShip.col.avail}">가용</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="pendBox" hidden>
+            <h2 th:text="#{wmsShip.pending}">피킹할 칸</h2>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="pending">
+                    <thead><tr>
+                        <th th:text="#{wmsShip.col.item}">품목</th>
+                        <th th:text="#{wmsShip.col.from}">출발 칸·LOT</th>
+                        <th th:text="#{wmsShip.col.pickQty}">피킹 수량</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="hb-toolbar">
+                <button type="button" id="pickBtn" th:text="#{wmsShip.pick}" data-help-key="wms-ship.pick">피킹 확정</button>
+            </div>
+        </div>
+
+        <div class="hb-replace-host" id="pickHost" hidden>
+            <table class="hb-cmp-table" id="picks">
+                <thead><tr>
+                    <th></th>
+                    <th th:text="#{wmsShip.col.item}">품목</th>
+                    <th th:text="#{wmsShip.col.from}">출발 칸·LOT</th>
+                    <th class="hb-num" th:text="#{wmsShip.col.pickQty}">피킹 수량</th>
+                    <th th:text="#{wmsShip.col.status}">상태</th>
+                    <th th:text="#{wmsShip.col.pallet}">팔레트</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div id="palletBox" hidden>
+            <h2 th:text="#{wmsShip.pallets}">팔레트</h2>
+            <div class="hb-toolbar" id="palletTools" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="palletNewBtn" class="hb-btn-secondary" th:text="#{wmsShip.palletNew}">새 팔레트</button>
+                <select id="palletSel" th:aria-label="#{wmsShip.palletTarget}"></select>
+                <button type="button" id="palletPutBtn" class="hb-btn-secondary" th:text="#{wmsShip.palletPut}" data-help-key="wms-ship.pallet">고른 피킹 담기</button>
+                <button type="button" id="palletOutBtn" class="hb-btn-ghost" th:text="#{wmsShip.palletOut}">고른 피킹 빼기</button>
+            </div>
+            <form id="palletLabelForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{wmsShip.palletPrinter}">팔레트 라벨 프린터</span><select data-field="printerId"></select></label>
+                <label><span th:text="#{wmsShip.tpl}">템플릿</span><select data-field="tplId"></select></label>
+            </form>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="pallets">
+                    <thead><tr>
+                        <th th:text="#{wmsShip.col.palletNo}">팔레트 번호</th>
+                        <th th:text="#{wmsShip.col.sscc}">SSCC</th>
+                        <th th:text="#{wmsShip.col.status}">상태</th>
+                        <th class="hb-num" th:text="#{wmsShip.col.palletPicks}">피킹</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 운송 정보·사진(docs/58) — 머리 rowVer 와 따로(고쳐도 피킹이 튕기지 않음) -->
+        <section id="transBox" class="hb-sub" hidden>
+            <h2 th:text="#{wmsShip.transport}">운송 정보·사진</h2>
+            <form id="transForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{wmsShip.carrier}">운송사</span><input data-field="carrierNm" maxlength="100"></label>
+                <label><span th:text="#{wmsShip.vehicleNo}">차량 번호</span><input data-field="vehicleNo" maxlength="30"></label>
+                <label><span th:text="#{wmsShip.trackingNo}">송장 번호</span>
+                    <input data-field="trackingNo" maxlength="60" data-help-key="wms-ship.transport"></label>
+                <div class="hb-wide hb-toolbar" th:if="${actions.contains('SAVE')}">
+                    <button type="submit" id="transSaveBtn" class="hb-btn-secondary" th:text="#{wmsShip.transportSave}">운송 정보 저장</button>
+                </div>
+            </form>
+            <p id="transMeta" class="hb-muted"></p>
+            <h3 th:text="#{wmsShip.photos}">사진·증빙</h3>
+            <ul id="files" class="hb-files"></ul>
+            <input type="file" id="fileInput" accept="image/*,.pdf" th:if="${actions.contains('SAVE')}" th:aria-label="#{wmsShip.photoAdd}">
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/views/wms/ship.js}"></script>
+</body>
+</html>

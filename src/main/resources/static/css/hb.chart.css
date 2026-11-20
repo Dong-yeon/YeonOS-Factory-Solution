@@ -1,0 +1,193 @@
+/*
+ * hb.chart (docs/61 11장) — Highcharts styled mode 의 색·글자를 디자인 토큰으로 잇는다.
+ * hb.chart.js 가 처음 그릴 때 highcharts.css 다음에 싣는다(화면 템플릿이 링크하지 않는다).
+ * .hb-chart 에 Highcharts CSS 변수를 다시 정해 그 안에서만 바뀐다(:root 의 Highcharts 기본값·OS 다크 모드 무시).
+ */
+.hb-chart {
+    --highcharts-color-0: var(--hb-chart-1);
+    --highcharts-color-1: var(--hb-chart-2);
+    --highcharts-color-2: var(--hb-chart-3);
+    --highcharts-color-3: var(--hb-chart-4);
+    --highcharts-color-4: var(--hb-chart-5);
+    --highcharts-color-5: var(--hb-chart-6);
+    --highcharts-color-6: var(--hb-chart-1);
+    --highcharts-color-7: var(--hb-chart-2);
+    --highcharts-color-8: var(--hb-chart-3);
+    --highcharts-color-9: var(--hb-chart-4);
+    --highcharts-background-color: var(--hb-bg-surface);
+    --highcharts-neutral-color-100: var(--hb-text);
+    --highcharts-neutral-color-80: var(--hb-text);
+    --highcharts-neutral-color-60: var(--hb-text-muted);
+    --highcharts-neutral-color-40: var(--hb-text-subtle);
+    --highcharts-neutral-color-20: var(--hb-chart-axis);
+    --highcharts-neutral-color-10: var(--hb-chart-grid);
+    --highcharts-neutral-color-5: var(--hb-chart-grid);
+    --highcharts-neutral-color-3: var(--hb-bg-subtle);
+    --highcharts-highlight-color-100: var(--hb-action);
+    --highcharts-highlight-color-80: var(--hb-action);
+    --highcharts-highlight-color-60: var(--hb-action-hover);
+    --highcharts-highlight-color-20: var(--hb-action-subtle);
+    --highcharts-highlight-color-10: var(--hb-action-faint);
+    display: block;
+    min-width: 0;
+    break-inside: avoid;
+}
+.hb-chart .highcharts-container {
+    color-scheme: light;
+    font-family: var(--hb-font);
+    font-size: var(--hb-fs-md);     /* 라벨은 Highcharts 가 0.8em — 14px 기준 11.2px(--hb-fs-xs 이상) */
+}
+.hb-chart-plot {
+    width: 100%;
+    min-width: 0;
+}
+.hb-chart .highcharts-title {
+    font-size: var(--hb-fs-lg);
+    font-weight: var(--hb-fw-semibold);
+}
+.hb-chart .highcharts-tooltip-box {
+    fill: var(--hb-bg-surface);
+    stroke: var(--hb-border);
+}
+
+/* 계획·기준 막대 */
+.hb-chart .hb-chart-muted .highcharts-point,
+.hb-chart .highcharts-legend-item.hb-chart-muted .highcharts-point {
+    fill: var(--hb-chart-muted);
+    stroke: var(--hb-chart-muted);
+}
+/* 파레토: 기준선 뒤 항목은 옅게(중요한 소수를 먼저 보게) */
+.hb-chart .highcharts-point.hb-chart-trivial {
+    fill-opacity: 0.45;
+}
+/* 목표선·80% 선 */
+.hb-chart .highcharts-plot-line.hb-chart-ref {
+    stroke: var(--hb-chart-ref);
+    stroke-width: 1.5px;
+    stroke-dasharray: 6 4;
+}
+.hb-chart .highcharts-plot-line-label {
+    fill: var(--hb-chart-ref);
+    font-size: var(--hb-fs-xs);
+}
+
+/* 관리도 */
+.hb-chart .hb-chart-limit .highcharts-graph {
+    stroke: var(--hb-chart-limit);
+    stroke-width: 1.5px;
+    stroke-dasharray: 6 4;
+}
+.hb-chart .hb-chart-center .highcharts-graph {
+    stroke: var(--hb-chart-center);
+    stroke-width: 1.5px;
+}
+.hb-chart .hb-chart-limit-label text {
+    fill: var(--hb-chart-limit);
+}
+.hb-chart .hb-chart-center-label text {
+    fill: var(--hb-chart-center);
+}
+.hb-chart .hb-chart-value .highcharts-point.hb-chart-alarm {
+    fill: var(--hb-status-danger-fg);
+    stroke: var(--hb-status-danger-fg);
+}
+.hb-chart .hb-chart-value .highcharts-point.hb-chart-marked {
+    stroke: var(--hb-text);
+    stroke-width: 2px;
+}
+.hb-chart .highcharts-legend-item.hb-chart-limit .highcharts-graph {
+    stroke: var(--hb-chart-limit);
+}
+
+/* 게이지 */
+.hb-chart .highcharts-pane.hb-chart-track {
+    fill: var(--hb-bg-muted);
+    stroke: none;
+}
+.hb-chart .highcharts-point.hb-chart-ok { fill: var(--hb-status-success-fg); }
+.hb-chart .highcharts-point.hb-chart-warn { fill: var(--hb-status-warning-line); }
+.hb-chart .highcharts-point.hb-chart-danger { fill: var(--hb-status-danger-fg); }
+.hb-chart .highcharts-point.hb-chart-none { fill: var(--hb-chart-1); }
+.hb-chart .highcharts-plot-band.hb-chart-target {
+    fill: var(--hb-text);
+    fill-opacity: 1;
+}
+.hb-chart .hb-chart-gauge-label text {
+    font-size: var(--hb-fs-2xl);
+    font-weight: var(--hb-fw-bold);
+    fill: var(--hb-text);
+}
+
+.hb-chart-clickable .highcharts-point {
+    cursor: pointer;
+}
+
+/* 라이브러리 없음·빈 데이터 */
+.hb-chart-missing,
+.hb-chart-empty {
+    margin: 0;
+    padding: var(--hb-space-5) var(--hb-space-6);
+    border: 1px dashed var(--hb-border);
+    border-radius: var(--hb-radius-md);
+    background: var(--hb-bg-subtle);
+    color: var(--hb-text-muted);
+    font-size: var(--hb-fs-sm);
+}
+
+/* 표로 보기 */
+.hb-chart-data {
+    margin-top: var(--hb-space-2);
+    font-size: var(--hb-fs-sm);
+}
+.hb-chart-data > summary {
+    cursor: pointer;
+    color: var(--hb-text-muted);
+    min-height: var(--hb-target-min);
+    line-height: var(--hb-target-min);
+}
+.hb-chart-tbl {
+    border-collapse: collapse;
+    margin-top: var(--hb-space-2);
+    max-width: 100%;
+}
+.hb-chart-tbl caption {
+    text-align: left;
+    color: var(--hb-text-subtle);
+    padding-bottom: var(--hb-space-2);
+}
+.hb-chart-tbl th,
+.hb-chart-tbl td {
+    border: 1px solid var(--hb-border-subtle);
+    padding: var(--hb-space-1) var(--hb-space-4);
+    white-space: nowrap;
+}
+.hb-chart-tbl thead th {
+    background: var(--hb-bg-subtle);
+    font-weight: var(--hb-fw-semibold);
+}
+.hb-chart-tbl tbody th {
+    font-weight: var(--hb-fw-regular);
+    text-align: left;
+}
+.hb-chart-tbl td {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.hb-chart-data {
+    overflow-x: auto;
+}
+
+/* 인쇄: Highcharts 가 컨테이너에 px 폭을 직접 주므로 !important 로 종이 폭에 맞춘다(SVG 는 viewBox 로 줄어든다) */
+@media print {
+    .hb-chart .highcharts-container {
+        width: 100% !important;
+        height: auto !important;
+    }
+    .hb-chart svg.highcharts-root {
+        width: 100%;
+        height: auto;
+    }
+    .hb-chart-data > summary {
+        display: none;
+    }
+}

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="|#{login.title} - #{app.name}|">로그인</title>
+    <link rel="icon" type="image/svg+xml" th:href="@{/images/yeonos-mark.svg}">
+    <!-- PWA 셸(docs/45 M-1): 홈 화면에 추가 — manifest·아이콘은 같은 출처 정적 파일(CSP default-src 'self') -->
+    <link rel="manifest" th:href="@{/manifest.webmanifest}">
+    <link rel="apple-touch-icon" th:href="@{/images/pwa/apple-touch-icon-180.png}">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/login.css}">
+</head>
+<!--
+  로그인 — 분할 배치(폼 + 브랜드 패널). 폼(main)을 DOM 앞에 두어 키보드·스크린리더가 먼저 닿게 하고, 화면 배치만 CSS 로 바꾼다.
+  좁은 화면에서는 브랜드 패널이 머리띠로 줄어든다. 근거: docs/12 10.1 로그인 화면
+-->
+<body class="login-page">
+<main class="login-main">
+    <div class="login-box">
+        <div class="login-logo">
+            <img th:src="@{/images/yeonos-mark.svg}" alt="" width="32" height="32">
+            <span th:text="#{app.name}">YeonOS</span>
+        </div>
+        <h1 th:text="#{login.heading}">로그인</h1>
+        <p class="login-sub" th:text="#{login.sub}">회사 계정으로 로그인하세요.</p>
+
+        <!-- /status.json 이 ok 가 아니면 login.js 가 공지를 채운다 -->
+        <p id="statusNotice" class="msg warn" role="status" hidden
+           th:data-default="#{login.status.default}"></p>
+        <p class="msg error" th:if="${errorCode != null}" th:text="#{'login.error.' + ${errorCode}}" role="alert">오류</p>
+        <p class="msg info" th:if="${param.logout != null}" th:text="#{login.logout}">로그아웃</p>
+        <p class="msg info" th:if="${param.expired != null}" th:text="#{login.expired}">만료</p>
+        <p class="msg info" th:if="${demoNotice}" th:text="#{login.demoNotice(${demoCompCd}, ${demoLoginId}, ${demoPassword})}">공개 데모 안내</p>
+
+        <!-- th:action 이 CSRF 숨김 필드를 자동으로 넣는다 -->
+        <form th:action="@{/login}" method="post" autocomplete="off">
+            <label th:unless="${onprem}">
+                <span th:text="#{login.compCd}">회사코드</span>
+                <input type="text" name="compCd" id="compCd" maxlength="20" required autocapitalize="characters"
+                       spellcheck="false" th:value="${prefillCompCd}" th:placeholder="#{login.compCd.placeholder}">
+            </label>
+            <label>
+                <span th:text="#{login.loginId}">아이디</span>
+                <input type="text" name="loginId" id="loginId" maxlength="50" required autocomplete="username"
+                       spellcheck="false" th:value="${prefillLoginId}">
+            </label>
+            <label>
+                <span th:text="#{login.password}">비밀번호</span>
+                <input type="password" name="password" id="password" maxlength="72" required
+                       autocomplete="current-password" aria-describedby="capsLock">
+            </label>
+            <p id="capsLock" class="login-caps" hidden th:text="#{login.capsLock}">Caps Lock 이 켜져 있습니다.</p>
+            <label class="login-remember" th:unless="${onprem}">
+                <input type="checkbox" id="rememberComp">
+                <span th:text="#{login.rememberComp}">이 기기에서 회사코드 기억</span>
+            </label>
+            <button type="submit" th:text="#{login.submit}">로그인</button>
+        </form>
+        <p class="login-help" th:text="#{login.help}">계정이 잠겼거나 비밀번호를 잊었다면 회사 관리자에게 문의하세요.</p>
+    </div>
+    <footer class="login-foot" th:text="#{login.footer}">YeonOS · 개인 포트폴리오 프로젝트</footer>
+</main>
+
+<aside class="login-brand">
+    <div class="login-brand-head">
+        <p class="login-brand-name"><span th:text="#{app.name}">YeonOS</span></p>
+        <p class="login-brand-tagline" th:text="#{login.brand.tagline}">생산·품질·창고·설비·협력사·프로젝트를 같은 데이터로 잇는 스마트팩토리 플랫폼</p>
+    </div>
+    <!--/* 그림 속 글자도 화면 언어를 따른다: 영어는 yeonos-platform-en.svg (배치 동일, 글자만 다름) */-->
+    <img class="login-brand-art" th:src="${#locale.language == 'en'} ? @{/images/yeonos-platform-en.svg} : @{/images/yeonos-platform.svg}" alt="" width="520" height="344">
+    <ul class="login-brand-points">
+        <li th:text="#{login.brand.point1}">회사별 데이터는 서로 섞이지 않게 데이터베이스 단계에서 격리됩니다</li>
+        <li th:text="#{login.brand.point2}">실적·재고는 고칠 수 없는 원장으로 남고, 모든 변경은 감사 기록으로 추적됩니다</li>
+        <li th:text="#{login.brand.point3}">사무실 화면과 현장 단말(POP·PDA)이 같은 데이터를 봅니다</li>
+    </ul>
+</aside>
+<script th:src="@{/js/common/hb.pwa.js}"></script>
+<script th:src="@{/js/login.js}"></script>
+</body>
+</html>

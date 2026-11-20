@@ -1,0 +1,13 @@
+{
+  "appId": "io.smarthappy.yeonos.terminal",
+  "appName": "YeonOS 현장",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
+  }
+}

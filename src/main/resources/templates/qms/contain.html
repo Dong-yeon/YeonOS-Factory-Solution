@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  봉쇄 (qms-contain) — P3 QMS 2부 Q8b (docs/29_P3 12.8). 같은 품목·기간 의심 LOT 을 골라 일괄 보류(MES LotHoldPort, 출처 QMS_CONTAIN).
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 담당(WEB). 부적합 화면 "봉쇄" 에서 품목·NCR 번호를 채워 연다(?itemCd=&ncrNo=).
+  직접 치는 값 = 품목 코드·기간·근거 NCR 번호·사유, 후보 중 고름, 해제할 LOT 고름·해제 사유.
+  서버가 채우는 값 = 후보 LOT(품목 × 기간, 최대 500)·각 LOT 의 지금 보류 근거, 번호, 모두 풀리면 해제 완료.
+  예외 = 다른 품목 LOT·NCR, 기간 뒤집힘·366일 초과, 이미 푼 LOT, MES 없음.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">봉쇄</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{qms.contain.keyword}">번호·품목·NCR·사유</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{qms.contain.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="QMS_CONTAIN_STATUS" data-blank="all"></select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main hb-qms-scroll">
+        <form id="newForm" class="hb-qms-inline" autocomplete="off" th:if="${actions.contains('SAVE')}">
+            <h2 class="hb-qms-sub-h" th:text="#{qms.contain.new}">새 봉쇄</h2>
+            <label><span th:text="#{qms.contain.itemCd}">품목 코드</span><input data-field="itemCd" maxlength="50" required></label>
+            <label><span th:text="#{qms.contain.from}">LOT 발생 시작일</span><input data-field="fromDate" type="date" required data-help-key="qms-contain.from"></label>
+            <label><span th:text="#{qms.contain.to}">끝날</span><input data-field="toDate" type="date" required></label>
+            <label><span th:text="#{qms.contain.ncrNo}">근거 부적합 번호</span><input data-field="ncrNo" maxlength="30" data-help-key="qms-contain.ncrNo"></label>
+            <label class="hb-qms-grow"><span th:text="#{qms.contain.reason}">사유</span><input data-field="reason" maxlength="500"></label>
+            <button type="button" id="findBtn" class="hb-btn-secondary" th:text="#{qms.contain.find}">후보 조회</button>
+        </form>
+        <div id="candBox" hidden>
+            <p id="candLine" class="hb-muted"></p>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="candTable">
+                    <thead><tr>
+                        <th><input type="checkbox" id="candAll" aria-label="all"></th>
+                        <th th:text="#{qms.contain.col.lot}">LOT</th>
+                        <th th:text="#{qms.contain.col.qty}">수량</th>
+                        <th th:text="#{qms.contain.col.occurred}">발생</th>
+                        <th th:text="#{qms.contain.col.holds}">지금 보류 근거</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <button type="button" id="runBtn" th:text="#{qms.contain.run}">고른 LOT 봉쇄</button>
+        </div>
+        <div id="containGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.contain.select}">봉쇄를 고르세요.</p>
+        <div id="detailBox" hidden>
+            <p id="headLine" class="hb-qms-status" role="status"></p>
+            <p id="reasonLine"></p>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="lotTable">
+                    <thead><tr>
+                        <th><input type="checkbox" id="lotAll" aria-label="all"></th>
+                        <th th:text="#{qms.contain.col.lot}">LOT</th>
+                        <th th:text="#{qms.contain.col.qty}">수량</th>
+                        <th th:text="#{qms.contain.col.holds}">지금 보류 근거</th>
+                        <th th:text="#{qms.contain.col.release}">해제</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <form id="releaseForm" class="hb-qms-inline" autocomplete="off" hidden>
+                <label class="hb-qms-grow"><span th:text="#{qms.contain.releaseReason}">해제 사유</span><input id="releaseReason" maxlength="500"></label>
+                <button type="submit" th:text="#{qms.contain.releaseRun}">고른 LOT 해제</button>
+            </form>
+        </div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/contain.js}"></script>
+</body>
+</html>

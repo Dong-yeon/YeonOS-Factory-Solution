@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{m/layout :: head(#{m.tab.approval})}"></head>
+<!--
+  모바일 결재 승인 (docs/74 화면 2, M7). 내 결재함 목록(카드) → 문서 요약·결재선 → 승인·반려(사유).
+  기존 결재 API 그대로 — 처리 권한은 결재선(현재 차례)이고 서버(ApprovalService)가 판정한다. 남의 결재·다른 회사 = 404.
+  오프라인이면 승인·반려 단추를 끈다(대기열 없음, docs/45 A-3). 회수·위임은 사무 화면(내 결재함)에서.
+-->
+<body class="hb-m" th:data-today="${today}">
+<header th:replace="~{m/layout :: header(#{m.tab.approval})}"></header>
+<main class="m-main">
+    <p id="msg" class="m-msg" role="status" aria-live="polite"></p>
+
+    <section id="listView">
+        <fieldset class="m-seg" id="boxSeg">
+            <legend th:text="#{sysInbox.view}">보기</legend>
+            <label><input type="radio" name="box" value="TODO" checked><span th:text="#{sysApproval.box.TODO}">내 차례</span></label>
+            <label><input type="radio" name="box" value="REQUESTED"><span th:text="#{sysApproval.box.REQUESTED}">내가 올린 것</span></label>
+            <label><input type="radio" name="box" value="PASSED"><span th:text="#{sysApproval.box.PASSED}">결재선에 있던 것</span></label>
+        </fieldset>
+        <ul id="aprList" class="m-list"></ul>
+    </section>
+
+    <section id="docView" hidden>
+        <button type="button" id="backBtn" class="m-link" th:text="#{m.back}">← 목록</button>
+        <h2 id="aprTitle"></h2>
+        <div id="aprInfo"></div>
+        <h2 th:text="#{m.apr.lines}">결재선</h2>
+        <ul id="aprLines" class="m-list"></ul>
+        <div id="actBox" hidden>
+            <p id="offlineNote" class="m-note" role="status" hidden th:text="#{sysApproval.offline}">오프라인 — 연결되면 다시 누르세요.</p>
+            <label class="m-field"><span th:text="#{m.apr.comment}">의견 (반려는 사유 필수)</span>
+                <textarea id="aprComment" rows="3" maxlength="1000"></textarea></label>
+            <div class="m-btn-row">
+                <button type="button" id="rejectBtn" class="m-danger" th:text="#{sysApproval.reject}">반려</button>
+                <button type="button" id="approveBtn" class="m-primary" th:text="#{sysApproval.approve}">승인</button>
+            </div>
+        </div>
+    </section>
+</main>
+<nav th:replace="~{m/layout :: tabs}"></nav>
+<th:block th:replace="~{m/layout :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.esign.js}"></script>
+<script th:src="@{/js/views/m/m-approval.js}"></script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="|#{mfa.title} - #{app.name}|">2단계 인증</title>
+    <link rel="icon" type="image/svg+xml" th:href="@{/images/yeonos-mark.svg}">
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/login.css}">
+</head>
+<!--
+  두 번째 인증 (docs/36 14장) — 비밀번호 로그인 뒤 MFA 가 필요한 로그인은 여기만 열린다(비밀번호 변경 강제보다 먼저).
+  VERIFY = 인증 앱 6자리 또는 복구 코드 / ENROLL = 비밀 키 등록 → 첫 코드로 확인 → 복구 코드 10개 한 번 표시.
+  SELF = 대기 없이 내 정보에서 연 스스로 등록(ENROLL 과 같은 단계, 끝나면 내 정보로 — docs/36 16.7).
+  셸 밖 단독 화면(로그인 배치). 비밀 키·복구 코드는 textContent 로만 넣고 저장하지 않는다.
+-->
+<body class="login-page login-single" th:data-state="${state}" th:data-back="${back}">
+<main class="login-main">
+    <div class="login-box">
+        <div class="login-logo">
+            <img th:src="@{/images/yeonos-mark.svg}" alt="" width="32" height="32">
+            <span th:text="#{app.name}">YeonOS</span>
+        </div>
+        <h1 th:text="#{mfa.title}">2단계 인증</h1>
+
+        <p class="msg error" role="alert" th:unless="${available}" th:text="#{mfa.unavailable}">MFA 를 쓸 수 없습니다. 운영자에게 문의하세요.</p>
+
+        <form id="verifyForm" autocomplete="off" th:if="${available and state == 'VERIFY'}">
+            <p class="login-sub" th:text="#{mfa.verify.sub(${user.loginId})}">인증 앱의 6자리 코드(또는 복구 코드)를 입력하세요.</p>
+            <label>
+                <span th:text="#{mfa.code}">인증 코드</span>
+                <input type="text" id="verifyCode" maxlength="11" required autocomplete="one-time-code" inputmode="text" spellcheck="false">
+            </label>
+            <p id="verifyMsg" class="msg error" role="alert" hidden></p>
+            <button type="submit" id="verifyBtn" th:text="#{mfa.verify.submit}">확인</button>
+        </form>
+
+        <div id="enrollBox" th:if="${available and (state == 'ENROLL' or state == 'SELF')}">
+            <p class="login-sub" th:if="${state == 'ENROLL'}" th:text="#{mfa.enroll.sub(${user.loginId})}">관리 권한이 있는 계정은 2단계 인증을 등록해야 합니다.</p>
+            <p class="login-sub" th:if="${state == 'SELF'}" th:text="#{mfa.enroll.selfSub(${user.loginId})}">스스로 2단계 인증을 등록합니다.</p>
+            <ol class="login-steps">
+                <li th:text="#{mfa.enroll.step1}">인증 앱(Google Authenticator 등)에서 "키 직접 입력" 을 고릅니다.</li>
+                <li th:text="#{mfa.enroll.step2}">아래 키를 입력합니다(시간 기준, 6자리).</li>
+                <li th:text="#{mfa.enroll.step3}">앱에 나온 6자리 코드를 넣고 확인합니다.</li>
+            </ol>
+            <p><code id="secret" class="login-code"></code></p>
+            <details>
+                <summary th:text="#{mfa.enroll.uri}">등록 주소(otpauth)</summary>
+                <p><code id="otpUri" class="login-code"></code></p>
+            </details>
+            <form id="enrollForm" autocomplete="off">
+                <label>
+                    <span th:text="#{mfa.code}">인증 코드</span>
+                    <input type="text" id="enrollCode" maxlength="6" required autocomplete="one-time-code" inputmode="numeric" spellcheck="false">
+                </label>
+                <p id="enrollMsg" class="msg error" role="alert" hidden></p>
+                <button type="submit" id="enrollBtn" th:text="#{mfa.enroll.submit}">등록 확인</button>
+            </form>
+        </div>
+
+        <section id="recoveryBox" hidden>
+            <h2 th:text="#{mfa.recovery.title}">복구 코드</h2>
+            <p class="login-sub" th:text="#{mfa.recovery.note}">휴대폰을 잃었을 때 한 번씩 쓸 수 있습니다. 이 화면을 떠나면 다시 볼 수 없으니 안전한 곳에 적어 두세요.</p>
+            <ul id="recoveryList" class="login-codes"></ul>
+            <button type="button" id="doneBtn" th:text="#{mfa.recovery.done}">적어 두었습니다 — 계속</button>
+        </section>
+
+        <form th:action="@{/logout}" method="post" th:unless="${state == 'SELF'}">
+            <button type="submit" class="login-link" th:text="#{pwdChange.logout}">로그아웃</button>
+        </form>
+        <a class="login-link" th:if="${state == 'SELF'}" th:href="@{${back}}" th:text="#{mfa.enroll.selfCancel}">취소 — 내 정보로</a>
+    </div>
+    <footer class="login-foot" th:text="#{login.footer}">YeonOS · 개인 포트폴리오 프로젝트</footer>
+</main>
+<script th:src="@{/js/common/hb.js}"></script>
+<script th:src="@{/js/views/platform/mfa.js}"></script>
+</body>
+</html>

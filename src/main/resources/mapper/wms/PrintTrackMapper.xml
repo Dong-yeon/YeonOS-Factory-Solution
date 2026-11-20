@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 인쇄 상태 3단·프린터 상태 (docs/65 18.1). 작업 상태 = 상태 사건 중 마지막, 없으면 아웃박스(설치형)에서 -->
+<mapper namespace="io.smarthappy.module.wms.label.PrintTrackMapper">
+
+    <!-- 작업 j(+ 아웃박스 o)의 지금 상태 — LabelMapper.jobCols 와 같은 식 -->
+    <sql id="stateExpr">
+        coalesce((select e.event_cd from wms_print_job_event e
+                   where e.job_id = j.job_id
+                     and e.event_cd in ('CLAIMED', 'SENT', 'PRINTED', 'VERIFIED', 'PRINTER_ERROR', 'FAILED', 'UNKNOWN', 'CANCELLED')
+                   order by e.event_id desc limit 1),
+                 case o.status when 'SENT' then 'SENT' when 'FAIL' then 'FAILED' when 'CLOSED_MANUAL' then 'CANCELLED' else 'QUEUED' end)
+    </sql>
+
+    <!-- 작업 한 건 잠금 — 작업 행은 추가만(앱 UPDATE 권한 없음 → FOR UPDATE 불가)이라 권고 잠금 -->
+    <select id="lockJob" resultType="string" flushCache="true" useCache="false">
+        select pg_advisory_xact_lock(hashtext('wms_print_job'), hashtext(#{jobId}::text))::text
+    </select>
+
+    <select id="jobState" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$JobState" flushCache="true" useCache="false">
+        select j.job_id, j.printer_id, j.label_type, j.biz_key, j.copies, j.label_values::text as label_values,
+               <include refid="stateExpr"/> as state_cd
+          from wms_print_job j
+          left join sys_outbox o on o.message_id = j.outbox_message_id and o.comp_cd = j.comp_cd
+         where j.job_id = #{jobId}
+    </select>
+
+    <insert id="insertEvent">
+        insert into wms_print_job_event (comp_cd, job_id, event_cd, reason_cd, detail, src, terminal_id, occurred_at, entry_method,
+                                         recorded_by, performed_by)
+        values (hb_current_comp(), #{jobId}, #{eventCd}, #{reasonCd}, #{detail}, #{src}, #{terminalId}, #{occurredAt}, #{method},
+                #{by}, #{performedBy})
+    </insert>
+
+    <select id="events" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$EventRow" flushCache="true" useCache="false">
+        select event_id, job_id, event_cd, reason_cd, detail, src, terminal_id, occurred_at, recorded_at, entry_method, recorded_by
+          from wms_print_job_event
+         where job_id = #{jobId}
+         order by event_id
+    </select>
+
+    <!-- 확인 안 된 작업(SENT·PRINTER_ERROR) — 보낸 순. 설치형 = 아웃박스 보낸 시각, 에이전트 = SENT 사건 시각 -->
+    <select id="pendingJobs" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$PendingJob" flushCache="true" useCache="false">
+        select x.job_id, x.copies, x.zpl, x.state_cd, x.sent_at
+          from (select j.job_id, j.copies, j.zpl, <include refid="stateExpr"/> as state_cd,
+                       coalesce(o.sent_at, (select min(e.occurred_at) from wms_print_job_event e
+                                             where e.job_id = j.job_id and e.event_cd = 'SENT')) as sent_at
+                  from wms_print_job j
+                  left join sys_outbox o on o.message_id = j.outbox_message_id and o.comp_cd = j.comp_cd
+                 where j.printer_id = #{printerId}
+                   and j.requested_at &gt; now() - interval '7 days') x
+         where x.state_cd in ('SENT', 'PRINTER_ERROR')
+         order by x.sent_at nulls last, x.job_id
+         limit 200
+    </select>
+
+    <!-- 아직 안 보낸(아웃박스 NEW·SENDING, 에이전트 QUEUED·CLAIMED) 작업이 있나 — 있으면 남는 증가량을 버리지 않는다 -->
+    <select id="hasUnsent" resultType="boolean" flushCache="true" useCache="false">
+        select exists (select 1 from wms_print_job j
+                         join sys_outbox o on o.message_id = j.outbox_message_id and o.comp_cd = j.comp_cd
+                        where j.printer_id = #{printerId} and o.status in ('NEW', 'SENDING')
+                          and j.requested_at &gt; now() - interval '7 days')
+            or exists (select 1 from wms_print_dispatch d where d.printer_id = #{printerId} and d.stage in ('QUEUED', 'CLAIMED'))
+    </select>
+
+    <!-- ================================================================ 에이전트 큐 (docs/65 19.2) -->
+    <insert id="insertDispatch">
+        insert into wms_print_dispatch (comp_cd, job_id, printer_id, terminal_id) values (hb_current_comp(), #{jobId}, #{printerId}, #{terminalId})
+    </insert>
+
+    <select id="lockDispatch" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$DispatchRow" flushCache="true" useCache="false">
+        select job_id, printer_id, terminal_id, stage, claim_cnt, claimed_at, lease_until, closed_at
+          from wms_print_dispatch where job_id = #{jobId}
+           for update
+    </select>
+
+    <!-- 그 장치 것만, 지금도 그 장치에 배정된 사용 중 프린터만, 기다린 순서 -->
+    <select id="claimable" resultType="long" flushCache="true" useCache="false">
+        select d.job_id
+          from wms_print_dispatch d
+          join wms_printer p on p.printer_id = d.printer_id
+         where d.terminal_id = #{terminalId} and d.stage = 'QUEUED'
+           and p.conn_mode = 'AGENT' and p.agent_terminal_id = #{terminalId} and p.use_yn = 'Y'
+         order by d.job_id
+         limit #{max}
+           for update of d skip locked
+    </select>
+
+    <update id="markClaimed">
+        update wms_print_dispatch
+           set stage = 'CLAIMED', claim_cnt = claim_cnt + 1, claimed_at = now(), lease_until = now() + make_interval(secs => #{leaseSec})
+         where job_id = #{jobId} and stage = 'QUEUED'
+    </update>
+
+    <update id="setStage">
+        update wms_print_dispatch
+           set stage = #{stage}, closed_at = case when #{stage}::varchar = 'CLOSED' then coalesce(closed_at, now()) end
+         where job_id = #{jobId} and stage &lt;&gt; 'CLOSED'
+    </update>
+
+    <select id="claimedJob" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$ClaimedJob" flushCache="true" useCache="false">
+        select j.job_id, j.printer_id, p.printer_cd, p.host, p.port, j.copies, j.zpl, j.zpl_sha256, j.label_type, j.biz_key, d.lease_until
+          from wms_print_dispatch d
+          join wms_print_job j on j.job_id = d.job_id
+          join wms_printer p on p.printer_id = d.printer_id
+         where d.job_id = #{jobId}
+    </select>
+
+    <select id="leaseExpired" resultType="long" flushCache="true" useCache="false">
+        select job_id from wms_print_dispatch
+         where stage = 'CLAIMED' and lease_until &lt; now()
+         order by job_id
+         limit 500
+           for update skip locked
+    </select>
+
+    <select id="queuedCount" resultType="int" flushCache="true" useCache="false">
+        select count(*)::int from wms_print_dispatch d join wms_printer p on p.printer_id = d.printer_id
+         where d.terminal_id = #{terminalId} and d.stage = 'QUEUED' and p.agent_terminal_id = #{terminalId} and p.use_yn = 'Y'
+    </select>
+
+    <!-- 그 장치에 배정된 사용 중 프린터(하트비트 대상) -->
+    <select id="agentPrinters" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$AgentPrinter" flushCache="true" useCache="false">
+        select printer_id, printer_cd, printer_nm, host, port, dpi
+          from wms_printer
+         where conn_mode = 'AGENT' and agent_terminal_id = #{terminalId} and use_yn = 'Y'
+         order by printer_id
+    </select>
+
+    <!-- ================================================================ 프린터 상태 -->
+    <insert id="ensureStatus">
+        insert into wms_printer_status (comp_cd, printer_id, src) values (hb_current_comp(), #{printerId}, #{src})
+        on conflict (printer_id) do nothing
+    </insert>
+
+    <select id="lockStatus" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$PrinterStatusRow" flushCache="true" useCache="false">
+        select printer_id, state_cd, errors, warnings, odometer, odometer_base, src, detail, checked_at, changed_at
+          from wms_printer_status where printer_id = #{printerId}
+           for update
+    </select>
+
+    <update id="updateStatus">
+        update wms_printer_status
+           set state_cd = #{s.stateCd}, errors = #{s.errors}, warnings = #{s.warnings}, odometer = #{s.odometer},
+               odometer_base = #{s.odometerBase}, src = #{s.src}, detail = #{s.detail}, checked_at = now(),
+               changed_at = case when state_cd is distinct from #{s.stateCd} then now() else changed_at end
+         where printer_id = #{s.printerId}
+    </update>
+
+    <select id="statusOf" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$PrinterStatusRow" flushCache="true" useCache="false">
+        select printer_id, state_cd, errors, warnings, odometer, odometer_base, src, detail, checked_at, changed_at
+          from wms_printer_status where printer_id = #{printerId}
+    </select>
+
+    <select id="custOptions" resultType="map">
+        select cust_id as "id", cust_cd as "cd", cust_nm as "nm" from mst_cust
+         where use_yn = 'Y' and (cust_cd ilike #{like} escape '\' or cust_nm ilike #{like} escape '\')
+         order by cust_cd limit 20
+    </select>
+
+    <select id="itemOptions" resultType="map">
+        select item_id as "id", item_cd as "cd", item_nm as "nm" from mst_item
+         where use_yn = 'Y' and (item_cd ilike #{like} escape '\' or item_nm ilike #{like} escape '\')
+         order by item_cd limit 20
+    </select>
+
+    <!-- 설치형 상태 확인 대상: 사용 중·확인 켬·DIRECT, 주기가 지났거나 확인 안 된 SENT 작업이 있는 것 -->
+    <select id="probeTargets" resultType="io.smarthappy.module.wms.label.PrintTrackDtos$ProbeTarget" flushCache="true" useCache="false">
+        select p.printer_id, p.host, p.port
+          from wms_printer p
+          left join wms_printer_status s on s.printer_id = p.printer_id
+         where p.use_yn = 'Y' and p.status_check_yn = 'Y' and p.conn_mode = 'DIRECT'
+           and (s.checked_at is null
+                or s.checked_at &lt; now() - make_interval(secs => #{periodSec})
+                -- 마지막 확인 뒤에 보낸 작업이 있으면 바로, 확인 안 된 작업이 남아 있으면 5초마다
+                or exists (select 1 from wms_print_job j
+                             join sys_outbox o on o.message_id = j.outbox_message_id and o.comp_cd = j.comp_cd
+                            where j.printer_id = p.printer_id and o.status = 'SENT' and o.sent_at &gt; s.checked_at)
+                or (s.checked_at &lt; now() - interval '5 seconds'
+                    and exists (select 1 from wms_print_job j
+                                  join sys_outbox o on o.message_id = j.outbox_message_id and o.comp_cd = j.comp_cd
+                                 where j.printer_id = p.printer_id and o.status = 'SENT'
+                                   and o.sent_at &gt; now() - interval '1 hour'
+                                   and not exists (select 1 from wms_print_job_event e where e.job_id = j.job_id
+                                                     and e.event_cd in ('PRINTED', 'VERIFIED', 'FAILED', 'CANCELLED')))))
+         order by p.printer_id
+         limit #{limit}
+    </select>
+</mapper>

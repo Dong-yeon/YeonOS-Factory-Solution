@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 설비·설비 클래스·물리 자산·설치 이력 (P1 4b, docs/19). 목록·건수·엑셀은 같은 조건·정렬 조각 -->
+<mapper namespace="io.smarthappy.module.master.equip.AssetMapper">
+
+    <!-- ===== 설비 클래스 ===== -->
+    <select id="findClasses" resultType="io.smarthappy.module.master.equip.AssetDtos$ClassRow">
+        select c.class_id, c.class_cd, c.class_nm, c.sort_no, c.use_yn, c.remark, c.row_ver,
+               (select count(*) from mst_equip e where e.class_id = c.class_id and e.use_yn = 'Y') as equip_cnt
+          from mst_equip_class c order by c.sort_no, c.class_cd
+    </select>
+
+    <select id="findClass" resultType="io.smarthappy.module.master.equip.AssetDtos$ClassRow">
+        select c.class_id, c.class_cd, c.class_nm, c.sort_no, c.use_yn, c.remark, c.row_ver,
+               (select count(*) from mst_equip e where e.class_id = c.class_id and e.use_yn = 'Y') as equip_cnt
+          from mst_equip_class c where c.class_id = #{classId}
+    </select>
+
+    <select id="insertClass" resultType="long" flushCache="true">
+        insert into mst_equip_class (comp_cd, class_cd, class_nm, sort_no, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.classCd}, #{f.classNm}, #{f.sortNo}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning class_id
+    </select>
+
+    <update id="updateClass">
+        update mst_equip_class set class_cd = #{f.classCd}, class_nm = #{f.classNm}, sort_no = #{f.sortNo}, use_yn = #{f.useYn},
+                                   remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where class_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ===== 설비 ===== -->
+    <sql id="equipCols">
+        e.equip_id, e.plant_cd, e.equip_cd, e.equip_nm, e.class_id, c.class_cd, c.class_nm, e.node_id,
+        case when e.node_id is null then null else hb_equip_node_path(e.node_id) end as node_path,
+        e.maker, e.model, e.serial_no, e.asset_no, e.install_date, e.use_yn, e.remark, e.row_ver, e.updated_at, e.updated_by,
+        (select count(*) from mst_asset_install i where i.equip_id = e.equip_id and i.removed_at is null and i.void_yn = 'N') as asset_cnt
+    </sql>
+
+    <sql id="equipWhere">
+        from mst_equip e join mst_equip_class c on c.class_id = e.class_id
+        <where>
+            <if test="q.plantCd != null">and e.plant_cd = #{q.plantCd}</if>
+            <if test="q.classId != null">and e.class_id = #{q.classId}</if>
+            <if test="q.cdLike != null">and e.equip_cd like #{q.cdLike} escape '\'</if>
+            <if test="q.nmLike != null">and e.equip_nm ilike #{q.nmLike} escape '\'</if>
+            <if test="q.useYn != null">and e.use_yn = #{q.useYn}</if>
+        </where>
+    </sql>
+
+    <sql id="equipOrder">
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'EQUIP_CD'">e.equip_cd</when>
+                <when test="s.key == 'EQUIP_NM'">e.equip_nm</when>
+                <when test="s.key == 'CLASS_CD'">c.class_cd</when>
+                <otherwise>e.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        e.equip_id
+    </sql>
+
+    <select id="findEquips" resultType="io.smarthappy.module.master.equip.AssetDtos$EquipRow">
+        select <include refid="equipCols"/> <include refid="equipWhere"/> <include refid="equipOrder"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="countEquips" resultType="long">select count(*) <include refid="equipWhere"/></select>
+
+    <select id="cursorEquips" resultType="io.smarthappy.module.master.equip.AssetDtos$EquipRow" fetchSize="1000">
+        select <include refid="equipCols"/> <include refid="equipWhere"/> <include refid="equipOrder"/>
+    </select>
+
+    <select id="findEquip" resultType="io.smarthappy.module.master.equip.AssetDtos$EquipRow">
+        select <include refid="equipCols"/> from mst_equip e join mst_equip_class c on c.class_id = e.class_id
+         where e.equip_id = #{equipId}
+    </select>
+
+    <select id="findEquipByCd" resultType="io.smarthappy.module.master.equip.AssetDtos$EquipRow">
+        select <include refid="equipCols"/> from mst_equip e join mst_equip_class c on c.class_id = e.class_id
+         where e.equip_cd = #{equipCd}
+    </select>
+
+    <select id="insertEquip" resultType="long" flushCache="true">
+        insert into mst_equip (comp_cd, plant_cd, equip_cd, equip_nm, class_id, node_id, maker, model, serial_no, asset_no,
+                               install_date, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.plantCd}, #{f.equipCd}, #{f.equipNm}, #{f.classId}, #{f.nodeId}, #{f.maker}, #{f.model},
+                #{f.serialNo}, #{f.assetNo}, #{f.installDate}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning equip_id
+    </select>
+
+    <update id="updateEquip">
+        update mst_equip set plant_cd = #{f.plantCd}, equip_cd = #{f.equipCd}, equip_nm = #{f.equipNm}, class_id = #{f.classId},
+                             node_id = #{f.nodeId}, maker = #{f.maker}, model = #{f.model}, serial_no = #{f.serialNo},
+                             asset_no = #{f.assetNo}, install_date = #{f.installDate}, use_yn = #{f.useYn}, remark = #{f.remark},
+                             row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where equip_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="disableEquip">
+        update mst_equip set use_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where equip_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <select id="placeNodes" resultType="io.smarthappy.module.master.equip.EquipDtos$NodeRow">
+        select n.node_id, n.plant_cd, n.parent_id, n.node_type, n.node_cd, n.node_nm, n.sort_no, n.use_yn, n.row_ver,
+               hb_equip_node_path(n.node_id) as path
+          from mst_equip_hier n
+         where n.plant_cd = #{plantCd} and n.node_type in ('LINE', 'CELL') and n.use_yn = 'Y'
+         order by path
+    </select>
+
+    <select id="activeEquips" resultType="io.smarthappy.module.master.equip.AssetDtos$EquipRow">
+        select e.equip_id, e.plant_cd, e.equip_cd, e.equip_nm, e.class_id,
+               case when e.node_id is null then null else hb_equip_node_path(e.node_id) end as node_path
+          from mst_equip e where e.use_yn = 'Y' order by e.equip_cd
+    </select>
+
+    <!-- ===== 물리 자산 ===== -->
+    <sql id="assetCols">
+        a.asset_id, a.asset_cd, a.asset_type, a.asset_nm, a.serial_no, a.item_id, it.item_cd, it.item_nm, a.life_shots,
+        a.calib_cycle_days, a.last_calib_date,
+        case when a.calib_cycle_days is not null and a.last_calib_date is not null
+             then a.last_calib_date + a.calib_cycle_days end as next_calib_date,
+        a.use_yn, a.remark, a.row_ver, a.updated_at, a.updated_by,
+        cur.install_id as cur_install_id, ce.equip_cd as cur_equip_cd, ce.equip_nm as cur_equip_nm,
+        cur.installed_at as cur_installed_at
+    </sql>
+
+    <sql id="assetFrom">
+        from mst_phys_asset a
+        left join mst_item it on it.item_id = a.item_id
+        left join mst_asset_install cur on cur.asset_id = a.asset_id and cur.removed_at is null and cur.void_yn = 'N'
+        left join mst_equip ce on ce.equip_id = cur.equip_id
+    </sql>
+
+    <sql id="assetWhere">
+        <include refid="assetFrom"/>
+        <where>
+            <if test="q.assetType != null">and a.asset_type = #{q.assetType}</if>
+            <if test="q.cdLike != null">and a.asset_cd like #{q.cdLike} escape '\'</if>
+            <if test="q.nmLike != null">and a.asset_nm ilike #{q.nmLike} escape '\'</if>
+            <if test="q.useYn != null">and a.use_yn = #{q.useYn}</if>
+        </where>
+    </sql>
+
+    <sql id="assetOrder">
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ASSET_CD'">a.asset_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ASSET_NM'">a.asset_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ASSET_TYPE'">a.asset_type<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'NEXT_CALIB_DATE'">(a.last_calib_date + a.calib_cycle_days)<if test="s.desc"> desc</if> nulls last</when>
+                <otherwise>a.updated_at<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+        </foreach>
+        a.asset_id
+    </sql>
+
+    <select id="findAssets" resultType="io.smarthappy.module.master.equip.AssetDtos$AssetRow">
+        select <include refid="assetCols"/> <include refid="assetWhere"/> <include refid="assetOrder"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="countAssets" resultType="long">select count(*) <include refid="assetWhere"/></select>
+
+    <select id="cursorAssets" resultType="io.smarthappy.module.master.equip.AssetDtos$AssetRow" fetchSize="1000">
+        select <include refid="assetCols"/> <include refid="assetWhere"/> <include refid="assetOrder"/>
+    </select>
+
+    <select id="findAsset" resultType="io.smarthappy.module.master.equip.AssetDtos$AssetRow">
+        select <include refid="assetCols"/> <include refid="assetFrom"/> where a.asset_id = #{assetId}
+    </select>
+
+    <select id="findItemId" resultType="java.lang.Long">
+        select item_id from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="itemUseYn" resultType="string">
+        select use_yn from mst_item where item_id = #{itemId}
+    </select>
+
+    <select id="lockAsset" resultType="java.lang.Long">
+        select asset_id from mst_phys_asset where asset_id = #{assetId} for update
+    </select>
+
+    <select id="lockEquip" resultType="java.lang.Long">
+        select equip_id from mst_equip where equip_id = #{equipId} for update
+    </select>
+
+    <select id="insertAsset" resultType="long" flushCache="true">
+        insert into mst_phys_asset (comp_cd, asset_cd, asset_type, asset_nm, serial_no, item_id, life_shots, calib_cycle_days,
+                                    last_calib_date, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.assetCd}, #{f.assetType}, #{f.assetNm}, #{f.serialNo}, #{f.itemId}, #{f.lifeShots},
+                #{f.calibCycleDays}, #{f.lastCalibDate}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning asset_id
+    </select>
+
+    <update id="updateAsset">
+        update mst_phys_asset set asset_cd = #{f.assetCd}, asset_type = #{f.assetType}, asset_nm = #{f.assetNm},
+                                  serial_no = #{f.serialNo}, item_id = #{f.itemId}, life_shots = #{f.lifeShots},
+                                  calib_cycle_days = #{f.calibCycleDays}, last_calib_date = #{f.lastCalibDate},
+                                  use_yn = #{f.useYn}, remark = #{f.remark},
+                                  row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where asset_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="disableAsset">
+        update mst_phys_asset set use_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where asset_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <!-- ===== 설치 이력 ===== -->
+    <sql id="installCols">
+        i.install_id, i.asset_id, i.equip_id, e.equip_cd, e.equip_nm, e.plant_cd,
+        case when e.node_id is null then null else hb_equip_node_path(e.node_id) end as node_path,
+        i.installed_at, i.removed_at, i.installed_by, i.removed_by, i.recorded_at, i.void_yn, i.void_reason, i.remark
+    </sql>
+
+    <select id="findInstalls" resultType="io.smarthappy.module.master.equip.AssetDtos$InstallRow">
+        select <include refid="installCols"/> from mst_asset_install i join mst_equip e on e.equip_id = i.equip_id
+         where i.asset_id = #{assetId} order by i.installed_at desc, i.install_id desc
+    </select>
+
+    <select id="findInstall" resultType="io.smarthappy.module.master.equip.AssetDtos$InstallRow">
+        select <include refid="installCols"/> from mst_asset_install i join mst_equip e on e.equip_id = i.equip_id
+         where i.install_id = #{installId}
+    </select>
+
+    <select id="insertInstall" resultType="long" flushCache="true">
+        insert into mst_asset_install (comp_cd, asset_id, equip_id, installed_at, installed_by, remark)
+        values (hb_current_comp(), #{assetId}, #{equipId}, #{at}, #{by}, #{remark})
+        returning install_id
+    </select>
+
+    <update id="removeInstall">
+        update mst_asset_install set removed_at = #{at}, removed_by = #{by}
+         where install_id = #{installId} and removed_at is null and void_yn = 'N'
+    </update>
+
+    <update id="voidInstall">
+        update mst_asset_install set void_yn = 'Y', void_reason = #{reason}, voided_by = #{by}, voided_at = now()
+         where install_id = #{installId} and void_yn = 'N'
+    </update>
+
+    <select id="openInstallsOfEquip" resultType="int">
+        select count(*) from mst_asset_install where equip_id = #{equipId} and removed_at is null and void_yn = 'N'
+    </select>
+</mapper>

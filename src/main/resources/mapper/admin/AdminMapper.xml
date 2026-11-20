@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  시스템관리 1단계 (docs/36) — 사용자·권한그룹·메뉴. 회사별 표는 RLS 가 회사를 거른다(다른 회사 id 는 0건 → 404).
+  권한 집합은 "prog_cd:ACTION" 글자로 돌려주고 포함 검사(부여 상한)는 서비스가 한다.
+-->
+<mapper namespace="io.smarthappy.module.admin.AdminMapper">
+
+    <!-- ===================== 권한 집합 ===================== -->
+
+    <select id="effectiveGrants" resultType="string">
+        select distinct ap.prog_cd || ':' || ap.action_cd
+          from sys_user_auth ua
+          join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd and g.use_yn = 'Y'
+          join sys_auth_prog ap on ap.comp_cd = ua.comp_cd and ap.auth_grp_cd = ua.auth_grp_cd
+          join sys_prog p on p.prog_cd = ap.prog_cd and p.use_yn = 'Y'
+         where ua.user_id = #{userId}
+           and ap.action_cd = any (p.actions)
+    </select>
+
+    <select id="isActiveAdmin" resultType="boolean">
+        select exists (select 1 from sys_user_auth ua
+                         join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd
+                        where ua.user_id = #{userId} and g.use_yn = 'Y' and g.admin_yn = 'Y')
+    </select>
+
+    <select id="groupGrants" resultType="string">
+        select ap.prog_cd || ':' || ap.action_cd
+          from sys_auth_prog ap
+          join sys_prog p on p.prog_cd = ap.prog_cd and p.use_yn = 'Y'
+         where ap.auth_grp_cd = #{authGrpCd}
+           and ap.action_cd = any (p.actions)
+    </select>
+
+    <select id="userGrants" resultType="string">
+        select distinct ap.prog_cd || ':' || ap.action_cd
+          from sys_user_auth ua
+          join sys_auth_prog ap on ap.comp_cd = ua.comp_cd and ap.auth_grp_cd = ua.auth_grp_cd
+          join sys_prog p on p.prog_cd = ap.prog_cd and p.use_yn = 'Y'
+         where ua.user_id = #{userId}
+           and ap.action_cd = any (p.actions)
+    </select>
+
+    <select id="inAnyAdminGroup" resultType="boolean">
+        select exists (select 1 from sys_user_auth ua
+                         join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd
+                        where ua.user_id = #{userId} and g.admin_yn = 'Y')
+    </select>
+
+    <!-- 실패 잠금은 곧 풀리므로 "쓸 수 있는" 관리자로 센다. 관리자 수동 잠금(locked_until 없음)만 뺀다 -->
+    <select id="countUsableAdmins" resultType="int">
+        select count(distinct u.user_id)
+          from sys_user u
+          join sys_user_auth ua on ua.comp_cd = u.comp_cd and ua.user_id = u.user_id
+          join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd
+         where u.use_yn = 'Y'
+           and not (u.lock_yn = 'Y' and u.locked_until is null)
+           and g.use_yn = 'Y'
+           and g.admin_yn = 'Y'
+    </select>
+
+    <!-- 트랜잭션 끝까지 유지되는 회사 단위 잠금. 뒤 문장은 새 스냅숏이라 먼저 커밋된 변경을 본다 -->
+    <select id="lockAdminChanges" resultType="int" flushCache="true">
+        select 1 from (select pg_advisory_xact_lock(hashtextextended('sys-admin:' || hb_current_comp(), 0))) x
+    </select>
+
+    <!-- ===================== 사용자 ===================== -->
+
+    <sql id="userColumns">
+        u.user_id, u.login_id, u.user_nm, u.email, u.locale_cd,
+        case when u.lock_yn = 'Y' and u.locked_until is null then 'MANUAL'
+             when u.lock_yn = 'Y' and u.locked_until &gt; now() then 'FAIL'
+             else 'NONE' end as lock_state,
+        case when u.lock_yn = 'Y' and u.locked_until &gt; now() then u.locked_until end as locked_until,
+        u.pwd_change_req_yn, u.last_login_at, u.use_yn, u.row_ver, u.updated_at, u.updated_by,
+        u.dept_id, (select d.dept_nm from sys_dept d where d.dept_id = u.dept_id) as dept_nm,
+        (select string_agg(g.auth_grp_nm, ', ' order by g.sort_no, g.auth_grp_cd)
+           from sys_user_auth ua join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd
+          where ua.user_id = u.user_id) as group_names,
+        exists (select 1 from sys_user_mfa m where m.user_id = u.user_id and m.enabled_yn = 'Y') as mfa_enrolled,
+        (select count(*) from apr_delegate dg
+          where dg.delegate_id = u.user_id and dg.revoked_at is null
+            and dg.to_date &gt;= (select (now() at time zone c.time_zone)::date from sys_comp c where c.comp_cd = u.comp_cd)
+        ) as active_delegated_cnt,
+        u.user_type, u.cust_id,
+        (select mc.cust_cd from mst_cust mc where mc.cust_id = u.cust_id) as cust_cd,
+        (select mc.cust_nm from mst_cust mc where mc.cust_id = u.cust_id) as cust_nm
+    </sql>
+
+    <sql id="userWhere">
+        from sys_user u
+        <where>
+            <if test="q.keywordLike != null">
+                and (u.login_id ilike #{q.keywordLike} escape '\' or u.user_nm ilike #{q.keywordLike} escape '\')
+            </if>
+            <if test="q.authGrpCd != null">
+                and exists (select 1 from sys_user_auth ua where ua.user_id = u.user_id and ua.auth_grp_cd = #{q.authGrpCd})
+            </if>
+            <if test="q.useYn != null">and u.use_yn = #{q.useYn}</if>
+            <if test="q.deptId != null">and u.dept_id = #{q.deptId}</if>
+            <if test="q.userType != null">and u.user_type = #{q.userType}</if>
+            <if test="q.lockState == 'MANUAL'">and u.lock_yn = 'Y' and u.locked_until is null</if>
+            <if test="q.lockState == 'FAIL'">and u.lock_yn = 'Y' and u.locked_until &gt; now()</if>
+            <if test="q.lockState == 'NONE'">and not (u.lock_yn = 'Y' and (u.locked_until is null or u.locked_until &gt; now()))</if>
+        </where>
+    </sql>
+
+    <!-- 정렬: 화이트리스트 enum 이름으로만 열을 고른다(문자열 치환 금지). 마지막에 PK -->
+    <sql id="userOrderBy">
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'LOGIN_ID'">lower(u.login_id)</when>
+                <when test="s.key == 'USER_NM'">u.user_nm</when>
+                <when test="s.key == 'LAST_LOGIN_AT'">u.last_login_at</when>
+                <when test="s.key == 'USE_YN'">u.use_yn</when>
+                <otherwise>u.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        u.user_id
+    </sql>
+
+    <select id="findUserPage" resultType="io.smarthappy.module.admin.AdminDtos$UserRow">
+        select <include refid="userColumns"/>
+        <include refid="userWhere"/>
+        <include refid="userOrderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="countUsers" resultType="long">
+        select count(*) <include refid="userWhere"/>
+    </select>
+
+    <select id="findUser" resultType="io.smarthappy.module.admin.AdminDtos$UserRow">
+        select <include refid="userColumns"/> from sys_user u where u.user_id = #{userId}
+    </select>
+
+    <select id="existsLoginId" resultType="boolean">
+        select exists (select 1 from sys_user where lower(login_id) = lower(#{loginId}))
+    </select>
+
+    <!-- 협력사 사용자 소속 선택지: 사용 중 구매·겸용 거래처 (docs/42 5장). RLS 가 회사를 거른다 -->
+    <select id="findSupplierChoices" resultType="io.smarthappy.module.admin.AdminDtos$SupplierChoice">
+        select cust_id, cust_cd, cust_nm, cust_type
+          from mst_cust
+         where use_yn = 'Y' and cust_type in ('PURCHASE', 'BOTH')
+           <if test="keywordLike != null">
+           and (cust_cd ilike #{keywordLike} escape '\' or cust_nm ilike #{keywordLike} escape '\')
+           </if>
+         order by cust_nm, cust_cd
+         limit 50
+    </select>
+
+    <!-- 협력사 사용자 소속 확인용: 그 거래처의 유형·사용 여부(없으면 null — 다른 회사는 RLS 로 없음) -->
+    <select id="findSupplierCust" resultType="io.smarthappy.module.admin.AdminDtos$SupplierChoice">
+        select cust_id, cust_cd, cust_nm, case when use_yn = 'Y' then cust_type else 'INACTIVE' end as cust_type
+          from mst_cust where cust_id = #{custId}
+    </select>
+
+    <!-- 새 사용자: 서버가 만든 임시 비밀번호 + 다음 로그인 때 변경 -->
+    <select id="insertUser" resultType="long" flushCache="true">
+        insert into sys_user (comp_cd, login_id, user_nm, pwd_hash, email, locale_cd, pwd_change_req_yn, use_yn,
+                              dept_id, user_type, cust_id, created_by, updated_by)
+        values (hb_current_comp(), #{f.loginId}, #{f.userNm}, #{pwdHash}, #{f.email}, #{f.localeCd}, 'Y', #{f.useYn},
+                #{f.deptId}, coalesce(#{f.userType}, 'INTERNAL'), #{f.custId}, #{by}, #{by})
+        returning user_id
+    </select>
+
+    <update id="updateUser">
+        update sys_user
+           set user_nm = #{f.userNm}, email = #{f.email}, locale_cd = #{f.localeCd}, use_yn = #{f.useYn},
+               dept_id = #{f.deptId},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where user_id = #{userId} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="userGroupCds" resultType="string">
+        select auth_grp_cd from sys_user_auth where user_id = #{userId} order by auth_grp_cd
+    </select>
+
+    <insert id="insertUserAuth">
+        insert into sys_user_auth (comp_cd, user_id, auth_grp_cd, created_by)
+        values (hb_current_comp(), #{userId}, #{authGrpCd}, #{by})
+    </insert>
+
+    <delete id="deleteUserAuth">
+        delete from sys_user_auth where user_id = #{userId} and auth_grp_cd = #{authGrpCd}
+    </delete>
+
+    <update id="touchUser">
+        update sys_user set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where user_id = #{userId} and row_ver = #{rowVer}
+    </update>
+
+    <!--
+      관리자 초기화: 임시 비밀번호 + 다음 로그인 때 변경 + 실패 잠금 해제(수동 잠금은 그대로) + 기존 세션 무효(docs/36 D4).
+      row_ver 를 올려 감사 행(행위자·시각, 해시는 (changed))이 남게 한다(D3)
+    -->
+    <update id="resetPassword">
+        update sys_user
+           set pwd_hash = #{pwdHash}, pwd_change_req_yn = 'Y', pwd_changed_at = now(), login_fail_cnt = 0,
+               lock_yn = case when locked_until is not null then 'N' else lock_yn end,
+               locked_until = null,
+               session_not_before = now(),
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where user_id = #{userId} and row_ver = #{rowVer}
+    </update>
+
+    <!-- MFA 초기화(docs/36 14장): 그 사용자의 기존 세션을 끊는다 — 다음 로그인 때 다시 등록 -->
+    <update id="revokeSessions">
+        update sys_user
+           set session_not_before = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where user_id = #{userId} and row_ver = #{rowVer}
+    </update>
+
+    <!-- 관리자 수동 잠금 = locked_until 없음(자동 해제 없음, 기존 세션도 다음 요청에서 끊김, V004) -->
+    <update id="lockUser">
+        update sys_user
+           set lock_yn = 'Y', locked_until = null,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where user_id = #{userId} and row_ver = #{rowVer}
+    </update>
+
+    <update id="unlockUser">
+        update sys_user
+           set lock_yn = 'N', locked_until = null, login_fail_cnt = 0,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where user_id = #{userId} and row_ver = #{rowVer}
+    </update>
+
+    <!-- ===================== 권한그룹 ===================== -->
+
+    <sql id="groupColumns">
+        g.auth_grp_cd, g.auth_grp_nm, g.sort_no, g.home_prog_cd, g.admin_yn, g.use_yn, g.row_ver, g.updated_at,
+        g.updated_by,
+        (select count(*) from sys_user_auth ua where ua.comp_cd = g.comp_cd and ua.auth_grp_cd = g.auth_grp_cd) as member_cnt
+    </sql>
+
+    <select id="findGroups" resultType="io.smarthappy.module.admin.AdminDtos$GroupRow">
+        select <include refid="groupColumns"/> from sys_auth_group g order by g.sort_no, g.auth_grp_cd
+    </select>
+
+    <!-- grid(UI 단계 3 ①) 조건 — 검색어 없으면 목록과 같은 행 -->
+    <sql id="groupWhere">
+        <where>
+            <if test="keyword != null">(g.auth_grp_cd ilike #{keyword} escape '\' or g.auth_grp_nm ilike #{keyword} escape '\')</if>
+        </where>
+    </sql>
+
+    <!-- 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findGroupPage" resultType="io.smarthappy.module.admin.AdminDtos$GroupRow">
+        select <include refid="groupColumns"/> from sys_auth_group g
+        <include refid="groupWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'AUTH_GRP_NM'">g.auth_grp_nm</when>
+                <when test="s.key == 'SORT_NO'">g.sort_no</when>
+                <when test="s.key == 'MEMBER_CNT'">member_cnt</when>
+                <when test="s.key == 'USE_YN'">g.use_yn</when>
+                <otherwise>g.auth_grp_cd</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         g.auth_grp_cd
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countGroups" resultType="long">
+        select count(*) from sys_auth_group g <include refid="groupWhere"/>
+    </select>
+
+    <select id="findGroup" resultType="io.smarthappy.module.admin.AdminDtos$GroupRow">
+        select <include refid="groupColumns"/> from sys_auth_group g where g.auth_grp_cd = #{authGrpCd}
+    </select>
+
+    <insert id="insertGroup">
+        insert into sys_auth_group (comp_cd, auth_grp_cd, auth_grp_nm, sort_no, home_prog_cd, admin_yn, use_yn,
+                                    created_by, updated_by)
+        values (hb_current_comp(), #{f.authGrpCd}, #{f.authGrpNm}, #{f.sortNo}, #{f.homeProgCd}, #{f.adminYn},
+                #{f.useYn}, #{by}, #{by})
+    </insert>
+
+    <update id="updateGroup">
+        update sys_auth_group
+           set auth_grp_nm = #{f.authGrpNm}, sort_no = #{f.sortNo}, home_prog_cd = #{f.homeProgCd},
+               admin_yn = #{f.adminYn}, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where auth_grp_cd = #{f.authGrpCd} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="touchGroup">
+        update sys_auth_group set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where auth_grp_cd = #{authGrpCd} and row_ver = #{rowVer}
+    </update>
+
+    <select id="groupRows" resultType="io.smarthappy.module.admin.AdminDtos$GrantRow">
+        select auth_grp_cd, prog_cd, action_cd from sys_auth_prog where auth_grp_cd = #{authGrpCd}
+    </select>
+
+    <insert id="insertGrant">
+        insert into sys_auth_prog (comp_cd, auth_grp_cd, prog_cd, action_cd, created_by)
+        values (hb_current_comp(), #{authGrpCd}, #{progCd}, #{actionCd}, #{by})
+    </insert>
+
+    <delete id="deleteGrant">
+        delete from sys_auth_prog where auth_grp_cd = #{authGrpCd} and prog_cd = #{progCd} and action_cd = #{actionCd}
+    </delete>
+
+    <select id="groupMembers" resultType="io.smarthappy.module.admin.AdminDtos$Member">
+        select u.user_id, u.login_id, u.user_nm, u.use_yn
+          from sys_user_auth ua join sys_user u on u.user_id = ua.user_id
+         where ua.auth_grp_cd = #{authGrpCd}
+         order by lower(u.login_id)
+    </select>
+
+    <select id="findProgs" resultType="io.smarthappy.module.admin.AdminDtos$ProgRow">
+        select prog_cd, prog_nm_key, module_cd, array_to_string(actions, ',') as actions_csv, sort_no
+          from sys_prog
+         where use_yn = 'Y'
+         order by sort_no, prog_cd
+    </select>
+
+    <!-- ===================== 메뉴 ===================== -->
+
+    <sql id="menuColumns">
+        m.menu_id, m.parent_id, m.menu_nm, m.menu_nm_key, m.prog_cd, p.prog_nm_key, p.use_yn as prog_use_yn,
+        m.sort_no, m.use_yn, m.row_ver
+    </sql>
+
+    <select id="findMenus" resultType="io.smarthappy.module.admin.AdminDtos$MenuRow">
+        select <include refid="menuColumns"/>
+          from sys_menu m left join sys_prog p on p.prog_cd = m.prog_cd
+         order by m.sort_no, m.menu_id
+    </select>
+
+    <select id="findMenu" resultType="io.smarthappy.module.admin.AdminDtos$MenuRow">
+        select <include refid="menuColumns"/>
+          from sys_menu m left join sys_prog p on p.prog_cd = m.prog_cd
+         where m.menu_id = #{menuId}
+    </select>
+
+    <select id="insertMenu" resultType="long" flushCache="true">
+        insert into sys_menu (comp_cd, parent_id, menu_nm, prog_cd, sort_no, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.parentId}, #{f.menuNm}, #{f.progCd}, #{f.sortNo}, #{f.useYn}, #{by}, #{by})
+        returning menu_id
+    </select>
+
+    <!-- 폴더·화면 구분(prog_cd)은 서비스가 바꾸지 않는다(새로 만들기). 이름 키(menu_nm_key)는 시드 값 그대로 -->
+    <update id="updateMenu">
+        update sys_menu
+           set parent_id = #{f.parentId}, menu_nm = #{f.menuNm}, prog_cd = #{f.progCd}, sort_no = #{f.sortNo},
+               use_yn = #{f.useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where menu_id = #{menuId} and row_ver = #{f.rowVer}
+    </update>
+</mapper>

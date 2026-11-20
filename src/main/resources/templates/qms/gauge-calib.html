@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  계측기 교정 (qms-gauge-calib) — P3 QMS Q2a (docs/29). 계측기 = P1 물리 자산(유형 게이지).
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 담당(WEB, 마우스·키보드). 계측기는 수십~수백 개, 교정은 계측기마다 1년에 한두 번.
+  직접 치는 값 = 교정일·결과·기관(외부면 거래처 코드)·성적서 번호 — 성적서를 보고 옮긴다.
+  서버가 채우는 값 = 주기(비우면 계측기 기본 주기), 다음 교정일(= 교정일 + 주기), 최근 교정일(물리 자산), 상태 배지.
+  예외 = 잘못 넣은 기록은 고치지 않고 무효(사유) 후 다시 넣는다(품질기록), 사용 중지 계측기는 교정 추가 불가.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">계측기 교정</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.gauge.keyword}">코드·이름·시리얼</span>
+        <input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{qms.gauge.col.gaugeClass}">계측기 클래스</span>
+        <select name="gaugeClass" data-hb="select" data-code="GAUGE_CLASS" data-blank="all"></select></label>
+    <label><span th:text="#{qms.gauge.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="GAUGE_STATUS" data-blank="all"></select></label>
+    <label class="hb-check"><input type="checkbox" name="withUnused" value="true">
+        <span th:text="#{qms.gauge.withUnused}">사용 중지 포함</span></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div id="gaugeGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{qms.gauge.saveProfile}">계측기 정보 저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.gauge.select}">왼쪽에서 계측기를 고르세요. 계측기는 기준정보 › 금형·지그·게이지에서 유형 "게이지"로 등록합니다.</p>
+        <p id="statusLine" class="hb-qms-status" role="status" hidden></p>
+
+        <form id="profileForm" class="hb-form" autocomplete="off" hidden>
+            <label><span th:text="#{qms.gauge.col.assetCd}">계측기 코드</span><input data-field="assetCd" readonly></label>
+            <label><span th:text="#{qms.gauge.col.assetNm}">계측기명</span><input data-field="assetNm" readonly></label>
+            <label><span th:text="#{qms.gauge.col.serialNo}">시리얼</span><input data-field="serialNo" readonly></label>
+            <label><span th:text="#{qms.gauge.col.lastCalibDate}">최근 교정일</span><input data-field="lastCalibDate" readonly
+                    data-help-key="qms-gauge-calib.lastCalibDate"></label>
+            <label><span th:text="#{qms.gauge.col.gaugeClass}">계측기 클래스</span>
+                <select data-field="gaugeClass" data-hb="select" data-code="GAUGE_CLASS" data-blank="select"
+                        data-help-key="qms-gauge-calib.gaugeClass"></select></label>
+            <label><span th:text="#{qms.gauge.col.calibCycleDays}">교정 주기(일)</span>
+                <input data-field="calibCycleDays" data-hb="number" data-scale="0" data-min="1" data-max="3650" data-pad="false"
+                       data-help-key="qms-gauge-calib.calibCycleDays"></label>
+        </form>
+
+        <section class="hb-sub" id="calibSection" hidden>
+            <h2 th:text="#{qms.gauge.addCalib}">교정 기록 추가</h2>
+            <div th:if="${actions.contains('SAVE')}">
+                <form id="calibForm" class="hb-form" autocomplete="off">
+                    <label><span th:text="#{qms.calib.col.calibDate}">교정일</span><input data-field="calibDate" type="date" required></label>
+                    <label><span th:text="#{qms.calib.col.result}">결과</span>
+                        <select data-field="result" data-hb="select" data-code="CALIB_RESULT" data-blank="select" required></select></label>
+                    <div class="hb-wide" id="limitBox" hidden>
+                        <label><span th:text="#{qms.calib.col.limitNote}">제한 내용</span>
+                            <input data-field="limitNote" maxlength="500" data-help-key="qms-gauge-calib.limitNote"></label>
+                    </div>
+                    <label><span th:text="#{qms.calib.col.agency}">교정 기관</span>
+                        <select data-field="agency" data-hb="select" data-code="CALIB_AGENCY" data-blank="select" required></select></label>
+                    <div id="custBox" hidden>
+                        <label><span th:text="#{qms.calib.col.custCd}">기관 거래처 코드</span>
+                            <input data-field="custCd" maxlength="30" data-help-key="qms-gauge-calib.custCd"></label>
+                    </div>
+                    <label><span th:text="#{qms.calib.col.certNo}">성적서 번호</span><input data-field="certNo" maxlength="50"></label>
+                    <label><span th:text="#{qms.calib.col.cycleDays}">주기(일)</span>
+                        <input data-field="cycleDays" data-hb="number" data-scale="0" data-min="1" data-max="3650" data-pad="false"
+                               data-help-key="qms-gauge-calib.cycleDays"></label>
+                    <label class="hb-wide"><span th:text="#{qms.calib.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+                </form>
+                <div class="hb-toolbar">
+                    <button type="button" id="addCalibBtn" th:text="#{qms.gauge.addCalibBtn}">교정 기록 추가</button>
+                </div>
+            </div>
+
+            <h2 th:text="#{qms.gauge.history}">교정 이력</h2>
+            <p class="hb-muted" th:text="#{qms.gauge.historyHint}">기록은 고치지 않습니다. 잘못 넣었으면 무효(사유) 후 다시 넣으세요. 행을 누르면 성적서 첨부를 봅니다.</p>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="historyTable">
+                    <thead><tr>
+                        <th th:text="#{qms.calib.col.calibDate}">교정일</th>
+                        <th th:text="#{qms.calib.col.result}">결과</th>
+                        <th th:text="#{qms.calib.col.agency}">교정 기관</th>
+                        <th th:text="#{qms.calib.col.nextDueDate}">다음 교정일</th>
+                        <th th:text="#{qms.calib.col.certNo}">성적서 번호</th>
+                        <th th:text="#{qms.calib.col.state}">상태</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div id="impactBox" class="hb-sub" hidden>
+                <h2 data-help-key="qms-gauge-calib.impact" th:text="#{qms.gauge.impact}">교정 불합격 영향 LOT</h2>
+                <p id="impactLine" class="hb-qms-status" data-status="NG"></p>
+                <p id="impactContain" class="hb-qms-inline" hidden></p>
+                <div class="hb-qms-table-wrap">
+                    <table class="hb-cmp-table" id="impactTable">
+                        <thead><tr>
+                            <th th:text="#{qms.insp.col.lotNo}">LOT</th>
+                            <th th:text="#{qms.insp.col.item}">품목</th>
+                            <th th:text="#{qms.insp.col.inspNo}">검사 번호</th>
+                            <th th:text="#{qms.insp.col.result}">결과</th>
+                            <th th:text="#{qms.gauge.impactCnt}">측정 수</th>
+                            <th th:text="#{qms.gauge.impactLast}">마지막 측정</th>
+                        </tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="fileBox" hidden>
+                <h2 id="fileTitle"></h2>
+                <ul id="files" class="hb-files"></ul>
+                <label th:if="${actions.contains('SAVE')}"><span th:text="#{qms.gauge.attach}">성적서 올리기</span>
+                    <input type="file" id="fileInput"></label>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.esign.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/gauge-calib.js}"></script>
+</body>
+</html>

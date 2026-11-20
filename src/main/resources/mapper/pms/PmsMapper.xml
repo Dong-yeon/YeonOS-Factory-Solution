@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- PMS 프로젝트·WBS·템플릿 (docs/32 PM1). 회사 범위는 RLS — 조건에 comp_cd 를 쓰지 않는다 -->
+<mapper namespace="io.smarthappy.module.pms.PmsMapper">
+
+    <!-- ================================================================ 참조 -->
+
+    <select id="findCustId" resultType="long">
+        select cust_id from mst_cust where cust_cd = #{custCd}
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="findPlants" resultType="io.smarthappy.module.pms.PmsDtos$CodeOption">
+        select plant_cd as code, plant_nm as name from sys_plant where use_yn = 'Y' order by sort_no, plant_cd
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.pms.PmsDtos$ItemRef">
+        select item_id, item_cd, item_nm from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="codeUsable" resultType="boolean">
+        select hb_code_usable(hb_current_comp(), #{grp}, #{code})
+    </select>
+
+    <select id="lockProjectShare" resultType="string" flushCache="true">
+        select status from pms_project where proj_id = #{id} for share
+    </select>
+
+    <update id="ensureNumberingRule">
+        insert into sys_numbering_rule (comp_cd, rule_cd, rule_nm, pattern, reset_cycle, created_by, updated_by)
+        values (hb_current_comp(), #{ruleCd}, #{ruleNm}, #{pattern}, #{resetCycle}, #{by}, #{by})
+        on conflict (comp_cd, rule_cd) do nothing
+    </update>
+
+    <!-- ================================================================ 템플릿 -->
+
+    <sql id="tmplCols">
+        t.tmpl_id, t.tmpl_cd, t.tmpl_nm, t.proj_type, t.anchor, t.use_yn, t.remark, t.row_ver, t.updated_at, t.updated_by
+    </sql>
+
+    <!-- 목록·grid·건수 공통 조건 -->
+    <sql id="tmplWhere">
+        <where>
+            <if test="useYn != null">t.use_yn = #{useYn}</if>
+            <if test="keywordLike != null">and (t.tmpl_cd ilike #{keywordLike} escape '\' or t.tmpl_nm ilike #{keywordLike} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findTemplates" resultType="io.smarthappy.module.pms.PmsDtos$TemplateRow">
+        select <include refid="tmplCols"/>,
+               (select count(*) from pms_template_task k where k.tmpl_id = t.tmpl_id) as task_cnt
+          from pms_template t
+        <include refid="tmplWhere"/>
+         order by t.tmpl_cd
+    </select>
+
+    <!-- grid(UI 단계 3 ②) — 정렬은 허용 목록 enum 이름으로만, 마지막에 PK -->
+    <select id="findTemplatePage" resultType="io.smarthappy.module.pms.PmsDtos$TemplateRow">
+        select * from (
+            select <include refid="tmplCols"/>,
+                   (select count(*) from pms_template_task k where k.tmpl_id = t.tmpl_id) as task_cnt
+              from pms_template t
+            <include refid="tmplWhere"/>
+        ) x
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'TMPL_NM'">x.tmpl_nm</when>
+                <when test="s.key == 'PROJ_TYPE'">x.proj_type</when>
+                <when test="s.key == 'ANCHOR'">x.anchor</when>
+                <when test="s.key == 'TASK_CNT'">x.task_cnt</when>
+                <when test="s.key == 'USE_YN'">x.use_yn</when>
+                <otherwise>x.tmpl_cd</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         x.tmpl_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countTemplates" resultType="long">
+        select count(*) from pms_template t <include refid="tmplWhere"/>
+    </select>
+
+    <select id="findTemplate" resultType="io.smarthappy.module.pms.PmsDtos$TemplateRow">
+        select <include refid="tmplCols"/>,
+               (select count(*) from pms_template_task k where k.tmpl_id = t.tmpl_id) as task_cnt
+          from pms_template t where t.tmpl_id = #{id}
+    </select>
+
+    <select id="findTemplateByCd" resultType="io.smarthappy.module.pms.PmsDtos$TemplateRow">
+        select <include refid="tmplCols"/>, 0 as task_cnt from pms_template t where t.tmpl_cd = #{tmplCd}
+    </select>
+
+    <select id="insertTemplate" resultType="long" flushCache="true">
+        insert into pms_template (comp_cd, tmpl_cd, tmpl_nm, proj_type, anchor, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.tmplCd}, #{f.tmplNm}, #{f.projType}, #{f.anchor}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning tmpl_id
+    </select>
+
+    <!-- 코드는 바꾸지 않는다 -->
+    <update id="updateTemplate">
+        update pms_template
+           set tmpl_nm = #{f.tmplNm}, proj_type = #{f.projType}, anchor = #{f.anchor}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tmpl_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="lockTemplate" resultType="int" flushCache="true">
+        select 1 from pms_template where tmpl_id = #{id} for update
+    </select>
+
+    <sql id="ttCols">
+        k.tt_id, k.parent_id, k.seq, k.task_type, k.task_nm, k.offset_days, k.duration_days, k.std_hours, k.is_summary, k.remark, k.row_ver
+    </sql>
+
+    <select id="findTmplTasks" resultType="io.smarthappy.module.pms.PmsDtos$TmplTaskRow">
+        select <include refid="ttCols"/>, k.tmpl_id from pms_template_task k where k.tmpl_id = #{tmplId}
+    </select>
+
+    <select id="findTmplTask" resultType="io.smarthappy.module.pms.PmsDtos$TmplTaskRow">
+        select <include refid="ttCols"/>, k.tmpl_id from pms_template_task k where k.tt_id = #{id}
+    </select>
+
+    <select id="insertTmplTask" resultType="long" flushCache="true">
+        insert into pms_template_task (comp_cd, tmpl_id, parent_id, seq, task_type, task_nm, offset_days, duration_days, std_hours,
+                                       remark, created_by, updated_by)
+        values (hb_current_comp(), #{tmplId}, #{parentId}, #{seq}, #{f.taskType}, #{f.taskNm}, #{f.offsetDays}, #{f.durationDays},
+                #{f.stdHours}, #{f.remark}, #{by}, #{by})
+        returning tt_id
+    </select>
+
+    <update id="updateTmplTask">
+        update pms_template_task
+           set task_type = #{f.taskType}, task_nm = #{f.taskNm}, offset_days = #{f.offsetDays}, duration_days = #{f.durationDays},
+               std_hours = #{f.stdHours}, remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tt_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="moveTmplTask">
+        update pms_template_task
+           set parent_id = #{parentId}, seq = #{seq}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tt_id = #{id}
+    </update>
+
+    <!-- 선행 미완 통과 기록(docs/32 4.21) — 넣기만 -->
+    <insert id="insertDepWaive">
+        insert into pms_task_dep_waive (comp_cd, proj_id, task_id, reason, open_preds, created_by)
+        values (hb_current_comp(), #{projId}, #{taskId}, #{reason}, #{openPreds}, #{by})
+    </insert>
+
+    <select id="findDepWaives" resultType="io.smarthappy.module.pms.PmsDtos$DepWaiveRow">
+        select waive_id, reason, open_preds, created_by, created_at from pms_task_dep_waive where task_id = #{taskId}
+         order by waive_id desc
+    </select>
+
+    <!-- 템플릿 선후행(docs/32 4.18) -->
+    <select id="findTmplDeps" resultType="io.smarthappy.module.pms.PmsDtos$TmplDepRow">
+        select tdep_id, pred_tt_id, succ_tt_id, lag_days, dep_type from pms_template_dep where tmpl_id = #{tmplId} order by tdep_id
+    </select>
+
+    <select id="findTmplDepTmplId" resultType="long">
+        select tmpl_id from pms_template_dep where tdep_id = #{id}
+    </select>
+
+    <select id="insertTmplDep" resultType="long" flushCache="true">
+        insert into pms_template_dep (comp_cd, tmpl_id, pred_tt_id, succ_tt_id, lag_days, dep_type, created_by)
+        values (hb_current_comp(), #{tmplId}, #{pred}, #{succ}, #{lag}, #{type}, #{by})
+        returning tdep_id
+    </select>
+
+    <delete id="deleteTmplDep">
+        delete from pms_template_dep where tdep_id = #{id}
+    </delete>
+
+    <delete id="deleteTmplDepsOfTask">
+        delete from pms_template_dep where pred_tt_id = #{ttId} or succ_tt_id = #{ttId}
+    </delete>
+
+    <delete id="deleteTmplTask">
+        delete from pms_template_task where tt_id = #{id}
+    </delete>
+
+    <select id="countTmplChildren" resultType="int">
+        select count(*) from pms_template_task where parent_id = #{id}
+    </select>
+
+    <!-- ================================================================ 프로젝트 -->
+
+    <sql id="projCols">
+        p.proj_id, p.proj_no, p.proj_nm, p.proj_type, c.cust_cd, c.cust_nm, p.plant_cd, p.pm_user_id,
+        u.login_id as pm_login_id, u.user_nm as pm_user_nm, t.tmpl_cd, p.sop_date, p.plan_start, p.plan_end, p.progress_pct,
+        p.status, p.status_reason, p.closed_on, p.remark, p.eco_id, p.apr_to, p.apr_id, p.row_ver, p.updated_at, p.updated_by,
+        (select count(*) from pms_task k where k.proj_id = p.proj_id) as task_cnt,
+        (select count(*) from pms_task k where k.proj_id = p.proj_id and k.is_summary = 'N'
+            and k.status in ('NOT_STARTED', 'IN_PROGRESS') and k.plan_end &lt; #{lateRef}) as late_cnt
+    </sql>
+
+    <sql id="projFrom">
+        from pms_project p
+        join sys_user u on u.user_id = p.pm_user_id
+        left join mst_cust c on c.cust_id = p.cust_id
+        left join pms_template t on t.tmpl_id = p.tmpl_id
+    </sql>
+
+    <!-- 목록·grid·건수 공통 조건 (f = ProjectFilter) -->
+    <sql id="projWhere">
+        <where>
+            <if test="f.keywordLike != null">
+                and (p.proj_no ilike #{f.keywordLike} escape '\' or p.proj_nm ilike #{f.keywordLike} escape '\'
+                     or c.cust_nm ilike #{f.keywordLike} escape '\'
+                     or exists (select 1 from pms_project_item pi join mst_item i on i.item_id = pi.item_id
+                                 where pi.proj_id = p.proj_id and i.item_cd ilike #{f.keywordLike} escape '\'))
+            </if>
+            <if test="f.projType != null">and p.proj_type = #{f.projType}</if>
+            <if test="f.statuses != null and f.statuses.size() > 0">
+                and p.status in <foreach collection="f.statuses" item="s" open="(" separator="," close=")">#{s}</foreach>
+            </if>
+            <if test="f.pmUserId != null">and p.pm_user_id = #{f.pmUserId}</if>
+        </where>
+    </sql>
+
+    <select id="findProjects" resultType="io.smarthappy.module.pms.PmsDtos$ProjectRow">
+        select <include refid="projCols"/>
+        <include refid="projFrom"/>
+        <include refid="projWhere"/>
+         order by p.proj_no desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ②) — 정렬은 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK. 지연 작업은 projCols 의 같은 별칭 -->
+    <select id="findProjectPage" resultType="io.smarthappy.module.pms.PmsDtos$ProjectRow">
+        select * from (
+            select <include refid="projCols"/>
+            <include refid="projFrom"/>
+            <include refid="projWhere"/>
+        ) x
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PROJ_NM'">x.proj_nm</when>
+                <when test="s.key == 'PROJ_TYPE'">x.proj_type</when>
+                <when test="s.key == 'CUST_NM'">x.cust_nm</when>
+                <when test="s.key == 'PM_NM'">x.pm_user_nm</when>
+                <when test="s.key == 'SOP_DATE'">x.sop_date</when>
+                <when test="s.key == 'PLAN_START'">x.plan_start</when>
+                <when test="s.key == 'PLAN_END'">x.plan_end</when>
+                <when test="s.key == 'PROGRESS'">x.progress_pct</when>
+                <when test="s.key == 'LATE_CNT'">x.late_cnt</when>
+                <when test="s.key == 'STATUS'">x.status</when>
+                <otherwise>x.proj_no</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         x.proj_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countProjects" resultType="long">
+        select count(*) <include refid="projFrom"/> <include refid="projWhere"/>
+    </select>
+
+    <select id="findProject" resultType="io.smarthappy.module.pms.PmsDtos$ProjectRow">
+        select <include refid="projCols"/>
+        <include refid="projFrom"/>
+         where p.proj_id = #{id}
+    </select>
+
+    <select id="lockProject" resultType="string" flushCache="true">
+        select status from pms_project where proj_id = #{id} for update
+    </select>
+
+    <select id="insertProject" resultType="long" flushCache="true">
+        insert into pms_project (comp_cd, proj_no, proj_nm, proj_type, cust_id, plant_cd, pm_user_id, tmpl_id, sop_date, remark,
+                                 created_by, updated_by)
+        values (hb_current_comp(), #{projNo}, #{f.projNm}, #{f.projType}, #{f.custId}, #{f.plantCd}, #{f.pmUserId}, #{tmplId},
+                #{f.sopDate}, #{f.remark}, #{by}, #{by})
+        returning proj_id
+    </select>
+
+    <update id="updateProject">
+        update pms_project
+           set proj_nm = #{f.projNm}, proj_type = #{f.projType}, cust_id = #{f.custId}, plant_cd = #{f.plantCd},
+               pm_user_id = #{f.pmUserId}, sop_date = #{f.sopDate}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where proj_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="updateProjectEco">
+        update pms_project set eco_id = #{ecoId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where proj_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="updateProjectStatus">
+        update pms_project
+           set status = #{status}, status_reason = #{reason}, closed_on = #{closedOn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where proj_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <!-- 착수·종료 결재(docs/32 4.16) — 시작: 목표 상태(row_ver 확인), 결재 번호, 끝: 비움 + 승인이면 상태(트리거가 짝을 본다) -->
+    <update id="startProjectApproval">
+        update pms_project set apr_to = #{aprTo}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where proj_id = #{id} and row_ver = #{rowVer} and apr_to is null
+    </update>
+
+    <update id="setProjectAprId">
+        update pms_project set apr_id = #{aprId} where proj_id = #{id} and apr_to is not null and apr_id is null
+    </update>
+
+    <update id="finishProjectApproval">
+        update pms_project set apr_to = null, apr_id = null, status = #{status}, closed_on = #{closedOn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where proj_id = #{id} and apr_to is not null
+    </update>
+
+    <select id="findProjectNo" resultType="string">
+        select proj_no from pms_project where proj_id = #{id}
+    </select>
+
+    <!-- 작업에서 파생한 값 — row_ver 는 올리지 않는다(머리 폼 편집과 충돌하지 않게) -->
+    <update id="updateProjectRollup">
+        update pms_project set plan_start = #{planStart}, plan_end = #{planEnd}, progress_pct = #{progressPct}
+         where proj_id = #{id}
+           and (plan_start is distinct from #{planStart} or plan_end is distinct from #{planEnd} or progress_pct &lt;&gt; #{progressPct})
+    </update>
+
+    <select id="findProjectItems" resultType="io.smarthappy.module.pms.PmsDtos$ItemRef">
+        select i.item_id, i.item_cd, i.item_nm from pms_project_item pi join mst_item i on i.item_id = pi.item_id
+         where pi.proj_id = #{projId} order by i.item_cd
+    </select>
+
+    <insert id="insertProjectItem">
+        insert into pms_project_item (comp_cd, proj_id, item_id, created_by) values (hb_current_comp(), #{projId}, #{itemId}, #{by})
+        on conflict do nothing
+    </insert>
+
+    <delete id="deleteProjectItem">
+        delete from pms_project_item where proj_id = #{projId} and item_id = #{itemId}
+    </delete>
+
+    <!-- ================================================================ 작업 -->
+
+    <sql id="taskCols">
+        k.task_id, k.parent_id, k.seq, k.task_type, k.task_nm, k.owner_user_id, u.login_id as owner_login_id, u.user_nm as owner_nm,
+        k.plan_start, k.plan_end, k.act_start, k.act_end, k.progress_pct, k.status, k.is_summary, k.remark, k.plan_hours, k.row_ver
+    </sql>
+
+    <select id="findTasks" resultType="io.smarthappy.module.pms.PmsDtos$TaskRow">
+        select <include refid="taskCols"/>, k.proj_id from pms_task k left join sys_user u on u.user_id = k.owner_user_id
+         where k.proj_id = #{projId}
+    </select>
+
+    <select id="findTask" resultType="io.smarthappy.module.pms.PmsDtos$TaskRow">
+        select <include refid="taskCols"/>, k.proj_id from pms_task k left join sys_user u on u.user_id = k.owner_user_id
+         where k.task_id = #{id}
+    </select>
+
+    <select id="insertTask" resultType="long" flushCache="true">
+        insert into pms_task (comp_cd, proj_id, parent_id, seq, task_type, task_nm, owner_user_id, plan_start, plan_end,
+                              act_start, act_end, progress_pct, status, remark, plan_hours, created_by, updated_by)
+        values (hb_current_comp(), #{projId}, #{parentId}, #{seq}, #{f.taskType}, #{f.taskNm}, #{f.ownerUserId}, #{f.planStart},
+                #{f.planEnd}, #{f.actStart}, #{f.actEnd}, #{f.progressPct}, #{f.status}, #{f.remark}, #{f.planHours}, #{by}, #{by})
+        returning task_id
+    </select>
+
+    <update id="updateTask">
+        update pms_task
+           set task_type = #{f.taskType}, task_nm = #{f.taskNm}, owner_user_id = #{f.ownerUserId},
+               plan_start = #{f.planStart}, plan_end = #{f.planEnd}, act_start = #{f.actStart}, act_end = #{f.actEnd},
+               progress_pct = #{f.progressPct}, status = #{f.status}, remark = #{f.remark}, plan_hours = #{f.planHours},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where task_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="moveTask">
+        update pms_task
+           set parent_id = #{parentId}, seq = #{seq}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where task_id = #{id}
+    </update>
+
+    <!-- 요약 파생 값: 행 버전도 올린다(화면이 들고 있던 요약 행 버전은 낡음 — 요약은 어차피 직접 못 고친다) -->
+    <update id="updateTaskRollup">
+        update pms_task
+           set is_summary = #{t.isSummary}, plan_start = #{t.planStart}, plan_end = #{t.planEnd}, act_start = #{t.actStart},
+               act_end = #{t.actEnd}, progress_pct = #{t.progressPct}, status = #{t.status}, plan_hours = #{t.planHours},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where task_id = #{t.taskId}
+    </update>
+
+    <!-- 작업별 실적 공수(docs/48 R-2) — 확정·미확정 따로, task_id null = 작업 없이 프로젝트에 올린 공수. 색인 ix_pms_work_log_proj -->
+    <select id="findTaskHours" resultType="io.smarthappy.module.pms.PmsDtos$TaskHours">
+        select w.task_id,
+               trim_scale(coalesce(sum(w.hours) filter (where w.status = 'CONFIRMED'), 0)) as conf_hours,
+               trim_scale(coalesce(sum(w.hours) filter (where w.status = 'DRAFT'), 0)) as draft_hours
+          from pms_work_log w
+         where w.proj_id = #{projId}
+         group by w.task_id
+    </select>
+
+    <delete id="deleteTask">
+        delete from pms_task where task_id = #{id}
+    </delete>
+
+    <!-- ================================================================ PM2 의존·기준선·계획 변경 -->
+
+    <select id="findDeps" resultType="io.smarthappy.module.pms.PmsDtos$DepRow">
+        select dep_id, pred_task_id, succ_task_id, lag_days, dep_type from pms_task_dep where proj_id = #{projId} order by dep_id
+    </select>
+
+    <select id="findDep" resultType="io.smarthappy.module.pms.PmsDtos$DepRow">
+        select dep_id, pred_task_id, succ_task_id, lag_days, dep_type from pms_task_dep where dep_id = #{id}
+    </select>
+
+    <select id="findDepProjId" resultType="long">
+        select proj_id from pms_task_dep where dep_id = #{id}
+    </select>
+
+    <select id="insertDep" resultType="long" flushCache="true">
+        insert into pms_task_dep (comp_cd, proj_id, pred_task_id, succ_task_id, lag_days, dep_type, created_by)
+        values (hb_current_comp(), #{projId}, #{pred}, #{succ}, #{lag}, #{type}, #{by})
+        returning dep_id
+    </select>
+
+    <delete id="deleteDep">
+        delete from pms_task_dep where dep_id = #{id}
+    </delete>
+
+    <delete id="deleteDepsOfTask">
+        delete from pms_task_dep where pred_task_id = #{taskId} or succ_task_id = #{taskId}
+    </delete>
+
+    <select id="countDepsOfTask" resultType="int">
+        select count(*) from pms_task_dep where pred_task_id = #{taskId} or succ_task_id = #{taskId}
+    </select>
+
+    <sql id="blCols">baseline_id, baseline_no, reason, task_cnt, plan_end, created_at, created_by</sql>
+
+    <select id="findLatestBaseline" resultType="io.smarthappy.module.pms.PmsDtos$BaselineRow">
+        select <include refid="blCols"/> from pms_baseline where proj_id = #{projId} order by baseline_no desc limit 1
+    </select>
+
+    <select id="findBaselines" resultType="io.smarthappy.module.pms.PmsDtos$BaselineRow">
+        select <include refid="blCols"/> from pms_baseline where proj_id = #{projId} order by baseline_no desc
+    </select>
+
+    <select id="insertBaseline" resultType="long" flushCache="true">
+        insert into pms_baseline (comp_cd, proj_id, baseline_no, reason, task_cnt, plan_end, created_by)
+        values (hb_current_comp(), #{projId}, #{no}, #{reason}, #{taskCnt}, #{planEnd}, #{by})
+        returning baseline_id
+    </select>
+
+    <insert id="insertBaselineTasks">
+        insert into pms_baseline_task (comp_cd, baseline_id, task_id, wbs_no, task_nm, is_summary, plan_start, plan_end) values
+        <foreach collection="rows" item="t" separator=",">
+            (hb_current_comp(), #{baselineId}, #{t.taskId}, #{t.wbsNo}, #{t.taskNm}, #{t.isSummary}, #{t.planStart}, #{t.planEnd})
+        </foreach>
+    </insert>
+
+    <select id="findBaselineTasks" resultType="io.smarthappy.module.pms.PmsDtos$BaseTask">
+        select task_id, wbs_no, task_nm, is_summary, plan_start, plan_end from pms_baseline_task where baseline_id = #{baselineId}
+    </select>
+
+    <insert id="insertPlanChange">
+        insert into pms_task_plan_change (comp_cd, proj_id, task_id, baseline_no, before_start, before_end, after_start, after_end,
+                                          source, reason, created_by)
+        values (hb_current_comp(), #{projId}, #{taskId}, #{baselineNo}, #{before.planStart}, #{before.planEnd}, #{afterStart},
+                #{afterEnd}, #{source}, #{reason}, #{by})
+    </insert>
+
+    <select id="findPlanChanges" resultType="io.smarthappy.module.pms.PmsDtos$PlanChangeRow">
+        select pc_id, baseline_no, before_start, before_end, after_start, after_end, source, reason, created_at, created_by
+          from pms_task_plan_change where task_id = #{taskId} order by pc_id desc
+    </select>
+
+    <update id="updateTaskPlan">
+        update pms_task set plan_start = #{planStart}, plan_end = #{planEnd}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where task_id = #{id}
+    </update>
+</mapper>

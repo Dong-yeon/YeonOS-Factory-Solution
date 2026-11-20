@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 수주 행 읽기 계약 (docs/25 4.23). 회사 조건은 RLS, 잠금 없음. 열린 행은 ix_sal_order_line_due(status = 'OPEN' 부분 인덱스) -->
+<mapper namespace="io.smarthappy.module.sales.OrderLineQueryMapper">
+
+    <sql id="cols">
+        l.line_id, l.order_id, o.order_no, l.line_no, o.cust_id, o.cust_po_no, l.item_id, i.item_cd, i.item_nm, i.unit_cd,
+        l.due_date, l.qty, l.shipped_qty, l.status, l.done_by_ship_yn
+    </sql>
+
+    <select id="openLines" resultType="io.smarthappy.module.sales.link.OrderLineQuery$OrderLineView">
+        select <include refid="cols"/>
+          from sal_order_line l
+          join sal_order o on o.order_id = l.order_id
+          join mst_item i on i.item_id = l.item_id
+         where o.cust_id = #{custId} and l.status = 'OPEN'
+         order by l.due_date, o.order_no, l.line_no
+    </select>
+
+    <select id="lines" resultType="io.smarthappy.module.sales.link.OrderLineQuery$OrderLineView">
+        select <include refid="cols"/>
+          from sal_order_line l
+          join sal_order o on o.order_id = l.order_id
+          join mst_item i on i.item_id = l.item_id
+         where l.line_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by l.line_id
+    </select>
+
+    <!-- APS MPS 수요(docs/38 16.3): 품목들의 열린 행, 납기 상한 -->
+    <select id="openLinesByItems" resultType="io.smarthappy.module.sales.link.OrderLineQuery$OrderLineView">
+        select <include refid="cols"/>
+          from sal_order_line l
+          join sal_order o on o.order_id = l.order_id
+          join mst_item i on i.item_id = l.item_id
+         where l.status = 'OPEN' and l.due_date &lt;= #{dueTo}
+           and l.item_id in <foreach collection="itemIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by l.item_id, l.due_date, l.line_id
+    </select>
+
+    <!-- 거래처마다 최신 내시 버전의 줄 중 기간 [bucket_start, 다음 기간) 이 [from, to] 와 겹치는 것 -->
+    <select id="latestForecast" resultType="io.smarthappy.module.sales.link.ForecastQuery$ForecastLineView">
+        select r.cust_id, r.rev_no, f.item_id, f.bucket_type, f.bucket_start, f.qty, f.firm_yn
+          from sal_forecast_rev r
+          join sal_forecast_line f on f.rev_id = r.rev_id
+         where r.rev_no = (select max(x.rev_no) from sal_forecast_rev x where x.cust_id = r.cust_id)
+           and f.item_id in <foreach collection="itemIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+           and f.bucket_start &lt;= #{to}
+           and (case f.bucket_type when 'DAY' then f.bucket_start + 1
+                                   when 'WEEK' then f.bucket_start + 7
+                                   else (f.bucket_start + interval '1 month')::date end) &gt; #{from}
+         order by f.item_id, r.cust_id, f.bucket_start, f.bucket_type
+    </select>
+</mapper>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  홈 카드 집계 (docs/37 23장). 회사 조건은 RLS. 열린 ASN = 보냄·입고 중 + 덜 받은 행 > 0 — AsnMapper "늦은 ASN 만" 거름과 같은 조건.
+  ix_srm_asn_open(열린 ASN 만 담은 부분 색인, V189) — 다 받은·마감 ASN 이 쌓여도 읽는 행이 늘지 않는다.
+-->
+<mapper namespace="io.smarthappy.module.srm.asn.AsnHomeMapper">
+
+    <select id="asnLateSummary" resultType="io.smarthappy.module.srm.asn.AsnHomeMapper$AsnLateSummary">
+        select count(*) filter (where a.eta_date &gt;= #{from} and a.eta_date &lt; #{today}) as late_cnt,
+               count(*) filter (where a.eta_date &lt; #{from}) as older_cnt,
+               count(*) filter (where a.eta_date = #{today}) as today_cnt
+          from srm_asn a
+         where a.status in ('SENT', 'PARTIAL_RECEIVED')
+           and a.open_line_cnt &gt; 0
+           and a.eta_date &lt;= #{today}
+    </select>
+
+    <select id="asnLateTop" resultType="io.smarthappy.module.srm.asn.AsnHomeMapper$AsnLateRow">
+        select a.asn_no, c.cust_nm, a.plant_cd, a.eta_date, a.open_line_cnt
+          from srm_asn a join mst_cust c on c.cust_id = a.cust_id
+         where a.status in ('SENT', 'PARTIAL_RECEIVED')
+           and a.open_line_cnt &gt; 0
+           and a.eta_date &lt; #{today}
+         order by a.eta_date, a.asn_no
+         limit #{limit}
+    </select>
+</mapper>

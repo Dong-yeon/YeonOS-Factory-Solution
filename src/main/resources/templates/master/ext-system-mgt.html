@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  외부 시스템·코드 매핑 (mst-ext-system) — P1 7a (docs/22, docs/07 4.2·D5). 몇 개뿐이라 페이지 없는 표 + 상세 폼 + 코드 매핑 표.
+  직접 치는 값 = 시스템 코드·이름·유형·연결 거래처, 코드 매핑(외부 표기 → 내부 코드). 업무 테이블에 외부 코드 컬럼은 두지 않는다.
+  예외 = 시스템 코드 변경(고정), 고객·협력사가 아닌 시스템에 거래처 연결, 쓸 수 없는 내부 코드, 같은 외부 표기(대소문자 무시) 두 번.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">외부 시스템·코드 매핑</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="systemGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{extSys.selectOrNew}">왼쪽에서 시스템을 고르거나 신규를 누르세요.</p>
+        <form id="systemForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{extSys.col.systemCd}">시스템 코드</span>
+                <input data-field="systemCd" maxlength="20" required data-help-key="mst-ext-system.systemCd"></label>
+            <label class="hb-wide-2"><span th:text="#{extSys.col.systemNm}">시스템명</span>
+                <input data-field="systemNm" maxlength="100" required></label>
+            <label><span th:text="#{extSys.col.systemType}">유형</span>
+                <select data-field="systemType" data-hb="select" data-code="EXT_SYSTEM_TYPE" data-blank="select" required></select></label>
+            <label><span th:text="#{extSys.col.connMode}">연결 방식</span>
+                <select data-field="connMode" data-help-key="mst-ext-system.connMode">
+                    <option value="DIRECT" th:text="#{code.EQUIP_CONN_MODE.DIRECT}">직접</option>
+                    <option value="EDGE" th:text="#{code.EQUIP_CONN_MODE.EDGE}">엣지</option>
+                    <option value="AGENT" th:text="#{code.EQUIP_CONN_MODE.AGENT}">에이전트</option>
+                </select></label>
+            <label><span th:text="#{extSys.col.custCd}">거래처 코드</span>
+                <input data-field="custCd" maxlength="30" data-help-key="mst-ext-system.custCd"></label>
+            <label><span th:text="#{extSys.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{extSys.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+
+        <section class="hb-sub" id="codeSection" hidden>
+            <h2 th:text="#{extSys.codeMaps}">코드 매핑</h2>
+            <p class="hb-muted" th:text="#{extSys.codeHint}">이 시스템의 표기(예: 개, BOX01)를 우리 코드(EA, 창고 코드)로 바꿉니다.</p>
+            <table class="hb-cmp-table" id="codeMaps">
+                <thead><tr>
+                    <th th:text="#{extSys.col.codeType}">유형</th>
+                    <th th:text="#{extSys.col.extCode}">외부 표기</th>
+                    <th th:text="#{extSys.col.intCode}">내부 코드</th>
+                    <th th:text="#{extSys.col.useYn}">사용</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <form id="codeForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{extSys.col.codeType}">유형</span>
+                    <select data-field="codeType" data-hb="select" data-code="IF_CODE_TYPE"></select></label>
+                <label><span th:text="#{extSys.col.extCode}">외부 표기</span>
+                    <input data-field="extCode" maxlength="50"></label>
+                <label><span th:text="#{extSys.col.intCode}">내부 코드</span>
+                    <input data-field="intCode" maxlength="30" data-help-key="mst-ext-system.intCode"></label>
+                <div class="hb-toolbar"><button type="submit" id="addCodeBtn" class="hb-btn-secondary" th:text="#{extSys.addCode}">매핑 추가</button></div>
+            </form>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/master/ext-system-mgt.js}"></script>
+</body>
+</html>

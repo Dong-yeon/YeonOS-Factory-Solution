@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 발주 공급 조회 계약 구현 (SRM → APS, docs/31 4.8) — 회사 범위는 RLS -->
+<mapper namespace="io.smarthappy.module.srm.link.PoSupplyMapper">
+
+    <select id="openLines" resultType="io.smarthappy.module.srm.link.PoSupplyMapper$OpenLine">
+        select p.po_id, p.po_no, p.cust_id, l.po_line_id, l.line_no, l.item_id, l.due_date, l.qty - l.cancel_qty - l.recv_qty as open_qty, l.recv_qty,
+               l.unit_cd as line_unit, i.unit_cd as base_unit,
+               case when l.unit_cd = i.unit_cd then 1 else uc.factor end as factor,
+               case when va.ack_status in ('ACCEPTED', 'PARTIAL') then va.ack_id end as ack_id
+          from srm_po p
+          join srm_po_line l on l.po_id = p.po_id and l.line_status = 'OPEN' and l.qty - l.cancel_qty - l.recv_qty &gt; 0
+          join mst_item i on i.item_id = l.item_id
+          left join mst_unit_conv uc on uc.item_id = l.item_id and uc.from_unit = l.unit_cd and uc.to_unit = i.unit_cd and uc.use_yn = 'Y'
+          left join lateral (select a.ack_id, a.ack_status from srm_po_ack a
+                              where a.po_id = p.po_id and a.rev = p.rev order by a.ack_seq desc limit 1) va on true
+         where p.plant_cd = #{plantCd}
+           and p.status in ('ISSUED', 'ACKED', 'PARTIAL_RECEIVED')
+           and l.item_id in <foreach collection="itemIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by p.po_no, l.line_no
+    </select>
+
+    <select id="asnSupplies" resultType="io.smarthappy.module.srm.link.PoSupplyMapper$AsnSupply">
+        select y.po_line_id, y.eta_date, y.remain_qty from (
+            select al.po_line_id, a.eta_date, a.asn_id, al.line_no,
+                   al.qty - coalesce((select sum(x.qty) from srm_po_receipt x where x.asn_line_id = al.asn_line_id), 0) as remain_qty
+              from srm_asn_line al join srm_asn a on a.asn_id = al.asn_id
+             where a.status in ('SENT', 'PARTIAL_RECEIVED')
+               and al.po_line_id in <foreach collection="poLineIds" item="id" open="(" separator="," close=")">#{id}</foreach>) y
+         where y.remain_qty &gt; 0
+         order by y.po_line_id, y.eta_date, y.asn_id, y.line_no
+    </select>
+
+    <select id="promises" resultType="io.smarthappy.module.srm.link.PoSupplyMapper$Promise">
+        select ack_id, po_line_id, promised_date, promised_qty from srm_po_ack_line
+         where ack_id in <foreach collection="ackIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by po_line_id, promised_date
+    </select>
+</mapper>

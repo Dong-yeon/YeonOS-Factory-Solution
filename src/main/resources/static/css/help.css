@@ -1,0 +1,26 @@
+/*
+ * 화면 도움말 대화상자 (hb.help.js, docs/46) — 왜·언제·주요 동작·앞뒤 화면·칸 목록.
+ * page.css 는 병행 세션이 함께 고치는 파일이라 따로 둔다(fragments/page head 가 싣는다). 값은 tokens.css 의미 토큰만.
+ */
+.hb-dialog.hb-help-dialog { width: min(640px, 96vw); }
+.hb-help-dialog .hb-dialog-body > * + * { margin-top: var(--hb-space-5); }
+.hb-help-what p { margin: 0; font-size: var(--hb-fs-md); line-height: 1.6; }
+.hb-help-what p + p, .hb-help-sec p + p { margin-top: var(--hb-space-2); }
+.hb-help-sec h3 { margin: 0 0 var(--hb-space-2); font-size: var(--hb-fs-sm); font-weight: var(--hb-fw-semibold); color: var(--hb-text-muted); }
+.hb-help-sec p { margin: 0; line-height: 1.6; }
+.hb-help-now { padding: var(--hb-space-4); border: 1px solid var(--hb-status-info-line); border-radius: var(--hb-radius-md);
+    background: var(--hb-status-info-bg); }
+.hb-help-list { margin: 0; padding-left: var(--hb-space-6); line-height: 1.6; }
+.hb-help-list li + li { margin-top: var(--hb-space-1); }
+.hb-help-flow { display: grid; grid-template-columns: max-content 1fr; gap: var(--hb-space-3) var(--hb-space-4); align-items: center; }
+.hb-help-flow-label { font-size: var(--hb-fs-sm); color: var(--hb-text-muted); }
+.hb-help-links { display: flex; flex-wrap: wrap; gap: var(--hb-space-2); align-items: center; }
+.hb-help-link-off { font-size: var(--hb-fs-sm); color: var(--hb-text-subtle); padding: var(--hb-space-1) var(--hb-space-3);
+    border: 1px dashed var(--hb-border); border-radius: var(--hb-radius-sm); }
+.hb-help-fields summary { cursor: pointer; font-size: var(--hb-fs-sm); color: var(--hb-text-muted); }
+.hb-help-fields dl { margin: var(--hb-space-3) 0 0; }
+.hb-help-fields dt { font-weight: var(--hb-fw-semibold); margin-top: var(--hb-space-3); }
+.hb-help-fields dd { margin: var(--hb-space-1) 0 0; color: var(--hb-text-muted); line-height: 1.5; }
+.hb-help-note { padding: var(--hb-space-4); border-left: 3px solid var(--hb-status-warning-line); border-radius: var(--hb-radius-sm);
+    background: var(--hb-status-warning-bg); }
+.hb-help-note h3 { color: var(--hb-status-warning-fg); }

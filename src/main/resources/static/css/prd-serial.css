@@ -1,0 +1,7 @@
+/*
+ * 시리얼 구성 화면 전용 (prd-serial, docs/77). 공통 page.css 는 병행 중 건드리지 않는다(docs/29 2.4) — 색·크기는 의미 토큰만(DesignTokenGuardTest).
+ * 장착 중 부품 표: 상세 패널이 좁아도 수량·[탈거][교체] 가 줄바꿈되지 않게(2026-11-16 브라우저 확인 — 1366 폭에서 버튼이 세로로 쌓였다).
+ */
+.prd-serial-act { white-space: nowrap; }
+.prd-serial-act button + button { margin-left: var(--hb-space-2); }
+.hb-cmp-table td.prd-serial-nowrap { white-space: nowrap; }

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 설비·생산 대시보드 (docs/51 C2·C4). 원장은 읽기만. 각 질의의 조건은 드릴다운 대상 목록 화면과 같게 둔다 —
+     losses = 비가동 사유 검토(CmsStateMapper reviewWhere: 겹침·실효 분류·실효 사유·설비 글자),
+     wos = 작업지시(WoMapper woWhere: 공장·계획 시작일 범위). 시간은 KPI 원값(CmsKpiMapper.raw)과 같은 자르기·실효 분류 -->
+<mapper namespace="io.smarthappy.module.cms.CmsDashMapper">
+
+    <select id="losses" resultType="io.smarthappy.module.cms.CmsDashMapper$LossRow">
+        with iv as (
+            select coalesce(nr.state_cat, s.state_cat) as cat,
+                   coalesce(nr.reason_cd, lr.reason_cd) as reason_cd,
+                   coalesce(nr.reason_nm, lr.reason_nm) as reason_nm,
+                   floor(extract(epoch from least(coalesce(s.end_at, #{until}::timestamptz), #{until}::timestamptz)
+                                            - greatest(s.start_at, #{from}::timestamptz)))::bigint as sec
+              from cms_equip_state_log s
+              join mst_equip e on e.equip_id = s.equip_id
+              left join cms_state_reason lr on lr.reason_id = s.reason_id
+              left join cms_state_note n on n.state_log_id = s.state_log_id and n.void_yn = 'N'
+              left join cms_state_reason nr on nr.reason_id = n.reason_id
+             where e.plant_cd = #{plantCd} and s.start_at &lt; #{until} and (s.end_at is null or s.end_at &gt; #{from})
+               <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\')</if>
+        )
+        select cat, reason_cd, max(reason_nm) as reason_nm, sum(sec) as sec, count(*) as intervals
+          from iv
+         where cat not in ('PRD', 'UNKNOWN') and sec &gt; 0
+         group by cat, reason_cd
+         order by sum(sec) desc, cat, reason_cd nulls last
+    </select>
+
+    <select id="wos" resultType="io.smarthappy.module.cms.CmsDashMapper$WoRow">
+        select w.wo_id, w.wo_no, i.item_cd, i.item_nm, trim_scale(w.plan_qty)::text as plan_qty, w.plan_qty as plan_num,
+               trim_scale(coalesce(g.good, 0))::text as good_qty, coalesce(g.good, 0) as good_num,
+               w.unit_cd, w.plan_start, w.status
+          from prd_wo w
+          join mst_item i on i.item_id = w.item_id
+          left join lateral (
+                select sum(r.good_qty) as good
+                  from prd_result r
+                 where r.wo_proc_id = (select wp.wo_proc_id from prd_wo_proc wp where wp.wo_id = w.wo_id order by wp.op_seq desc limit 1)
+                   and r.reversal_of_id is null
+                   and not exists (select 1 from prd_result v where v.reversal_of_id = r.result_id)
+          ) g on true
+         where w.plant_cd = #{plantCd} and w.plan_start &gt;= #{from} and w.plan_start &lt;= #{to}
+           and w.status not in ('PLANNED', 'CANCELLED')
+         order by w.plan_start, w.wo_no, w.wo_id
+         limit #{limit}
+    </select>
+</mapper>

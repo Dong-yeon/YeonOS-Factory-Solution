@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  홈 카드 집계 (docs/39 20.6). 회사 조건은 RLS. 적용 대기 숫자는 ECO 목록(PlmMapper.findEcos status=APPROVED)과 같은 조건 —
+  두 식이 갈라지면 PlmHomeCardTest 의 "카드 숫자 = 목록 건수" 가 깨진다.
+-->
+<mapper namespace="io.smarthappy.module.plm.PlmHomeMapper">
+
+    <select id="approvedSummary" resultType="io.smarthappy.module.plm.PlmHomeMapper$ApprovedSummary">
+        select count(*) as approved_cnt,
+               count(*) filter (where e.effective_date &lt; cast(#{today} as date)) as past_cnt,
+               count(*) filter (where e.cust_approval_req_yn = 'Y' and e.cust_approval_status &lt;&gt; 'APPROVED') as cust_wait_cnt,
+               count(*) filter (where e.apply_cond = 'STOCK_OUT') as stock_out_cnt
+          from plm_eco e
+         where e.status = 'APPROVED'
+    </select>
+
+    <select id="approvedTop" resultType="io.smarthappy.module.plm.PlmHomeMapper$ApprovedRow">
+        select e.eco_no, e.title, e.effective_date
+          from plm_eco e
+         where e.status = 'APPROVED'
+         order by e.effective_date, e.eco_id
+         limit #{limit}
+    </select>
+
+    <select id="custWaitSummary" resultType="io.smarthappy.module.plm.PlmHomeMapper$CustWaitSummary">
+        select (select count(*) from plm_ppap p join plm_eco e on e.eco_id = p.eco_id
+                 where p.status = 'SUBMITTED' and e.status &lt;&gt; 'CANCELLED') as ppap_cnt,
+               (select count(*) from plm_pcn n join plm_eco e on e.eco_id = n.eco_id
+                 where n.status = 'SENT' and n.response_due &lt; cast(#{today} as date) and e.status &lt;&gt; 'CANCELLED') as pcn_overdue_cnt
+    </select>
+
+    <!-- PCN 기한 지남(기한 순) 먼저, 그다음 PPAP 판정 대기(제출일 순) -->
+    <select id="custWaitTop" resultType="io.smarthappy.module.plm.PlmHomeMapper$CustWaitRow">
+        select x.kind, x.no, x.eco_no, x.cust_cd, x.day
+          from (
+                select 'PCN' as kind, 1 as ord, n.pcn_no as no, e.eco_no, c.cust_cd, n.response_due as day, n.pcn_id as id
+                  from plm_pcn n join plm_eco e on e.eco_id = n.eco_id join mst_cust c on c.cust_id = n.cust_id
+                 where n.status = 'SENT' and n.response_due &lt; cast(#{today} as date) and e.status &lt;&gt; 'CANCELLED'
+                union all
+                select 'PPAP', 2, e.eco_no, e.eco_no, c.cust_cd, p.submitted_on, p.ppap_id
+                  from plm_ppap p join plm_eco e on e.eco_id = p.eco_id join mst_cust c on c.cust_id = p.cust_id
+                 where p.status = 'SUBMITTED' and e.status &lt;&gt; 'CANCELLED'
+               ) x
+         order by x.ord, x.day, x.id
+         limit #{limit}
+    </select>
+
+    <!-- 알림 (docs/39 26장) — 위 카드와 같은 조건(유효일 지남·PCN 기한 지남), 받는 사람 = 지시 담당 -->
+    <select id="overdueEcos" resultType="io.smarthappy.module.plm.PlmHomeMapper$OverdueEco">
+        select e.eco_id, e.eco_no, e.title, e.effective_date, e.owner_id
+          from plm_eco e
+         where e.status = 'APPROVED' and e.effective_date &lt; cast(#{today} as date)
+         order by e.effective_date, e.eco_id
+         limit #{limit}
+    </select>
+
+    <select id="overduePcns" resultType="io.smarthappy.module.plm.PlmHomeMapper$OverduePcn">
+        select n.pcn_id, n.pcn_no, e.eco_no, c.cust_cd, n.response_due, e.owner_id
+          from plm_pcn n join plm_eco e on e.eco_id = n.eco_id join mst_cust c on c.cust_id = n.cust_id
+         where n.status = 'SENT' and n.response_due &lt; cast(#{today} as date) and e.status &lt;&gt; 'CANCELLED'
+         order by n.response_due, n.pcn_id
+         limit #{limit}
+    </select>
+
+    <!-- 기한 임박(docs/39 35장) — 지남(위)과 같은 열린 통지 조건, 기한만 오늘 ~ until -->
+    <select id="dueSoonPcns" resultType="io.smarthappy.module.plm.PlmHomeMapper$OverduePcn">
+        select n.pcn_id, n.pcn_no, e.eco_no, c.cust_cd, n.response_due, e.owner_id
+          from plm_pcn n join plm_eco e on e.eco_id = n.eco_id join mst_cust c on c.cust_id = n.cust_id
+         where n.status = 'SENT' and n.response_due &gt;= cast(#{today} as date) and n.response_due &lt;= cast(#{until} as date)
+           and e.status &lt;&gt; 'CANCELLED'
+         order by n.response_due, n.pcn_id
+         limit #{limit}
+    </select>
+</mapper>

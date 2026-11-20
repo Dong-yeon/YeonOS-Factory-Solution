@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 2부 C8 — 알람 정의·알람 원장 (docs/33 11.6). 수집은 AlarmSink 계약 경유(MES EquipEventService) -->
+<mapper namespace="io.smarthappy.module.cms.CmsAlarmMapper">
+
+    <!-- ================================================================ 정의 -->
+
+    <sql id="defCols">
+        d.def_id, d.alarm_cd, d.equip_class_id, c.class_cd, c.class_nm, d.alarm_nm, d.severity, d.symptom_id,
+        f.fail_cd as symptom_cd, f.fail_nm as symptom_nm, d.auto_bm_yn, d.use_yn, d.remark, d.row_ver, d.updated_at, d.updated_by
+    </sql>
+
+    <sql id="defFrom">
+          from cms_alarm_def d
+          left join mst_equip_class c on c.class_id = d.equip_class_id
+          left join cms_fail_code f on f.fail_id = d.symptom_id
+    </sql>
+
+    <!-- 목록·grid 공통 조건 -->
+    <sql id="defWhere">
+         <where>
+            <if test="keyword != null">and (d.alarm_cd like #{keyword} escape '\' or d.alarm_nm ilike #{keyword} escape '\')</if>
+            <if test="classId != null">and d.equip_class_id = #{classId}</if>
+            <if test="useYn != null">and d.use_yn = #{useYn}</if>
+         </where>
+    </sql>
+
+    <select id="findDefs" resultType="io.smarthappy.module.cms.CmsAlarmDtos$DefRow">
+        select <include refid="defCols"/>
+        <include refid="defFrom"/>
+        <include refid="defWhere"/>
+         order by d.alarm_cd, c.class_cd nulls first
+         limit 1001
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK. 클래스 공통(클래스 없음)은 같은 코드에서 먼저 -->
+    <select id="findDefPage" resultType="io.smarthappy.module.cms.CmsAlarmDtos$DefRow">
+        select <include refid="defCols"/>
+        <include refid="defFrom"/>
+        <include refid="defWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CLASS_CD'">c.class_cd<if test="s.desc"> desc</if> nulls first</when>
+                <when test="s.key == 'ALARM_NM'">d.alarm_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'SEVERITY'">d.severity<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'AUTO_BM'">d.auto_bm_yn<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'USE_YN'">d.use_yn<if test="s.desc"> desc</if></when>
+                <otherwise>d.alarm_cd<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         c.class_cd nulls first, d.def_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countDefs" resultType="long">
+        select count(*) <include refid="defFrom"/> <include refid="defWhere"/>
+    </select>
+
+    <select id="findDef" resultType="io.smarthappy.module.cms.CmsAlarmDtos$DefRow">
+        select <include refid="defCols"/>
+        <include refid="defFrom"/>
+         where d.def_id = #{defId}
+    </select>
+
+    <select id="lockDef" resultType="java.lang.Long">
+        select def_id from cms_alarm_def where def_id = #{defId} for update
+    </select>
+
+    <select id="insertDef" resultType="long" flushCache="true">
+        insert into cms_alarm_def (comp_cd, alarm_cd, equip_class_id, alarm_nm, severity, symptom_id, auto_bm_yn, use_yn, remark,
+                                   created_by, updated_by)
+        values (hb_current_comp(), #{d.alarmCd}, #{d.equipClassId}, #{d.alarmNm}, #{d.severity}, #{d.symptomId}, #{d.autoBmYn},
+                #{d.useYn}, #{d.remark}, #{by}, #{by})
+        returning def_id
+    </select>
+
+    <update id="updateDef">
+        update cms_alarm_def
+           set alarm_nm = #{d.alarmNm}, severity = #{d.severity}, symptom_id = #{d.symptomId}, auto_bm_yn = #{d.autoBmYn},
+               use_yn = #{d.useYn}, remark = #{d.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where def_id = #{d.defId} and row_ver = #{d.rowVer}
+    </update>
+
+    <select id="findSymptomId" resultType="java.lang.Long">
+        select fail_id from cms_fail_code where code_type = 'SYMPTOM' and fail_cd = #{symptomCd} and use_yn = 'Y'
+    </select>
+
+    <select id="symptoms" resultType="io.smarthappy.module.cms.CmsDtos$IdOption">
+        select fail_id as id, fail_cd as code, fail_nm as name from cms_fail_code
+         where code_type = 'SYMPTOM' and use_yn = 'Y' order by sort_no, fail_cd limit 500
+    </select>
+
+    <!-- ================================================================ 수집 -->
+
+    <select id="lockKey" resultType="java.lang.String">
+        select pg_advisory_xact_lock(hashtextextended(#{key}, 0))::text
+    </select>
+
+    <select id="findEquip" resultType="io.smarthappy.module.cms.CmsAlarmDtos$EquipRef">
+        select equip_id, equip_cd, plant_cd, class_id from mst_equip where equip_id = #{equipId}
+    </select>
+
+    <select id="defFor" resultType="io.smarthappy.module.cms.CmsAlarmDtos$DefRow">
+        select <include refid="defCols"/>
+        <include refid="defFrom"/>
+         where d.alarm_cd = #{alarmCd} and d.use_yn = 'Y'
+           and (d.equip_class_id is null<if test="classId != null"> or d.equip_class_id = #{classId}</if>)
+         order by d.equip_class_id nulls last
+         limit 1
+    </select>
+
+    <select id="hasOpenAutoBm" resultType="boolean">
+        select exists (select 1 from cms_alarm_log l join cms_mwo m on m.mwo_id = l.mwo_id
+                        where l.equip_id = #{equipId} and l.alarm_cd = #{alarmCd} and m.status in ('REQ', 'OPEN', 'WIP'))
+    </select>
+
+    <select id="insertLog" resultType="long" flushCache="true">
+        insert into cms_alarm_log (comp_cd, equip_id, alarm_cd, alarm_text, raised_at, terminal_id, raise_event_id, mwo_id, recorded_by)
+        values (hb_current_comp(), #{equipId}, #{alarmCd}, #{alarmText}, #{raisedAt}, #{terminalId}, #{eventId}, #{mwoId}, #{by})
+        returning alarm_id
+    </select>
+
+    <update id="clearOpen">
+        update cms_alarm_log
+           set cleared_at = greatest(#{clearedAt}::timestamptz, raised_at),
+               clear_adjusted_yn = case when #{clearedAt}::timestamptz &lt; raised_at then 'Y' else 'N' end,
+               clear_event_id = #{eventId}, cleared_recorded_at = now()
+         where equip_id = #{equipId} and alarm_cd = #{alarmCd} and cleared_at is null
+    </update>
+
+    <!-- ================================================================ 조회 -->
+
+    <!-- 정의 = 설비 클래스가 맞는 것 먼저, 없으면 클래스 없는 것(사용 여부 무관 — 이름 표시용) -->
+    <sql id="defJoin">
+          left join lateral (select dd.alarm_nm, dd.severity from cms_alarm_def dd
+                              where dd.alarm_cd = l.alarm_cd and (dd.equip_class_id is null or dd.equip_class_id = e.class_id)
+                              order by dd.equip_class_id nulls last limit 1) d on true
+    </sql>
+
+    <!-- [from, to) 에 발생한 알람 + 열린 알람만 보기. 반복 창 = 발생 시각 앞 hours 시간(그 행 포함) 같은 설비·코드 발생 수 -->
+    <!-- 목록·grid 공통: 칸(같은 장비·코드 반복 창 수 포함), FROM·조건 -->
+    <sql id="alarmCols">
+        l.alarm_id, l.equip_id, e.equip_cd, e.equip_nm, e.plant_cd, l.alarm_cd, l.alarm_text, d.alarm_nm, d.severity,
+        l.raised_at, l.cleared_at, l.clear_adjusted_yn, t.terminal_cd, l.mwo_id, m.mwo_no, m.status as mwo_status,
+        (select count(*) from cms_alarm_log r
+          where r.equip_id = l.equip_id and r.alarm_cd = l.alarm_cd
+          and r.raised_at &gt; l.raised_at - make_interval(hours => #{hours})
+          and (r.raised_at &lt; l.raised_at or (r.raised_at = l.raised_at and r.alarm_id &lt;= l.alarm_id))) as window_count
+    </sql>
+    <sql id="alarmFromWhere">
+          from cms_alarm_log l
+          join mst_equip e on e.equip_id = l.equip_id
+          left join sys_terminal t on t.terminal_id = l.terminal_id
+          left join cms_mwo m on m.mwo_id = l.mwo_id
+        <include refid="defJoin"/>
+         where e.plant_cd = #{plantCd} and l.raised_at &gt;= #{from} and l.raised_at &lt; #{to}
+            <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\'
+                or l.alarm_cd like #{keyword} escape '\' or d.alarm_nm ilike #{keyword} escape '\')</if>
+            <if test="openOnly">and l.cleared_at is null</if>
+    </sql>
+
+    <select id="findAlarms" resultType="io.smarthappy.module.cms.CmsAlarmDtos$AlarmRow">
+        select <include refid="alarmCols"/>
+        <include refid="alarmFromWhere"/>
+         order by l.raised_at desc, l.alarm_id desc
+         limit #{limit}
+    </select>
+
+    <!-- 안쪽(쪽 고르기) 정렬 — 정의는 lateral 대신 두 왼쪽 조인(dc = 그 클래스 정의, dn = 클래스 없는 정의, uq_cms_alarm_def_cd 로
+         각 한 행 이하, defJoin 과 같은 고르기: 클래스 정의 먼저). 바깥 alarmSort 와 같은 순서 -->
+    <sql id="alarmSortInner">
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'EQUIP_CD'">e.equip_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ALARM_CD'">l.alarm_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ALARM_NM'">coalesce(dc.alarm_nm, dn.alarm_nm)<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'SEVERITY'">coalesce(dc.severity, dn.severity)<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'CLEARED_AT'">l.cleared_at<if test="s.desc"> desc nulls last</if></when>
+                <otherwise>l.raised_at<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         l.alarm_id desc
+    </sql>
+
+    <!-- grid 정렬(허용 목록 enum 이름으로만, 문자열 치환 없이) — 바깥(그 쪽 행). 마지막 PK 로 쪽 경계 고정 -->
+    <sql id="alarmSort">
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'EQUIP_CD'">e.equip_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ALARM_CD'">l.alarm_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ALARM_NM'">d.alarm_nm<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'SEVERITY'">d.severity<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'CLEARED_AT'">l.cleared_at<if test="s.desc"> desc nulls last</if></when>
+                <otherwise>l.raised_at<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         l.alarm_id desc
+    </sql>
+
+    <!-- grid(UI 단계 3 ①) — 지연 조인(docs/33 13.13, QA H2): 안쪽 = 거름·정렬·offset 에 필요한 것만(설비·정의 두 조인 — 검색어·정렬이 쓴다, 행별 계산 없음)으로
+         alarm_id 한 쪽, 바깥 = 그 쪽 행에만 반복 창 수(같은 원장 상관 count)·단말·작업지시. 반복 여부·분은 계산 값이라 정렬 밖 -->
+    <select id="findAlarmPage" resultType="io.smarthappy.module.cms.CmsAlarmDtos$AlarmRow">
+        select <include refid="alarmCols"/>
+          from cms_alarm_log l
+          join mst_equip e on e.equip_id = l.equip_id
+          left join sys_terminal t on t.terminal_id = l.terminal_id
+          left join cms_mwo m on m.mwo_id = l.mwo_id
+        <include refid="defJoin"/>
+         where l.alarm_id in (select l.alarm_id
+                                from cms_alarm_log l
+                                join mst_equip e on e.equip_id = l.equip_id
+                                left join cms_alarm_def dc on dc.alarm_cd = l.alarm_cd and dc.equip_class_id = e.class_id
+                                left join cms_alarm_def dn on dn.alarm_cd = l.alarm_cd and dn.equip_class_id is null
+                               where e.plant_cd = #{plantCd} and l.raised_at &gt;= #{from} and l.raised_at &lt; #{to}
+                                  <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\'
+                                      or l.alarm_cd like #{keyword} escape '\' or coalesce(dc.alarm_nm, dn.alarm_nm) ilike #{keyword} escape '\')</if>
+                                  <if test="openOnly">and l.cleared_at is null</if>
+                               order by <include refid="alarmSortInner"/>
+                               limit #{page.size} offset #{page.offset})
+         order by <include refid="alarmSort"/>
+    </select>
+
+    <select id="countAlarms" resultType="long">
+        select count(*) <include refid="alarmFromWhere"/>
+    </select>
+
+    <select id="top" resultType="io.smarthappy.module.cms.CmsAlarmDtos$TopRow">
+        select l.equip_id, e.equip_cd, e.equip_nm, l.alarm_cd, min(d.alarm_nm) as alarm_nm, min(d.severity) as severity,
+               count(*) filter (where l.raised_at &gt;= #{from}) as raise_count,
+               coalesce(floor(sum(greatest(0, extract(epoch from least(coalesce(l.cleared_at, #{now}::timestamptz), #{to}::timestamptz)
+                                                              - greatest(l.raised_at, #{from}::timestamptz)))) / 60), 0)::bigint as active_minutes,
+               count(*) filter (where l.cleared_at is null) as open_count
+          from cms_alarm_log l
+          join mst_equip e on e.equip_id = l.equip_id
+        <include refid="defJoin"/>
+         where e.plant_cd = #{plantCd} and l.raised_at &lt; #{to} and (l.cleared_at is null or l.cleared_at &gt; #{from})
+         group by l.equip_id, e.equip_cd, e.equip_nm, l.alarm_cd
+         order by raise_count desc, active_minutes desc, e.equip_cd, l.alarm_cd
+         limit #{limit}
+    </select>
+</mapper>

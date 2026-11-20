@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  현재고 (wms-stock) — P4 1부 W3 (docs/30 4.3). 공장 × 위치(하위 포함) × 품목 × 재고 상태의 현재고 = 수불 원장의 투영.
+  사용성 체크(docs/11 4.3): 주 사용자 = 창고 담당·반장(WEB). "어디에 몇 개 있나" 를 보고, 행을 고르면 그 칸의 최근 수불 20건.
+  직접 치는 값 = 품번·품명 조건뿐(현재고는 고칠 수 없다 — 조정·이동 화면에서). 대사(FN1) = 원장 합과 같은지 확인만.
+  예외 = 공장 없음(칸 오류), 대사 불일치(알림 + 결과 표시, 자동 보정 없음).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">현재고</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{wmsStock.plant}">공장</span><select name="plantCd" id="plantSel" required></select></label>
+    <label><span th:text="#{wmsStock.node}">위치</span><select name="nodeId" id="nodeSel"></select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{wmsStock.withChildren}">하위 위치 포함</legend>
+        <label><input type="radio" name="withChildren" value="true" checked><span th:text="#{wmsLoc.yes}">예</span></label>
+        <label><input type="radio" name="withChildren" value="false"><span th:text="#{wmsLoc.no}">아니오</span></label>
+    </fieldset>
+    <label><span th:text="#{wmsStock.itemCd}">품번</span><input name="itemCd" maxlength="40"></label>
+    <label><span th:text="#{wmsStock.itemNm}">품명</span><input name="itemNm" maxlength="200"></label>
+    <label><span th:text="#{wmsStock.lotNo}">LOT 번호</span><input name="lotNo" maxlength="60"></label>
+    <label><span th:text="#{wmsStock.stockStatus}">재고 상태</span>
+        <select name="stockStatus" data-hb="select" data-code="STOCK_STATUS" data-blank="all"></select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{wmsStock.hideZero}">수량 0 숨김</legend>
+        <label><input type="radio" name="hideZero" value="true" checked><span th:text="#{wmsLoc.yes}">예</span></label>
+        <label><input type="radio" name="hideZero" value="false"><span th:text="#{wmsLoc.no}">아니오</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <span id="reconcileInfo" class="hb-muted"></span>
+            <button type="button" id="allocBtn" class="hb-btn-secondary" th:text="#{wmsAlloc.open}"
+                    data-help-key="wms-stock.alloc">출고 후보 미리보기</button>
+            <button type="button" id="backfillBtn" class="hb-btn-secondary" th:if="${actions.contains('FN2')}"
+                    th:text="#{wmsStock.backfill}" data-help-key="wms-stock.backfill">생산 입고 이관</button>
+            <button type="button" id="reconcileBtn" class="hb-btn-secondary" th:if="${actions.contains('FN1')}"
+                    th:text="#{wmsStock.reconcile}" data-help-key="wms-stock.reconcile">대사 실행</button>
+        </div>
+        <div id="stockGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="stockInfo" class="hb-muted" th:text="#{wmsStock.selectFirst}">왼쪽에서 재고를 고르세요.</p>
+        <section class="hb-sub" id="histSection" hidden>
+            <h2 th:text="#{wmsStock.history}">최근 수불</h2>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="history">
+                    <thead><tr>
+                        <th th:text="#{wmsTrx.col.occurredAt}">발생 시각</th>
+                        <th th:text="#{wmsTrx.col.trxType}">유형</th>
+                        <th class="hb-num" th:text="#{wmsTrx.col.qty}">수량</th>
+                        <th th:text="#{wmsTrx.col.recordedBy}">입력자</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+        <section class="hb-sub" id="allocSection" hidden>
+            <h2 th:text="#{wmsAlloc.title}">출고 후보 미리보기</h2>
+            <form id="allocForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{wmsStock.itemCd}">품번</span><input data-field="itemCd" maxlength="40"></label>
+                <label><span th:text="#{wmsAlloc.qty}">꺼낼 수량</span>
+                    <input data-field="qty" data-hb="number" data-scale="6" data-pad="false" data-min="0.000001"
+                           data-max="999999999999.999999" inputmode="decimal"></label>
+                <label><span th:text="#{wmsAlloc.strategy}">전략</span>
+                    <select data-field="strategy">
+                        <option value="" th:text="#{wmsAlloc.strategyDefault}">기본(품목·공장 정책)</option>
+                        <option value="FIFO" th:text="#{wmsAlloc.FIFO}">선입선출</option>
+                        <option value="FEFO" th:text="#{wmsAlloc.FEFO}">유효기한 순</option>
+                        <option value="LOC_SEQ" th:text="#{wmsAlloc.LOC_SEQ}">피킹 순서</option>
+                    </select></label>
+                <label><span th:text="#{wmsAlloc.availableOnly}">합격분만</span>
+                    <select data-field="availableOnly">
+                        <option value="true" th:text="#{wmsLoc.yes}">예</option>
+                        <option value="false" th:text="#{wmsAlloc.withQc}">검사 대기 포함</option>
+                    </select></label>
+                <div class="hb-wide hb-toolbar">
+                    <button type="button" id="allocRunBtn" class="hb-btn-secondary" th:text="#{wmsAlloc.run}">계산</button>
+                </div>
+            </form>
+            <p id="allocInfo" class="hb-muted"></p>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="allocTable">
+                    <thead><tr>
+                        <th th:text="#{wmsStock.col.path}">위치</th>
+                        <th th:text="#{wmsAlloc.fifoDate}">입고일</th>
+                        <th th:text="#{wmsAlloc.expiry}">유효기한</th>
+                        <th class="hb-num" th:text="#{wmsAlloc.avail}">있음</th>
+                        <th class="hb-num" th:text="#{wmsAlloc.take}">꺼냄</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/views/wms/stock.js}"></script>
+</body>
+</html>

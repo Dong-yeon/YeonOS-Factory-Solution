@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  모바일 웹앱 안내 (sys-mobile-app) — docs/75 4장. 사무 메뉴에서 휴대폰용 화면 /m(docs/74)으로 들어가는 곳.
+  사용성 체크(docs/11 4.3): 주 사용자 = 사무·관리자(PC 에서 주소를 보고 휴대폰에서 연다). 직접 치는 칸 없음.
+  /m 은 사무 로그인과 같은 보안 체인 — 이 화면은 주소를 알려 줄 뿐 권한을 주지 않는다(조각마다 사무 화면 권한).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">모바일 웹앱</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="prd-pop,wms-pda,sys-pda-app" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<section class="hb-narrow">
+    <p th:text="#{mobileApp.intro}">휴대폰 브라우저에서 쓰는 화면(홈·결재 승인·LOT·설비 찾기·부적합 사진 등록·현황)을 엽니다.</p>
+    <dl class="hb-info">
+        <dt th:text="#{mobileApp.address}">주소</dt>
+        <dd><code id="mobileUrl" data-help-key="sys-mobile-app.address">/m</code></dd>
+    </dl>
+    <div class="hb-toolbar">
+        <button type="button" id="openBtn" th:text="#{mobileApp.open}">모바일 화면 열기</button>
+        <button type="button" id="copyBtn" class="hb-btn-secondary" th:text="#{mobileApp.copy}">주소 복사</button>
+    </div>
+    <p class="hb-msg" id="copyMsg" role="status" hidden></p>
+
+    <section class="hb-section">
+        <h2 th:text="#{mobileApp.howTo}">휴대폰에서 쓰려면</h2>
+        <ol>
+            <li th:text="#{mobileApp.step1}">휴대폰 브라우저에 위 주소를 넣고, 이 화면과 같은 회사 코드·아이디로 로그인합니다.</li>
+            <li th:text="#{mobileApp.step2}">브라우저 메뉴의 "홈 화면에 추가" 를 누르면 앱처럼 아이콘으로 열 수 있습니다.</li>
+            <li th:text="#{mobileApp.step3}">보이는 조각은 내 권한을 따릅니다 — 결재 권한이 없으면 결재 승인 칸이 보이지 않습니다.</li>
+        </ol>
+    </section>
+    <p class="hb-msg" th:text="#{mobileApp.terminalNote}">작업장 태블릿·창고 PDA 는 이 화면이 아니라 "현장 단말(POP)"·"창고 단말(PDA)" 을 씁니다.</p>
+</section>
+
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/mobile-app.js}"></script>
+</body>
+</html>

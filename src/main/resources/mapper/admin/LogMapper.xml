@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  시스템관리 3단계 (docs/36 12장) — 접속·보안 로그, 변경 이력, 받은 의견. 모두 회사별 표(RLS) — 회사 관리자는 자기 회사 것만.
+  기간은 [from, to) 시각(서비스가 회사 시간대 날짜로 계산) — 인덱스 (comp_cd, occurred_at). 목록은 최신순 하나(PK 로 동순위 정리).
+  LIKE 는 likeEscape + escape '\'.
+  사용자 유형(docs/42 P4)은 로그 행에 없다 — sys_user 를 조인한다. 유형은 만든 뒤 바뀌지 않으니(트리거) 지금 값 = 기록 때 값.
+  사용자 없는 행(계정 없음 로그인 실패 등)은 유형 빈칸, 유형으로 거르면 빠진다.
+-->
+<mapper namespace="io.smarthappy.module.admin.LogMapper">
+
+    <!-- ===================== 접속·보안 로그 ===================== -->
+
+    <sql id="accessWhere">
+        from sys_access_log a
+        left join sys_prog p on p.prog_cd = a.prog_cd
+        left join sys_user u on u.user_id = a.user_id
+        where a.occurred_at &gt;= #{q.from} and a.occurred_at &lt; #{q.to}
+        <if test="q.events != null and q.events.size() > 0">
+            and a.event_cd in <foreach collection="q.events" item="e" open="(" separator="," close=")">#{e}</foreach>
+        </if>
+        <if test="q.severity != null">and a.severity = #{q.severity}</if>
+        <if test="q.resultCd != null">and a.result_cd = #{q.resultCd}</if>
+        <if test="q.loginLike != null">and a.login_id ilike #{q.loginLike} escape '\'</if>
+        <if test="q.ipLike != null">and a.ip like #{q.ipLike} escape '\'</if>
+        <if test="q.userType != null">and u.user_type = #{q.userType}</if>
+        <if test="q.clientType != null">and a.client_type = #{q.clientType}</if>
+    </sql>
+
+    <select id="findAccess" resultType="io.smarthappy.module.admin.LogDtos$AccessRow">
+        <!-- prog_nm 은 문구 키 — 서비스가 번역한다 -->
+        select a.log_id, a.occurred_at, a.severity, a.event_cd, a.result_cd, a.user_id, a.login_id, a.prog_cd,
+               p.prog_nm_key as prog_nm, a.action_cd, a.client_type, a.ip, a.detail, u.user_type
+        <include refid="accessWhere"/>
+        order by a.occurred_at desc, a.log_id desc
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="countAccess" resultType="long">
+        select count(*) <include refid="accessWhere"/>
+    </select>
+
+    <!-- ===================== 변경 이력 ===================== -->
+
+    <sql id="auditWhere">
+        from sys_audit_log x
+        where x.occurred_at &gt;= #{q.from} and x.occurred_at &lt; #{q.to}
+        <if test="q.tables != null">
+            and x.table_nm in
+            <foreach collection="q.tables" item="t" open="(" separator="," close=")">#{t}</foreach>
+        </if>
+        <if test="q.action != null">and x.action = #{q.action}</if>
+        <if test="q.actorLike != null">and x.actor ilike #{q.actorLike} escape '\'</if>
+    </sql>
+
+    <select id="findAudit" resultType="io.smarthappy.module.admin.LogDtos$AuditRow">
+        select x.audit_id, x.occurred_at, x.table_nm, x.row_key, x.action, x.actor
+        <include refid="auditWhere"/>
+        order by x.occurred_at desc, x.audit_id desc
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="countAudit" resultType="long">
+        select count(*) <include refid="auditWhere"/>
+    </select>
+
+    <select id="findAuditOne" resultType="map">
+        select audit_id as "auditId", occurred_at as "occurredAt", table_nm as "tableNm", row_key as "rowKey",
+               action, actor, before_data::text as "before", after_data::text as "after"
+          from sys_audit_log
+         where audit_id = #{auditId}
+    </select>
+
+    <!-- 이 회사 감사에 실제로 있는 표 (선택지) -->
+    <select id="auditTablesPresent" resultType="string">
+        select distinct table_nm from sys_audit_log order by table_nm
+    </select>
+
+    <!-- ===================== 받은 의견 ===================== -->
+
+    <sql id="feedbackWhere">
+        from sys_feedback f
+        join sys_user u on u.user_id = f.user_id
+        left join sys_prog p on p.prog_cd = f.prog_cd
+        where f.created_at &gt;= #{q.from} and f.created_at &lt; #{q.to}
+        <if test="q.status != null">and f.status = #{q.status}</if>
+        <if test="q.progCd != null">and f.prog_cd = #{q.progCd}</if>
+    </sql>
+
+    <sql id="feedbackColumns">
+        f.feedback_id, f.created_at, f.prog_cd, p.prog_nm_key as prog_nm, f.content, f.status, f.client_type, f.user_id,
+        u.login_id, u.user_nm, f.handled_by, f.handled_at, f.row_ver
+    </sql>
+
+    <select id="findFeedback" resultType="io.smarthappy.module.admin.LogDtos$FeedbackRow">
+        select <include refid="feedbackColumns"/>
+        <include refid="feedbackWhere"/>
+        order by f.created_at desc, f.feedback_id desc
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="countFeedback" resultType="long">
+        select count(*) <include refid="feedbackWhere"/>
+    </select>
+
+    <select id="findFeedbackOne" resultType="io.smarthappy.module.admin.LogDtos$FeedbackRow">
+        select <include refid="feedbackColumns"/>
+          from sys_feedback f
+          join sys_user u on u.user_id = f.user_id
+          left join sys_prog p on p.prog_cd = f.prog_cd
+         where f.feedback_id = #{feedbackId}
+    </select>
+
+    <!-- NEW 로 되돌리면 처리 정보도 비운다 -->
+    <update id="updateFeedbackStatus">
+        update sys_feedback
+           set status = #{status},
+               handled_by = case when #{status} = 'NEW' then null else #{by} end,
+               handled_at = case when #{status} = 'NEW' then null else now() end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where feedback_id = #{feedbackId} and row_ver = #{rowVer}
+    </update>
+</mapper>

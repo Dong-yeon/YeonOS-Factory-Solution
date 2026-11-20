@@ -1,0 +1,183 @@
+/*
+ * PMS 화면 전용 (docs/32 PM1) — 공통 page.css 를 고치지 않는다(docs/29 6장). 값은 tokens.css 의 의미 토큰만.
+ * pmsGantt: 왼쪽 WBS 칸은 가로 스크롤에도 붙어 있고(sticky left), 머리글은 세로 스크롤에도 붙어 있다(sticky top).
+ * 위치·폭은 JS 가 CSSOM 으로 넣는다(인라인 style 속성 아님).
+ */
+.pmsg { --pmsg-row-h: 32px; --pmsg-day: 24px; position: relative; display: flex; flex-direction: column; height: 100%; min-height: 240px;
+    border: 1px solid var(--hb-border); border-radius: var(--hb-radius-md); background: var(--hb-bg-surface); }
+.pmsg-scroll { position: relative; flex: 1 1 auto; overflow: auto; outline: none; }
+.pmsg-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--hb-focus); }
+.pmsg-content { position: relative; }
+.pmsg-head { position: sticky; top: 0; z-index: 3; display: flex; height: 44px; background: var(--hb-bg-subtle);
+    border-bottom: 1px solid var(--hb-border); }
+.pmsg-left { position: sticky; left: 0; z-index: 2; display: flex; flex: 0 0 auto; background: var(--hb-bg-surface);
+    border-right: 1px solid var(--hb-border); }
+.pmsg-head-left { z-index: 4; background: var(--hb-bg-subtle); align-items: flex-end; }
+.pmsg-track { position: relative; flex: 0 0 auto; height: 100%; }
+.pmsg-head-track { height: 44px; }
+.pmsg-scale-top, .pmsg-scale-bottom { position: relative; height: 22px; }
+.pmsg-tick { position: absolute; top: 0; height: 22px; padding: 0 var(--hb-space-1); overflow: hidden; white-space: nowrap;
+    font-size: var(--hb-fs-xs); color: var(--hb-text-muted); line-height: 22px; border-left: 1px solid var(--hb-border-subtle); }
+.pmsg-scale-top .pmsg-tick { font-weight: var(--hb-fw-semibold); color: var(--hb-text); }
+.pmsg-weekend { background: var(--hb-bg-muted); }
+.pmsg-cell { flex: 0 0 auto; height: var(--pmsg-row-h); padding: 0 var(--hb-space-3); overflow: hidden; white-space: nowrap;
+    text-overflow: ellipsis; line-height: var(--pmsg-row-h); border-right: 1px solid var(--hb-border-subtle); }
+.pmsg-hcell { height: 44px; line-height: 1.3; padding-top: var(--hb-space-5); font-weight: var(--hb-fw-semibold); font-size: var(--hb-fs-sm); }
+.pmsg-num { text-align: right; }
+.pmsg-tree { display: flex; align-items: center; gap: var(--hb-space-1); }
+.pmsg-toggle { flex: 0 0 14px; color: var(--hb-text-muted); cursor: pointer; text-align: center; }
+.pmsg-name { overflow: hidden; text-overflow: ellipsis; }
+.pmsg-row { display: flex; height: var(--pmsg-row-h); border-bottom: 1px solid var(--hb-border-subtle); cursor: default; }
+.pmsg-row:hover .pmsg-left { background: var(--hb-bg-hover); }
+.pmsg-summary .pmsg-name { font-weight: var(--hb-fw-semibold); }
+.pmsg-selected .pmsg-left, .pmsg-selected:hover .pmsg-left { background: var(--hb-action-faint); }
+.pmsg-selected .pmsg-track { background: var(--hb-action-faint); }
+.pmsg-dim { color: var(--hb-text-disabled); }
+.pmsg-late .pmsg-name { color: var(--hb-status-danger-fg); }
+/* 일 눈금: 토·일 음영 — 범위 시작이 월요일이라 7일 반복 배경이 요일과 맞는다 */
+.pmsg-scale-day .pmsg-row .pmsg-track {
+    background-image: repeating-linear-gradient(to right, transparent 0, transparent calc(var(--pmsg-day) * 5),
+        var(--hb-bg-subtle) calc(var(--pmsg-day) * 5), var(--hb-bg-subtle) calc(var(--pmsg-day) * 7)); }
+.pmsg-bar { position: absolute; top: 8px; height: calc(var(--pmsg-row-h) - 16px); border-radius: var(--hb-radius-sm);
+    background: var(--hb-action-subtle); border: 1px solid var(--hb-action); overflow: hidden; }
+.pmsg-fill { height: 100%; background: var(--hb-action); }
+.pmsg-bar-summary { top: 11px; height: 8px; border-radius: 0; background: var(--hb-text); border-color: var(--hb-text); }
+.pmsg-bar-late { border-color: var(--hb-status-danger-fg); box-shadow: 0 0 0 1px var(--hb-status-danger-line); }
+.pmsg-dim .pmsg-bar { background: var(--hb-bg-muted); border-color: var(--hb-border); }
+.pmsg-point { position: absolute; top: 9px; width: 12px; height: 12px; margin-left: -6px; transform: rotate(45deg);
+    background: var(--hb-text); border: 1px solid var(--hb-text); }
+.pmsg-gate { background: var(--hb-status-warning-fg); border-color: var(--hb-status-warning-fg); }
+.pmsg-today { position: absolute; top: 0; width: 0; border-left: 2px solid var(--hb-status-danger-fg); z-index: 1; pointer-events: none; }
+.pmsg-pad { flex: 0 0 auto; }
+.pmsg-body { position: relative; }
+/* 기준선 막대(PM2) — 지금 막대 아래 얇게 */
+.pmsg-base { position: absolute; bottom: 3px; height: 4px; border-radius: var(--hb-radius-sm); background: var(--hb-border); }
+/* 의존 선 — 왼쪽 칸(z 2)보다 아래, 오늘 선과 같은 층 */
+.pmsg-links { position: absolute; top: 0; z-index: 1; pointer-events: none; overflow: visible; }
+.pmsg-link { fill: none; stroke: var(--hb-text-muted); stroke-width: 1.2; }
+.pmsg-arrow { fill: var(--hb-text-muted); stroke: none; }
+.pmsg-link.pmsg-link-bad { stroke: var(--hb-status-warning-fg); stroke-width: 1.6; }
+.pmsg-arrow.pmsg-link-bad { fill: var(--hb-status-warning-fg); }
+.pmsg-dep-bad .pmsg-name::after { content: " ⚠"; color: var(--hb-status-warning-fg); }
+.pmsg-unstick .pmsg-left { position: relative; }
+.pmsg-empty { position: absolute; top: 60px; left: 0; right: 0; text-align: center; color: var(--hb-text-muted); pointer-events: none; }
+
+/* 화면 배치 */
+.pms-detail { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.pms-detail[hidden], .pms-list[hidden] { display: none; }
+.pms-list { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.pms-list .hb-replace-host { flex: 1 1 auto; overflow: auto; }
+.pms-gantt-host { flex: 1 1 auto; min-height: 240px; }
+.pms-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); margin-bottom: var(--hb-space-3); }
+.pms-head h2 { margin: 0; font-size: var(--hb-fs-lg); }
+/* 상태 배지는 hb.status(pms-ui.js 톤 표) — 여기 .pms-status 는 상태가 아닌 분류 칩(이력 동작·항목 종류)만 */
+.pms-status { display: inline-block; padding: 0 var(--hb-space-3); border-radius: var(--hb-radius-sm); font-size: var(--hb-fs-sm);
+    background: var(--hb-bg-muted); color: var(--hb-text); }
+.pms-late { color: var(--hb-status-danger-fg); font-weight: var(--hb-fw-semibold); }
+.pms-headform summary { cursor: pointer; margin: var(--hb-space-2) 0; color: var(--hb-text-muted); }
+/* 위 = 고정 높이 grid(템플릿 화면의 템플릿, 산출물·게이트 화면의 프로젝트 고르기), 아래 = 상세 */
+.pms-tmpl-grid { flex: 0 0 auto; height: 30vh; min-height: 180px; margin-bottom: var(--hb-space-3); }
+.pms-deps { list-style: none; padding: 0; margin: 0 0 var(--hb-space-3); }
+.pms-deps li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-2); padding: 2px 0; overflow-wrap: anywhere; }
+.pms-actual-form { flex-basis: 100%; margin: var(--hb-space-1) 0 var(--hb-space-2); }   /* 내 작업 줄 편집(docs/32 4.19) — 줄 아래 한 줄 전체 */
+.pms-actual-form .hb-toolbar { align-self: end; }
+
+/* PM3 산출물·게이트 — 단계별 준비율 막대(폭은 JS 가 CSSOM 으로) */
+.pms-phases { display: flex; flex-wrap: wrap; gap: var(--hb-space-3); list-style: none; padding: 0; margin: 0 0 var(--hb-space-3); }
+.pms-phase { display: flex; flex-direction: column; gap: 2px; min-width: 150px; flex: 1 1 150px; padding: var(--hb-space-2) var(--hb-space-3);
+    border: 1px solid var(--hb-border); border-radius: var(--hb-radius-md); background: var(--hb-bg-surface); }
+.pms-phase-nm { font-weight: var(--hb-fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pms-phase-pct { font-size: var(--hb-fs-sm); color: var(--hb-text-muted); }
+.pms-phase-ok .pms-phase-pct { color: var(--hb-status-success-fg); }
+.pms-meter { display: block; height: 6px; border-radius: var(--hb-radius-sm); background: var(--hb-bg-muted); overflow: hidden; }
+.pms-meter-fill { display: block; height: 100%; width: 0; background: var(--hb-action); }
+.pms-phase-ok .pms-meter-fill { background: var(--hb-status-success-fg); }
+.pms-row-form { margin-bottom: var(--hb-space-2); padding: var(--hb-space-2); border: 1px solid var(--hb-border-subtle); border-radius: var(--hb-radius-sm); }
+.pms-gate-list { flex: 0 0 auto; max-height: 40vh; overflow: auto; }
+.pms-row-form > .hb-btn-ghost { justify-self: start; }
+
+/* PM4 내 공수 — 주 띠 */
+.pms-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--hb-space-2); list-style: none; padding: 0;
+    margin: 0 0 var(--hb-space-3); }
+.pms-weekday { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: var(--hb-space-2);
+    border: 1px solid var(--hb-border); border-radius: var(--hb-radius-md); background: var(--hb-bg-surface); color: var(--hb-text);
+    cursor: pointer; text-align: left; }
+.pms-weekday[aria-pressed="true"] { border-color: var(--hb-action); box-shadow: 0 0 0 1px var(--hb-action); }
+.pms-weekday:disabled { cursor: default; color: var(--hb-text-disabled); }
+.pms-weekday-d { font-size: var(--hb-fs-sm); }
+.pms-weekday-h { font-weight: var(--hb-fw-semibold); }
+.pms-weekday-s { font-size: var(--hb-fs-xs); color: var(--hb-text-muted); }
+.pms-wl-CONFIRMED .pms-weekday-s { color: var(--hb-status-success-fg); }
+.pms-wl-missing .pms-weekday-s { color: var(--hb-status-danger-fg); font-weight: var(--hb-fw-semibold); }
+.pms-scroll-x { overflow-x: auto; }
+/* 홈 포트폴리오 grid — 위에 내 할 일, 아래에 보고서가 있어 고정 높이 */
+.pms-port-grid { flex: 0 0 auto; height: 55vh; min-height: 280px; }
+/* 홈은 할 일 + 차트 + 표 + 보고서가 쌓이는 스크롤 화면 — hb-page-app 의 화면 높이 고정·overflow hidden 이면 표 아래가 잘려 볼 수 없다 */
+body.hb-page-app.pms-home-page { height: auto; min-height: 100dvh; overflow: auto; }
+.pms-hours { width: 72px; text-align: right; }
+.pms-day[hidden] { display: none; }
+@media (max-width: 600px) { .pms-week { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.pms-scroll-x > table { min-width: 720px; }
+
+/* PM5 홈 — 내 할 일 4묶음, 인쇄용 보고서(인쇄 때 보고서만) */
+.pms-todo { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--hb-space-3); margin-bottom: var(--hb-space-4); }
+.pms-todo-col { padding: var(--hb-space-2) var(--hb-space-3); border: 1px solid var(--hb-border); border-radius: var(--hb-radius-md);
+    background: var(--hb-bg-surface); min-width: 0; }
+.pms-todo-col h3 { margin: 0 0 var(--hb-space-2); font-size: var(--hb-fs-sm); }
+.pms-todo-cnt { margin-left: var(--hb-space-1); font-weight: normal; }
+@media (max-width: 900px) { .pms-todo { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .pms-todo { grid-template-columns: minmax(0, 1fr); } }
+.pms-report { margin-top: var(--hb-space-4); padding-top: var(--hb-space-3); border-top: 2px solid var(--hb-border); }
+.pms-report[hidden] { display: none; }
+.pms-report h3 { margin: var(--hb-space-3) 0 var(--hb-space-2); font-size: var(--hb-fs-md); }
+@media print {
+    .pms-noprint, .hb-page-head, #hbHelp { display: none !important; }
+    .pms-report { border-top: 0; margin: 0; }
+    .pms-report table { page-break-inside: auto; }
+    .pms-report tr { page-break-inside: avoid; }
+}
+.pms-doc-link { white-space: nowrap; }
+
+/* 포트폴리오 상태별 막대(docs/32 4.15) — 라벨 | 막대 둘(프로젝트 수·지연 있는 프로젝트 수) | 글자. 390 폭에서는 글자가 아래로 */
+.pms-chart { margin: 0 0 var(--hb-space-3); }
+.pms-chart-rows { list-style: none; margin: var(--hb-space-2) 0 0; padding: 0; display: grid; gap: var(--hb-space-2); }
+.pms-chart-row { display: grid; grid-template-columns: 5em minmax(0, 1fr) minmax(0, 14em); align-items: center; gap: var(--hb-space-3); }
+.pms-chart-track { display: grid; gap: 2px; }
+.pms-chart-bar { display: block; height: 8px; min-width: 0; border-radius: var(--hb-radius-sm); background: var(--hb-action); }
+.pms-chart-late { background: var(--hb-status-danger-fg); }
+.pms-chart-text { font-size: var(--hb-fs-sm); color: var(--hb-text-muted); }
+/* 연도·유형 막대(docs/32 4.20) — 아래 막대 = 종료(연도)·진행 중(유형). 넓은 화면은 둘을 나란히 */
+.pms-chart-done { background: var(--hb-status-success-fg); }
+.pms-chart-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--hb-space-4); }
+@media (max-width: 600px) {
+    .pms-chart-row { grid-template-columns: 4.5em minmax(0, 1fr); }
+    .pms-chart-text { grid-column: 2; }
+}
+@media (max-width: 900px) {
+    .pms-chart-pair { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
+/* 근무일 보조 칸 + [공수로] 한 줄 — .hb-form label span(라벨 글자) 규칙을 덮는다 */
+.hb-form label span.pms-workdays { display: flex; gap: var(--hb-space-1); align-items: center; margin: 0; color: inherit; font-size: inherit; }
+.pms-workdays input { flex: 1 1 auto; min-width: 0; }
+.pms-workdays button { flex: none; white-space: nowrap; }
+
+/* 사람 × 주 부하 보기 (docs/32 4.26) — 표는 가로로 스크롤, 사람 칸은 붙여 둔다(좁은 화면은 함께 스크롤) */
+.pms-load { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: var(--hb-space-3); }
+.pms-load[hidden] { display: none; }
+.pms-load-scroll { flex: 1 1 auto; min-height: 120px; overflow: auto; border: 1px solid var(--hb-border); border-radius: var(--hb-radius-md); }
+.pms-load-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--hb-focus); }
+.pms-load-table { margin: 0; white-space: nowrap; }
+.pms-load-table tbody th, .pms-load-table tfoot th { position: sticky; left: 0; z-index: 1; background: var(--hb-bg-surface); text-align: left; }
+.pms-load-num { text-align: right; font-variant-numeric: tabular-nums; }
+.pms-load-cell { cursor: pointer; }
+.pms-load-cell:hover { background: var(--hb-bg-hover); }
+.pms-load-cell:focus-visible { outline: 2px solid var(--hb-focus); outline-offset: -2px; }
+/* 가용 초과 — 색만이 아니라 굵기·기호로도 */
+.pms-load-over { background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); font-weight: var(--hb-fw-semibold); }
+.pms-load-over::after { content: " ▲"; }
+.pms-load-none th { font-style: italic; color: var(--hb-text-muted); }
+.pms-load-cap td, .pms-load-cap th { color: var(--hb-text-muted); border-top: 2px solid var(--hb-border); }
+.pms-load-chart { min-height: 240px; }
+@media (max-width: 600px) {
+    .pms-load-table tbody th, .pms-load-table tfoot th { position: static; }
+}

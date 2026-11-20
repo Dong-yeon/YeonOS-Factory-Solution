@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  BOM 일괄 대체 (mst-bom-replace) — P1 3c (docs/18 C5). 자품목 X 를 쓰는 BOM 들에 Y 를 넣은 "작성 중" 리비전을 만든다.
+  사용성 체크(docs/11 4.3): 주 사용자 = 생산기술(부품 단종·설계 변경 지시). 직접 치는 값 = 바꿀 자품목·새 자품목·시작일.
+  흐름 = 미리보기(모품목마다 반영 방법·건너뛰는 이유) → 고르기(+ 변경 번호·사유) → 반영(전부 아니면 전무)
+       → 반영 결과에서 고른 작성 중 리비전을 한 번에 확정(건마다 BOM 관리 [확정]과 같은 검사, 실패는 사유와 함께 남김 — 사용자 결정 G5, docs/60 R1).
+  시작일 기본 = 내일(확정 시작일은 오늘 이후, 오늘 확정본은 같은 날이라 건너뛴다 — docs/60 R3). [고른 것 확정] 판정은 API(BOM 확정 APPROVE).
+  예외 = 순환(건너뜀), 작성 중 BOM 이 X 를 안 씀(건너뜀), 확정본이 시작일과 같은 날 시작(건너뜀), 단위 확인 필요(경고).
+-->
+<body data-table-menu="" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">BOM 일괄 대체</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{bomReplace.from}">바꿀 자품목</span>
+        <input name="fromItemCd" maxlength="40" required data-help-key="mst-bom-replace.fromItemCd"></label>
+    <label><span th:text="#{bomReplace.to}">새 자품목</span>
+        <input name="toItemCd" maxlength="40" required data-help-key="mst-bom-replace.toItemCd"></label>
+    <label><span th:text="#{bomReplace.validFrom}">새 리비전 시작일</span>
+        <input name="validFrom" type="date" data-help-key="mst-bom-replace.validFrom"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{bomReplace.preview}">미리보기</button>
+    </div>
+</form>
+
+<form id="changeForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+    <label><span th:text="#{mstBom.col.changeNo}">변경 번호</span>
+        <input id="changeNo" maxlength="30" data-help-key="mst-bom-replace.changeNo"></label>
+    <label class="hb-wide"><span th:text="#{mstBom.col.changeReason}">변경 사유</span>
+        <input id="changeReason" maxlength="500" th:placeholder="#{bomReplace.reasonAuto}" data-help-key="mst-bom-replace.changeReason"></label>
+</form>
+<div class="hb-toolbar hb-tree-tools">
+    <span id="summary" class="hb-muted hb-tree-summary"></span>
+    <button type="button" id="runBtn" th:if="${actions.contains('SAVE')}" th:text="#{bomReplace.run}" disabled>선택한 BOM 에 반영</button>
+</div>
+<div class="hb-replace-host">
+    <table class="hb-cmp-table hb-replace-table" id="rows">
+        <thead><tr>
+            <th><input type="checkbox" id="allChk" th:aria-label="#{bomReplace.all}"></th>
+            <th th:text="#{bomReplace.col.parent}">모품목</th>
+            <th th:text="#{bomReplace.col.parentNm}">품목명</th>
+            <th th:text="#{bomReplace.col.source}">대상 리비전</th>
+            <th th:text="#{bomReplace.col.action}">반영 방법</th>
+            <th th:text="#{bomReplace.col.lines}">행 수</th>
+            <th th:text="#{bomReplace.col.note}">확인</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+    <p id="empty" class="hb-muted" th:text="#{bomReplace.empty}">바꿀 자품목과 새 자품목을 넣고 미리보기를 누르세요.</p>
+</div>
+
+<section class="hb-sub" id="doneSection" hidden>
+    <h2 th:text="#{bomReplace.doneTitle}">반영 결과 — 작성 중 리비전</h2>
+    <p class="hb-muted" th:text="#{bomReplace.doneHint}">고른 리비전을 한 번에 확정합니다. 건마다 BOM 관리의 [확정]과 같은 검사를 하고, 실패한 건은 사유와 함께 남습니다.</p>
+    <div class="hb-toolbar">
+        <span id="doneSummary" class="hb-muted hb-tree-summary"></span>
+        <button type="button" id="toMgtBtn" class="hb-btn-secondary" th:title="#{bomUi.toMgt.draftHint}" th:text="#{bomUi.toMgt}">BOM 관리</button>
+        <button type="button" id="releaseBtn" th:if="${actions.contains('SAVE')}" th:text="#{bomReplace.release}" disabled>고른 것 확정</button>
+    </div>
+    <div class="hb-replace-host">
+        <table class="hb-cmp-table hb-replace-table" id="done">
+            <thead><tr>
+                <th><input type="checkbox" id="allDone" th:aria-label="#{bomReplace.all}"></th>
+                <th th:text="#{bomReplace.col.parent}">모품목</th>
+                <th th:text="#{bomReplace.col.parentNm}">품목명</th>
+                <th th:text="#{bomReplace.col.newRev}">리비전</th>
+                <th th:text="#{bomReplace.col.lines}">행 수</th>
+                <th th:text="#{bomReplace.col.result}">결과</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/master/bom-ui.js}"></script>
+<script th:src="@{/js/views/master/bom-replace.js}"></script>
+</body>
+</html>

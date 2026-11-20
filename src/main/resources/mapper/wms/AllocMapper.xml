@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 출고 후보 (P4 W4, docs/30 4.4). 읽기만 — 순서·배분은 AllocationStrategy(순수 함수) -->
+<mapper namespace="io.smarthappy.module.wms.alloc.AllocMapper">
+
+    <select id="findItem" resultType="io.smarthappy.module.wms.alloc.AllocDtos$ItemRow">
+        select item_id, item_cd, item_nm, unit_cd, use_yn,
+               attrs ->> 'ALLOC_STRATEGY' as alloc_attr, attrs ->> 'SHELF_LIFE_DAYS' as shelf_life_attr
+          from mst_item
+         where (#{itemId}::bigint is not null and item_id = #{itemId})
+            or (#{itemId}::bigint is null and item_cd = #{itemCd})
+    </select>
+
+    <select id="plantExists" resultType="boolean">
+        select exists (select 1 from sys_plant where plant_cd = #{plantCd})
+    </select>
+
+    <select id="nodeOfPlant" resultType="boolean">
+        select exists (select 1 from mst_equip_hier where node_id = #{nodeId} and plant_cd = #{plantCd} and node_type in ('WH', 'LOC'))
+    </select>
+
+    <!--
+      후보 = 현재고(> 0, LOT 없음 — 1부) + 선입 기준 시각 + 꺼낼 수 있는 칸인가(avail_loc, 가용 정의 AvailSql — 아니면 LOCATION 으로 건너뜀).
+      선입 기준 = 그 키(위치 × 상태)의 원장을 시각순으로 더해 잔량이 마지막으로 0 이하이던 행 **뒤의** 첫 입고 시각
+      (지금 남은 물건이 들어오기 시작한 때). 원장 순서 = (발생 시각, 원장 id)
+    -->
+    <select id="findCandidates" resultType="io.smarthappy.module.wms.alloc.AllocDtos$CandRow">
+        with recursive scope as (
+            select node_id, 1 as lv from mst_equip_hier where node_id = #{nodeId}
+            union all
+            select c.node_id, s.lv + 1 from scope s join mst_equip_hier c on c.parent_id = s.node_id where s.lv &lt; 20
+        ),
+        stock as (
+            select s.node_id, s.stock_status, s.lot_id, s.qty, (<include refid="io.smarthappy.module.wms.inv.AvailSql.availLoc"/>) as avail_loc,
+                   (<include refid="io.smarthappy.module.wms.inv.AvailSql.lotFree"/>) as lot_free
+              from inv_stock s
+             where s.item_id = #{itemId} and s.plant_cd = #{plantCd} and s.qty &gt; 0
+               <if test="nodeId != null">and s.node_id in (select node_id from scope)</if>
+        ),
+        led as (
+            select t.node_id, t.stock_status, t.lot_id, t.qty, t.occurred_at,
+                   row_number() over w as rn,
+                   sum(t.qty) over w as bal
+              from inv_trx t
+              join stock k on k.node_id = t.node_id and k.stock_status = t.stock_status and k.lot_id is not distinct from t.lot_id
+             where t.item_id = #{itemId}
+            window w as (partition by t.node_id, t.stock_status, t.lot_id order by t.occurred_at, t.trx_id)
+        ),
+        marks as (
+            select l.*, max(case when l.bal &lt;= 0 then l.rn end) over (partition by l.node_id, l.stock_status, l.lot_id) as last_zero
+              from led l
+        ),
+        fifo as (
+            select node_id, stock_status, lot_id, min(occurred_at) filter (where rn &gt; coalesce(last_zero, 0) and qty &gt; 0) as fifo_at
+              from marks group by node_id, stock_status, lot_id
+        )
+        select k.node_id, n.node_cd, wms_node_path(k.node_id) as path, coalesce(a.pick_seq, 0) as pick_seq, k.lot_id, lm.lot_no,
+               k.stock_status, k.qty, coalesce(lm.occurred_at, f.fifo_at) as fifo_at, k.avail_loc, k.lot_free
+          from stock k
+          join mst_equip_hier n on n.node_id = k.node_id
+          left join wms_loc_attr a on a.node_id = k.node_id
+          left join fifo f on f.node_id = k.node_id and f.stock_status = k.stock_status and f.lot_id is not distinct from k.lot_id
+          left join lot_master lm on lm.lot_id = k.lot_id
+         order by k.node_id, k.lot_id nulls first, k.stock_status
+    </select>
+</mapper>

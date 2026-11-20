@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  납품서 인쇄 (srm-asn-print) — SRM 2부 R3a (docs/31 4.11). ASN 화면에서 ?asnId= 로 연다(메뉴 없음). 브라우저 인쇄 → "PDF 로 저장".
+  스캔 키 ASN:{asn_no}(WMS 합의)를 글자로 크게 찍는다 — 바코드 그림은 공용 바코드 라이브러리를 정할 때(하위 세션은 vendor·의존성을 더하지 않음).
+  인쇄할 때는 도구 막대를 숨긴다(공통 CSS 를 고치지 않으려고 hidden 으로).
+-->
+<body class="hb-page hb-page-scroll" th:data-prog="${prog.progCd}">
+<link rel="stylesheet" th:href="@{/css/views/srm.css}">
+<div class="hb-toolbar" id="printBar">
+    <button type="button" id="printBtn" th:text="#{srm.asnPrint.print}">인쇄</button>
+    <span id="msg" class="hb-msg" role="status"></span>
+</div>
+<h1 id="docTitle" th:text="#{srm.asnPrint.title}">납품서</h1>
+<p id="scanKey" class="hb-wide srm-scan-key"></p>
+<dl id="docInfo" class="hb-form"></dl>
+<table class="hb-cmp-table" id="docLines">
+    <thead><tr>
+        <th th:text="#{srm.asnPrint.col.no}">행</th>
+        <th th:text="#{srm.asnPrint.col.po}">발주 · 행</th>
+        <th th:text="#{srm.asnPrint.col.item}">품목</th>
+        <th th:text="#{srm.asnPrint.col.qty}">수량</th>
+        <th th:text="#{srm.asnPrint.col.lot}">공급사 LOT</th>
+        <th th:text="#{srm.asnPrint.col.expiry}">유통기한</th>
+        <th th:text="#{srm.asnPrint.col.pack}">포장</th>
+    </tr></thead>
+    <tbody></tbody>
+</table>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/views/srm/asn-print.js}"></script>
+</body>
+</html>

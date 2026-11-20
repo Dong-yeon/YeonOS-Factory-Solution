@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  월별 불량 수량 (docs/25 4.48 — DefectQtyQuery, QMS COPQ). 회사 조건은 RLS.
+  정정은 정정한 달에 음수로(사용자 결정 C-1 (라)): 원래 행·역분개 행을 걸러 내지 않고 각자 발생 시각의 달에 더한다 — 역분개 행(불량 줄도 음수)의
+  발생 시각은 정정 시각(V110 원장 규약). 같은 달 안 정정은 합이 0 이라 having 으로 빠진다.
+  기간은 [start, end) 시각(회사 시간대 월 경계, 서비스가 계산), 월 표시는 같은 시간대로 — DB 세션 시간대를 쓰지 않는다.
+  인덱스: 회사 전체 occurred_at 범위 인덱스는 없다(공정·설비별만) — 월 단위 보고용 조회라 RLS 로 거른 회사 행을 훑는다(docs/25 4.48 실행계획 메모).
+-->
+<mapper namespace="io.smarthappy.module.production.DefectQtyMapper">
+
+    <select id="monthly" resultType="io.smarthappy.module.production.DefectQtyMapper$Row">
+        select x.ym, x.item_id, x.kind, x.unit_cd, x.source, trim_scale(sum(x.qty)) as qty
+          from (
+                select to_char(r.occurred_at at time zone #{zone}, 'YYYY-MM') as ym, w.item_id, d.kind, r.unit_cd, 'RESULT' as source, d.qty
+                  from prd_result r
+                  join prd_result_defect d on d.result_id = r.result_id
+                  join prd_wo w on w.wo_id = r.wo_id
+                 where r.occurred_at &gt;= #{start} and r.occurred_at &lt; #{end}
+                   <if test="plantCd != null">and w.plant_cd = #{plantCd}</if>
+                union all
+                select to_char(k.occurred_at at time zone #{zone}, 'YYYY-MM'), w.item_id, 'SCRAP', k.unit_cd, 'REWORK', k.scrap_qty
+                  from prd_rework k
+                  join prd_wo w on w.wo_id = k.wo_id
+                 where k.scrap_qty &lt;&gt; 0
+                   and k.occurred_at &gt;= #{start} and k.occurred_at &lt; #{end}
+                   <if test="plantCd != null">and w.plant_cd = #{plantCd}</if>
+               ) x
+         group by x.ym, x.item_id, x.kind, x.unit_cd, x.source
+        having sum(x.qty) &lt;&gt; 0
+         order by x.ym, x.item_id, x.source, x.kind, x.unit_cd
+    </select>
+</mapper>

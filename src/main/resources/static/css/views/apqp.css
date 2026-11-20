@@ -1,0 +1,98 @@
+/*
+ * APQP 화면 전용 (docs/41 A1 — PFMEA·AP 규칙표). 공통 page.css 를 고치지 않는다(docs/29 6장). 값은 tokens.css 의 의미 토큰만.
+ * 업무 화면 @media 폭은 작업 영역 기준 900(tokens.css 머리 표).
+ */
+.apqp-list, .apqp-detail { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.apqp-list[hidden], .apqp-detail[hidden] { display: none; }
+.apqp-scroll { overflow: auto; }
+.apqp-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-4); margin-bottom: var(--hb-space-4); }
+.apqp-head h2 { margin: 0; font-size: var(--hb-fs-lg); }
+.apqp-headform summary { cursor: pointer; margin: var(--hb-space-2) 0; color: var(--hb-text-muted); }
+.apqp-gap { flex: 1 1 auto; }
+
+/* 구조 트리 + 고른 요소 */
+.apqp-work { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr); gap: var(--hb-space-5); margin: var(--hb-space-4) 0; }
+.apqp-work[hidden] { display: none; }
+.apqp-work h3, .apqp-risk h3 { margin: 0 0 var(--hb-space-3); font-size: var(--hb-fs-md); }
+.apqp-work h4, .apqp-risk h4 { margin: var(--hb-space-5) 0 var(--hb-space-3); font-size: var(--hb-fs-sm); color: var(--hb-text-muted); }
+.apqp-tree, .apqp-node { min-width: 0; padding: var(--hb-space-4); border: 1px solid var(--hb-border); border-radius: var(--hb-radius-md);
+    background: var(--hb-bg-surface); }
+.apqp-tree-list, .apqp-tree-list ul { list-style: none; margin: 0; padding: 0; }
+.apqp-tree-list ul { padding-left: var(--hb-space-6); border-left: 1px solid var(--hb-border-subtle); margin-left: var(--hb-space-4); }
+.hb-page .apqp-tree-list button.apqp-node-btn { display: block; width: 100%; min-height: var(--hb-target-min); padding: var(--hb-space-2) var(--hb-space-3); text-align: left;
+    border: 1px solid transparent; border-radius: var(--hb-radius-sm); background: transparent; color: var(--hb-text); cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb-page .apqp-tree-list button.apqp-node-btn:hover { background: var(--hb-bg-subtle); }
+.hb-page .apqp-tree-list button.apqp-node-btn[aria-pressed="true"] { border-color: var(--hb-action); background: var(--hb-bg-subtle); font-weight: var(--hb-fw-semibold); }
+.apqp-kind { display: inline-block; min-width: 2.2em; padding: 0 var(--hb-space-2); border-radius: var(--hb-radius-sm); font-size: var(--hb-fs-xs);
+    background: var(--hb-bg-muted); color: var(--hb-text-muted); text-align: center; }
+.apqp-kind-FE { background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+.apqp-kind-FM { background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); }
+.apqp-kind-FC { background: var(--hb-status-info-bg); color: var(--hb-status-info-fg); }
+
+/* 기능 · 고장 */
+.apqp-func { padding: var(--hb-space-3) 0; border-bottom: 1px solid var(--hb-border-subtle); }
+.apqp-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); padding: var(--hb-space-1) 0; overflow-wrap: anywhere; }
+.apqp-fails { list-style: none; margin: 0; padding: 0 0 0 var(--hb-space-6); }
+.apqp-chip { display: inline-flex; align-items: center; gap: var(--hb-space-2); padding: 0 var(--hb-space-3); border: 1px solid var(--hb-border);
+    border-radius: var(--hb-radius-sm); font-size: var(--hb-fs-sm); background: var(--hb-bg-surface); }
+.apqp-small { min-height: 0; padding: 0 var(--hb-space-3); font-size: var(--hb-fs-sm); }
+.apqp-inline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); margin: var(--hb-space-3) 0; }
+.apqp-inline input:not(.apqp-rating) { flex: 1 1 220px; min-width: 0; }
+.apqp-inline select { max-width: 100%; min-width: 0; }
+.apqp-rating { width: 4em; text-align: right; }
+
+/* 위험 분석표 */
+.apqp-risk { margin-top: var(--hb-space-4); }
+.apqp-risk[hidden] { display: none; }
+.apqp-risk-table td { vertical-align: top; }
+.apqp-risk-table .apqp-fm, .apqp-risk-table .apqp-fe { min-width: 180px; background: var(--hb-bg-subtle); }
+.apqp-risk-table .apqp-fe .apqp-chip { margin: 0 var(--hb-space-2) var(--hb-space-2) 0; }
+
+/* AP 규칙표 */
+.apqp-rules td { white-space: nowrap; }
+.apqp-range { display: flex; align-items: center; gap: var(--hb-space-2); }
+.apqp-coverage { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); }
+
+/* 관리계획서 (A2) */
+.apqp-cp-lines { margin-top: var(--hb-space-4); }
+.apqp-cp-lines[hidden] { display: none; }
+.apqp-cp-lines h3, .apqp-gaps h3 { margin: 0 0 var(--hb-space-3); font-size: var(--hb-fs-md); }
+.apqp-cp-table td { vertical-align: top; overflow-wrap: anywhere; }
+.apqp-cp-table tbody tr { cursor: pointer; }
+.apqp-cp-table tbody tr:hover { background: var(--hb-bg-subtle); }
+.apqp-cp-table tbody tr[aria-selected="true"] { background: var(--hb-action-subtle); }
+.apqp-cp-table tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--hb-action); }
+.apqp-gaps ul { list-style: none; margin: 0; padding: 0; }
+.apqp-next { margin: 0; }
+.apqp-next[hidden] { display: none; }
+.apqp-num { width: 7em; text-align: right; }
+.apqp-compare[hidden] { display: none; }
+.apqp-compare h3 { margin: 0 0 var(--hb-space-3); font-size: var(--hb-fs-md); }
+#compareTable tbody tr[tabindex] { cursor: pointer; }
+
+@media (max-width: 900px) {
+    .apqp-work { grid-template-columns: minmax(0, 1fr); }
+}
+/* 재검토 표시 ②③ — 안내 머리 + ECO 한 줄씩 */
+.apqp-change-head { margin: 0; }
+.apqp-change-list { margin: var(--hb-space-2) 0 0; padding-left: 1.2em; overflow-wrap: anywhere; }
+
+/* 공정 흐름도 PFD(docs/41 13장 A5-1) — 세로 흐름, 그림 라이브러리 없이. 기호 모양은 우리 것(표준 기호 그림 복사 아님):
+   가공 = 둥근 칸, 검사 = 각진 칸, 외주 = 점선 칸, 포장 = 굵은 테두리 칸 */
+.apqp-flow { list-style: none; margin: 0; padding: 0; }
+.apqp-flow-step { position: relative; display: flex; gap: var(--hb-space-4); align-items: flex-start; padding: 0 0 var(--hb-space-5); }
+.apqp-flow-step:not(:last-child)::before { content: ""; position: absolute; left: 2.6em; top: 2.2em; bottom: 0; border-left: 2px solid var(--hb-border); }
+.apqp-sym { flex: 0 0 5.2em; min-height: 2.2em; display: inline-flex; align-items: center; justify-content: center; padding: 0 var(--hb-space-2);
+    font-size: var(--hb-fs-xs); background: var(--hb-bg-surface); border: 2px solid var(--hb-border); color: var(--hb-text); }
+.apqp-sym-PROCESS { border-radius: 999px; }
+.apqp-sym-INSPECT { border-radius: 0; border-color: var(--hb-action); }
+.apqp-sym-OUTSOURCE { border-radius: var(--hb-radius-sm); border-style: dashed; }
+.apqp-sym-PACK { border-radius: var(--hb-radius-sm); border-width: 4px; }
+.apqp-flow-body { display: flex; flex-direction: column; gap: var(--hb-space-2); min-width: 0; }
+.apqp-flow-chars { display: flex; flex-wrap: wrap; gap: var(--hb-space-2); }
+.apqp-flow-char { padding: 0 var(--hb-space-2); border-radius: var(--hb-radius-sm); background: var(--hb-bg-muted); font-size: var(--hb-fs-xs);
+    overflow-wrap: anywhere; }
+.apqp-flow-special { background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); font-weight: var(--hb-fw-semibold); }
+.apqp-flow-count { font-size: var(--hb-fs-xs); color: var(--hb-text-muted); }
+.apqp-flow-high { color: var(--hb-status-danger-fg); }

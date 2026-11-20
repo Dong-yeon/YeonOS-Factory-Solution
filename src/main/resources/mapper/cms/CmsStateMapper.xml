@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 2부 C7 — 상태 사유 관리(MES 표, 화면·API 만 CMS)·사후 사유·고장 작업지시 연결 (docs/33 11.2 C7). MES 원장은 읽기만 -->
+<mapper namespace="io.smarthappy.module.cms.CmsStateMapper">
+
+    <!-- ================================================================ 사유 -->
+
+    <sql id="reasonCols">
+        r.reason_id, r.reason_cd, r.reason_nm, r.state_cat, r.planned_yn, r.sort_no, r.use_yn, r.row_ver, r.updated_at, r.updated_by
+    </sql>
+
+    <!-- 목록·grid 공통 FROM·조건 -->
+    <sql id="reasonFromWhere">
+          from cms_state_reason r
+         <where>
+            <if test="keyword != null">and (r.reason_cd like #{keyword} escape '\' or r.reason_nm ilike #{keyword} escape '\')</if>
+            <if test="stateCat != null">and r.state_cat = #{stateCat}</if>
+            <if test="useYn != null">and r.use_yn = #{useYn}</if>
+         </where>
+    </sql>
+
+    <select id="findReasons" resultType="io.smarthappy.module.cms.CmsStateDtos$ReasonRow">
+        select <include refid="reasonCols"/>
+        <include refid="reasonFromWhere"/>
+         order by r.state_cat, r.sort_no, r.reason_cd
+         limit 1000
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findReasonPage" resultType="io.smarthappy.module.cms.CmsStateDtos$ReasonRow">
+        select <include refid="reasonCols"/>
+        <include refid="reasonFromWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'REASON_CD'">r.reason_cd</when>
+                <when test="s.key == 'REASON_NM'">r.reason_nm</when>
+                <when test="s.key == 'PLANNED'">r.planned_yn</when>
+                <when test="s.key == 'SORT_NO'">r.sort_no</when>
+                <when test="s.key == 'USE_YN'">r.use_yn</when>
+                <otherwise>r.state_cat</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         r.reason_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countReasons" resultType="long">
+        select count(*) <include refid="reasonFromWhere"/>
+    </select>
+
+    <select id="findReason" resultType="io.smarthappy.module.cms.CmsStateDtos$ReasonRow">
+        select <include refid="reasonCols"/> from cms_state_reason r where r.reason_id = #{reasonId}
+    </select>
+
+    <select id="findReasonByCd" resultType="io.smarthappy.module.cms.CmsStateDtos$ReasonRow">
+        select <include refid="reasonCols"/> from cms_state_reason r where r.reason_cd = #{reasonCd}
+    </select>
+
+    <select id="lockReason" resultType="java.lang.Long">
+        select reason_id from cms_state_reason where reason_id = #{reasonId} for update
+    </select>
+
+    <select id="insertReason" resultType="long" flushCache="true">
+        insert into cms_state_reason (comp_cd, reason_cd, reason_nm, state_cat, planned_yn, sort_no, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{r.reasonCd}, #{r.reasonNm}, #{r.stateCat}, #{r.plannedYn}, #{r.sortNo}, #{r.useYn}, #{by}, #{by})
+        returning reason_id
+    </select>
+
+    <update id="updateReason">
+        update cms_state_reason
+           set reason_nm = #{r.reasonNm}, planned_yn = #{r.plannedYn}, sort_no = #{r.sortNo}, use_yn = #{r.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where reason_id = #{r.reasonId} and row_ver = #{r.rowVer}
+    </update>
+
+    <!-- ================================================================ 검토 -->
+
+    <sql id="reviewCols">
+        s.state_log_id, s.equip_id, e.equip_cd, e.equip_nm, e.plant_cd, s.state_cat, coalesce(nr.state_cat, s.state_cat) as eff_cat,
+        lr.reason_cd as log_reason_cd, lr.reason_nm as log_reason_nm,
+        n.note_id, nr.reason_cd as note_reason_cd, nr.reason_nm as note_reason_nm, nr.planned_yn as note_planned_yn, n.note_text,
+        n.recorded_by as note_by, n.recorded_at as note_at,
+        s.start_at, s.end_at, w.wo_no, s.source,
+        d.link_id, m.mwo_id, m.mwo_no, m.status as mwo_status, m.down_start_at as mwo_down_start_at, m.down_end_at as mwo_down_end_at
+    </sql>
+
+    <sql id="reviewFrom">
+          from cms_equip_state_log s
+          join mst_equip e on e.equip_id = s.equip_id
+          left join cms_state_reason lr on lr.reason_id = s.reason_id
+          left join prd_wo w on w.wo_id = s.wo_id
+          left join cms_state_note n on n.state_log_id = s.state_log_id and n.void_yn = 'N'
+          left join cms_state_reason nr on nr.reason_id = n.reason_id
+          left join cms_mwo_down d on d.state_log_id = s.state_log_id and d.void_yn = 'N'
+          left join cms_mwo m on m.mwo_id = d.mwo_id
+    </sql>
+
+    <!-- [from, to) 과 겹치는 구간(열린 구간 포함). pending = 원장 사유·사후 사유가 모두 없는 정지·대기 구간(PRD·UNKNOWN 제외) -->
+    <sql id="reviewWhere">
+         where e.plant_cd = #{plantCd} and s.start_at &lt; #{to} and (s.end_at is null or s.end_at &gt; #{from})
+            <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\')</if>
+            <if test="effCat != null">and coalesce(nr.state_cat, s.state_cat) = #{effCat}</if>
+            <if test="pending">and s.reason_id is null and n.note_id is null and s.state_cat not in ('PRD', 'UNKNOWN')</if>
+            <!-- 실효 사유(사후 사유 우선) — 대시보드 비가동 Pareto(CmsDashMapper.losses)와 같은 식(docs/51 C4 드릴다운) -->
+            <if test="reasonCd != null">and coalesce(nr.reason_cd, lr.reason_cd) = #{reasonCd}</if>
+    </sql>
+
+    <select id="findReview" resultType="io.smarthappy.module.cms.CmsStateDtos$ReviewRow">
+        select <include refid="reviewCols"/>
+        <include refid="reviewFrom"/>
+        <include refid="reviewWhere"/>
+         order by s.start_at desc, s.state_log_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK. 분(계산)·사유(원장/사후 중 하나)는 정렬 밖 -->
+    <select id="findReviewPage" resultType="io.smarthappy.module.cms.CmsStateDtos$ReviewRow">
+        select <include refid="reviewCols"/>
+        <include refid="reviewFrom"/>
+        <include refid="reviewWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'EQUIP_CD'">e.equip_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'EFF_CAT'">coalesce(nr.state_cat, s.state_cat)<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'END_AT'">s.end_at<if test="s.desc"> desc nulls last</if></when>
+                <when test="s.key == 'MWO_NO'">m.mwo_no<if test="s.desc"> desc nulls last</if></when>
+                <otherwise>s.start_at<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         s.state_log_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countReview" resultType="long">
+        select count(*) <include refid="reviewFrom"/> <include refid="reviewWhere"/>
+    </select>
+
+    <select id="findReviewRow" resultType="io.smarthappy.module.cms.CmsStateDtos$ReviewRow">
+        select <include refid="reviewCols"/>
+        <include refid="reviewFrom"/>
+         where s.state_log_id = #{stateLogId}
+    </select>
+
+    <select id="findInterval" resultType="io.smarthappy.module.cms.CmsStateDtos$IntervalRef">
+        select s.state_log_id, s.equip_id, e.plant_cd, s.state_cat, s.start_at, s.end_at
+          from cms_equip_state_log s join mst_equip e on e.equip_id = s.equip_id
+         where s.state_log_id = #{stateLogId}
+    </select>
+
+    <select id="findNotes" resultType="io.smarthappy.module.cms.CmsStateDtos$NoteRow">
+        select n.note_id, r.reason_cd, r.reason_nm, r.state_cat, n.note_text, n.recorded_at, n.recorded_by,
+               n.void_yn, n.void_reason, n.voided_by, n.voided_at
+          from cms_state_note n join cms_state_reason r on r.reason_id = n.reason_id
+         where n.state_log_id = #{stateLogId}
+         order by n.note_id desc
+    </select>
+
+    <select id="findLinks" resultType="io.smarthappy.module.cms.CmsStateDtos$LinkRow">
+        select d.link_id, m.mwo_id, m.mwo_no, m.title, m.status, m.down_start_at, m.down_end_at, d.recorded_at, d.recorded_by,
+               d.void_yn, d.void_reason, d.voided_by, d.voided_at
+          from cms_mwo_down d join cms_mwo m on m.mwo_id = d.mwo_id
+         where d.state_log_id = #{stateLogId}
+         order by d.link_id desc
+    </select>
+
+    <select id="mwoOptions" resultType="io.smarthappy.module.cms.CmsStateDtos$MwoOption">
+        select m.mwo_id, m.mwo_no, m.title, m.status, m.reported_at, m.down_start_at, m.down_end_at
+          from cms_mwo m
+         where m.equip_id = #{equipId} and m.mwo_type = 'BM' and m.status &lt;&gt; 'CANCELLED'
+           and m.reported_at &gt;= #{from} and m.reported_at &lt; #{to}
+         order by m.reported_at desc, m.mwo_id desc
+         limit #{limit}
+    </select>
+
+    <select id="insertNote" resultType="long" flushCache="true">
+        insert into cms_state_note (comp_cd, state_log_id, reason_id, note_text, recorded_by)
+        values (hb_current_comp(), #{stateLogId}, #{reasonId}, #{noteText}, #{by})
+        returning note_id
+    </select>
+
+    <update id="voidNote">
+        update cms_state_note
+           set void_yn = 'Y', void_reason = #{reason}, voided_by = #{by}, voided_at = now()
+         where note_id = #{noteId} and state_log_id = #{stateLogId} and void_yn = 'N'
+    </update>
+
+    <select id="insertLink" resultType="long" flushCache="true">
+        insert into cms_mwo_down (comp_cd, mwo_id, state_log_id, recorded_by)
+        values (hb_current_comp(), #{mwoId}, #{stateLogId}, #{by})
+        returning link_id
+    </select>
+
+    <update id="voidLink">
+        update cms_mwo_down
+           set void_yn = 'Y', void_reason = #{reason}, voided_by = #{by}, voided_at = now()
+         where link_id = #{linkId} and state_log_id = #{stateLogId} and void_yn = 'N'
+    </update>
+
+    <!-- ================================================================ 작업지시 상세(C11) -->
+
+    <select id="mwoDowns" resultType="io.smarthappy.module.cms.CmsStateDtos$MwoDownRow">
+        select s.state_log_id, s.state_cat, coalesce(nr.state_cat, s.state_cat) as eff_cat, s.start_at, s.end_at,
+               coalesce(nr.reason_cd, lr.reason_cd) as reason_cd, coalesce(nr.reason_nm, lr.reason_nm) as reason_nm
+          from cms_mwo_down d
+          join cms_equip_state_log s on s.state_log_id = d.state_log_id
+          left join cms_state_reason lr on lr.reason_id = s.reason_id
+          left join cms_state_note n on n.state_log_id = s.state_log_id and n.void_yn = 'N'
+          left join cms_state_reason nr on nr.reason_id = n.reason_id
+         where d.mwo_id = #{mwoId} and d.void_yn = 'N'
+         order by s.start_at
+    </select>
+
+    <select id="mwoAlarms" resultType="io.smarthappy.module.cms.CmsStateDtos$MwoAlarmRow">
+        select l.alarm_id, l.alarm_cd, l.alarm_text, l.raised_at, l.cleared_at
+          from cms_alarm_log l
+         where l.mwo_id = #{mwoId}
+         order by l.raised_at
+    </select>
+</mapper>

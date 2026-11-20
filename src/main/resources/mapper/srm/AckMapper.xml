@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 납기 회신 (SRM S5, docs/31 4.5) — 회사 범위는 RLS, 쓰기의 comp_cd 는 hb_current_comp().
+     유효 회신 = 발주 지금 개정(p.rev)의 가장 큰 순번 -->
+<mapper namespace="io.smarthappy.module.srm.ack.AckMapper">
+
+    <!-- p 별칭 필요: 유효 회신 묶음 -->
+    <sql id="validAck">
+        left join lateral (select a.ack_id, a.ack_seq, a.ack_status, a.ack_on from srm_po_ack a
+                            where a.po_id = p.po_id and a.rev = p.rev order by a.ack_seq desc limit 1) va on true
+    </sql>
+
+    <sql id="poCols">
+        p.po_id, p.po_no, p.rev, p.po_date, c.cust_cd, c.cust_nm, p.status, p.issued_at, p.currency_cd,
+        trim_scale(p.total_amt)::text as total_amt, p.row_ver,
+        (select count(*) from srm_po_line l where l.po_id = p.po_id) as line_cnt,
+        va.ack_seq, va.ack_status, va.ack_on,
+        (p.issued_at at time zone #{zone})::date + #{dueDays} as ack_due_date
+    </sql>
+
+    <!-- 목록·grid 공통 FROM·조건(c = AckCrit) — 발주일 기간 필수, 발행한 적 있는 발주만 -->
+    <sql id="posMatched">
+          from srm_po p
+          join mst_cust c on c.cust_id = p.cust_id
+          <include refid="validAck"/>
+         where p.po_date between #{c.from} and #{c.to}
+           and p.issued_at is not null
+        <choose>
+            <when test="c.state == 'OPEN'">and p.status in ('ISSUED', 'ACKED')</when>
+            <when test="c.state == 'NO_ACK'">and p.status in ('ISSUED', 'ACKED') and (va.ack_id is null or va.ack_status = 'REJECTED')</when>
+            <when test="c.state == 'ACKED'">and p.status in ('ISSUED', 'ACKED') and va.ack_status in ('ACCEPTED', 'PARTIAL')</when>
+        </choose>
+        <if test="c.keywordLike != null">
+           and (p.po_no ilike #{c.keywordLike} escape '\' or c.cust_cd ilike #{c.keywordLike} escape '\' or c.cust_nm ilike #{c.keywordLike} escape '\')
+        </if>
+    </sql>
+    <!-- poCols 의 #{zone}·#{dueDays} 를 조건 객체에서(목록·grid) -->
+    <sql id="poColsC">
+        p.po_id, p.po_no, p.rev, p.po_date, c.cust_cd, c.cust_nm, p.status, p.issued_at, p.currency_cd,
+        trim_scale(p.total_amt)::text as total_amt, p.row_ver,
+        (select count(*) from srm_po_line l where l.po_id = p.po_id) as line_cnt,
+        va.ack_seq, va.ack_status, va.ack_on,
+        (p.issued_at at time zone #{c.zone})::date + #{c.dueDays} as ack_due_date
+    </sql>
+
+    <select id="findPos" resultType="io.smarthappy.module.srm.ack.AckDtos$AckPoRow">
+        select <include refid="poColsC"/>
+        <include refid="posMatched"/>
+         order by p.po_date desc, p.po_id desc
+         limit 2000
+    </select>
+
+    <!-- grid(UI 단계 3 ①, docs/31 5.2) — 정렬은 허용 목록 enum 이름으로만 고른다(문자열 치환 없이), 마지막에 PK.
+         회신 기한 = 발행일 + 같은 일수라 발행 시각 순서와 같다 -->
+    <select id="findPosPage" resultType="io.smarthappy.module.srm.ack.AckDtos$AckPoRow">
+        select <include refid="poColsC"/>
+        <include refid="posMatched"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PO_NO'">p.po_no</when>
+                <when test="s.key == 'SUPPLIER'">c.cust_nm</when>
+                <when test="s.key == 'ISSUED_AT' or s.key == 'ACK_DUE'">p.issued_at is null, p.issued_at</when>
+                <when test="s.key == 'ACK_STATUS'">va.ack_status is null, va.ack_status</when>
+                <when test="s.key == 'STATUS'">p.status</when>
+                <otherwise>p.po_date</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         p.po_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countPos" resultType="long">
+        select count(*) <include refid="posMatched"/>
+    </select>
+
+    <select id="findPo" resultType="io.smarthappy.module.srm.ack.AckDtos$AckPoRow">
+        select <include refid="poCols"/>
+          from srm_po p
+          join mst_cust c on c.cust_id = p.cust_id
+          <include refid="validAck"/>
+         where p.po_id = #{poId}
+    </select>
+
+    <select id="findPoLines" resultType="io.smarthappy.module.srm.ack.AckDtos$AckPoLine">
+        select l.po_line_id, l.line_no, i.item_cd, l.item_nm, l.supplier_item_cd, l.unit_cd, trim_scale(l.qty)::text as qty,
+               trim_scale(l.qty - l.cancel_qty - l.recv_qty)::text as open_qty, l.due_date, l.line_status,
+               trim_scale(pr.qty)::text as promised_qty, pr.first_date as promised_first, pr.last_date as promised_last
+          from srm_po_line l
+          join srm_po p on p.po_id = l.po_id
+          join mst_item i on i.item_id = l.item_id
+          <include refid="validAck"/>
+          left join lateral (select sum(al.promised_qty) as qty, min(al.promised_date) as first_date, max(al.promised_date) as last_date
+                               from srm_po_ack_line al where al.ack_id = va.ack_id and al.po_line_id = l.po_line_id) pr on true
+         where l.po_id = #{poId}
+         order by l.line_no
+    </select>
+
+    <select id="findAcks" resultType="io.smarthappy.module.srm.ack.AckDtos$AckRow">
+        select a.ack_id, a.ack_seq, a.rev, a.source, a.ack_status, a.reject_reason, a.ack_by_nm, a.ack_on, a.remark,
+               a.created_at, a.created_by,
+               (a.rev = p.rev and a.ack_seq = (select max(x.ack_seq) from srm_po_ack x where x.po_id = p.po_id and x.rev = p.rev)) as valid,
+               a.rev &lt; p.rev as old_rev
+          from srm_po_ack a join srm_po p on p.po_id = a.po_id
+         where a.po_id = #{poId}
+         order by a.ack_seq desc
+    </select>
+
+    <select id="findAckLines" resultType="io.smarthappy.module.srm.ack.AckDtos$AckLineRow">
+        select al.ack_line_id, al.ack_id, al.po_line_id, l.line_no, i.item_cd, al.promised_date,
+               trim_scale(al.promised_qty)::text as promised_qty, al.remark
+          from srm_po_ack_line al
+          join srm_po_ack a on a.ack_id = al.ack_id
+          join srm_po_line l on l.po_line_id = al.po_line_id
+          join mst_item i on i.item_id = l.item_id
+         where a.po_id = #{poId}
+         order by a.ack_seq desc, l.line_no, al.promised_date
+    </select>
+
+    <!-- ================================================================ 저장 -->
+
+    <!-- 발주 머리를 FOR UPDATE 로 잠근 뒤 부른다(같은 발주 동시 회신은 순서대로) — 유일 (comp, po, seq) 가 뒤를 받친다 -->
+    <select id="nextSeq" resultType="int" flushCache="true">
+        select coalesce(max(ack_seq), 0) + 1 from srm_po_ack where po_id = #{poId}
+    </select>
+
+    <select id="insertAck" resultType="long" flushCache="true">
+        insert into srm_po_ack (comp_cd, po_id, rev, ack_seq, source, ack_status, reject_reason, ack_by_nm, ack_on, remark,
+                                import_job_id, created_by)
+        values (hb_current_comp(), #{poId}, #{rev}, #{seq}, #{source}, #{status}, #{rejectReason}, #{ackByNm}, #{ackOn}, #{remark},
+                #{jobId}, #{by})
+        returning ack_id
+    </select>
+
+    <insert id="insertAckLine">
+        insert into srm_po_ack_line (comp_cd, ack_id, po_line_id, promised_date, promised_qty, remark, created_by)
+        values (hb_current_comp(), #{ackId}, #{poLineId}, #{promisedDate}, #{promisedQty}, #{remark}, #{by})
+    </insert>
+
+    <select id="ackCheck" resultType="io.smarthappy.module.srm.ack.AckDtos$AckCheck" flushCache="true">
+        select l.line_no, l.qty - l.cancel_qty - l.recv_qty as open_qty, coalesce(s.qty, 0) as promised, l.due_date, s.last_date
+          from srm_po_ack a
+          join srm_po_line l on l.po_id = a.po_id and l.line_status = 'OPEN' and l.qty - l.cancel_qty - l.recv_qty &gt; 0
+          left join lateral (select sum(al.promised_qty) as qty, max(al.promised_date) as last_date
+                               from srm_po_ack_line al where al.ack_id = a.ack_id and al.po_line_id = l.po_line_id) s on true
+         where a.ack_id = #{ackId}
+         order by l.line_no
+    </select>
+
+    <update id="setAckStatus">
+        update srm_po_ack set ack_status = #{status} where ack_id = #{ackId} and ack_status &lt;&gt; #{status}
+    </update>
+
+    <update id="changePoState">
+        update srm_po
+           set status = #{to}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where po_id = #{poId} and status = #{from}
+    </update>
+
+    <!-- ================================================================ 엑셀 회신 -->
+
+    <select id="findPoRef" resultType="io.smarthappy.module.srm.ack.AckDtos$PoRef">
+        select p.po_id, p.po_no, p.rev, p.status, c.cust_cd, p.po_date
+          from srm_po p join mst_cust c on c.cust_id = p.cust_id
+         where p.po_no = #{poNo}
+    </select>
+
+    <select id="findPoLineRef" resultType="io.smarthappy.module.srm.ack.AckDtos$PoLineRef">
+        select po_line_id, line_no, unit_cd, qty - cancel_qty - recv_qty as open_qty, line_status
+          from srm_po_line where po_id = #{poId} and line_no = #{lineNo}
+    </select>
+
+    <select id="countAckLines" resultType="long" flushCache="true">
+        select count(*) from srm_po_ack_line
+    </select>
+
+    <!-- ================================================================ 진행 현황 -->
+
+    <!-- 진행 현황 목록·grid 공통(c = StatusCrit): 열린 발주 행 + 계산 칸(기한 지남·늦음·임박) → x, 보기 조건까지 -->
+    <sql id="statusMatched">
+        select * from (
+            select l.po_line_id, p.po_id, p.po_no, p.rev, p.po_date, c.cust_cd, c.cust_nm, p.status, l.line_no, i.item_cd, l.item_nm, l.unit_cd,
+                   trim_scale(l.qty - l.cancel_qty - l.recv_qty)::text as open_qty, trim_scale(l.recv_qty)::text as recv_qty,
+                   l.due_date, va.ack_status,
+                   (p.issued_at at time zone #{c.zone})::date + #{c.dueDays} as ack_due_date,
+                   trim_scale(pr.qty)::text as promised_qty, pr.first_date as promised_first, pr.last_date as promised_last,
+                   ((va.ack_id is null or va.ack_status = 'REJECTED') and #{c.today} &gt; (p.issued_at at time zone #{c.zone})::date + #{c.dueDays}) as overdue,
+                   pr.last_date - l.due_date as late_days,
+                   l.due_date - #{c.today}::date as due_in_days
+              from srm_po p
+              join mst_cust c on c.cust_id = p.cust_id
+              join srm_po_line l on l.po_id = p.po_id and l.line_status = 'OPEN' and l.qty - l.cancel_qty - l.recv_qty &gt; 0
+              join mst_item i on i.item_id = l.item_id
+              <include refid="validAck"/>
+              left join lateral (select sum(al.promised_qty) as qty, min(al.promised_date) as first_date, max(al.promised_date) as last_date
+                                   from srm_po_ack_line al where al.ack_id = va.ack_id and al.po_line_id = l.po_line_id) pr on true
+             where p.po_date between #{c.from} and #{c.to}
+               and p.status in ('ISSUED', 'ACKED', 'PARTIAL_RECEIVED')
+            <if test="c.custCd != null">and c.cust_cd = #{c.custCd}</if>
+            <if test="c.keywordLike != null">
+               and (p.po_no ilike #{c.keywordLike} escape '\' or c.cust_nm ilike #{c.keywordLike} escape '\'
+                    or i.item_cd ilike #{c.keywordLike} escape '\' or l.item_nm ilike #{c.keywordLike} escape '\')
+            </if>
+        ) x
+        <choose>
+            <when test="c.view == 'NO_ACK'">where x.overdue</when>
+            <when test="c.view == 'LATE'">where x.late_days &gt; 0</when>
+            <when test="c.view == 'DUE_SOON'">where x.due_in_days &lt;= #{c.soonDays}</when>
+        </choose>
+    </sql>
+
+    <select id="findStatus" resultType="io.smarthappy.module.srm.ack.AckDtos$StatusRow">
+        <include refid="statusMatched"/>
+         order by x.due_date, x.po_no, x.line_no
+         limit 2000
+    </select>
+
+    <!-- 진행 현황 grid(UI 단계 3 ①, docs/31 5.2) — 정렬은 허용 목록 enum 이름으로만, 마지막에 PK(발주 행) -->
+    <select id="findStatusPage" resultType="io.smarthappy.module.srm.ack.AckDtos$StatusRow">
+        <include refid="statusMatched"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PO_NO'">x.po_no</when>
+                <when test="s.key == 'SUPPLIER'">x.cust_nm</when>
+                <when test="s.key == 'LINE_NO'">x.line_no</when>
+                <when test="s.key == 'ITEM'">x.item_cd</when>
+                <when test="s.key == 'ACK_STATUS'">x.ack_status is null, x.ack_status</when>
+                <when test="s.key == 'PROMISED_LAST'">x.promised_last is null, x.promised_last</when>
+                <when test="s.key == 'LATE_DAYS'">x.late_days is null, x.late_days</when>
+                <otherwise>x.due_date</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         x.po_line_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countStatus" resultType="long">
+        select count(*) from (<include refid="statusMatched"/>) n
+    </select>
+</mapper>

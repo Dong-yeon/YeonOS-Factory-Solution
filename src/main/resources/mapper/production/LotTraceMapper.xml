@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  LOT 계보 추적 계약 (docs/25 4.49 — LotTraceQuery, WMS 출하 추적). 회사 조건은 RLS.
+  사무 LOT 추적(LotMapper.trace)과 같은 규칙: 살아 있는 계보만(LotMapper.live — 역분개 행·역분개된 원래 행 제외),
+  같은 (부모, 자식, 종류) 여러 행은 UNION 이 한 줄로, 경로에 이미 있는 LOT 은 cycle 로 표시하고 멈춘다. 여러 루트를 한 번에(root 칸).
+  인덱스: 부모 쪽 ix_lot_genealogy_parent·자식 쪽 ix_lot_genealogy_child(LotMapper.trace 와 같은 경로).
+-->
+<mapper namespace="io.smarthappy.module.production.LotTraceMapper">
+
+    <sql id="from"><choose><when test="back">g.child_lot_id</when><otherwise>g.parent_lot_id</otherwise></choose></sql>
+    <sql id="to"><choose><when test="back">g.parent_lot_id</when><otherwise>g.child_lot_id</otherwise></choose></sql>
+
+    <select id="trace" resultType="io.smarthappy.module.production.link.LotTraceQuery$TraceRow">
+        with recursive t (root_lot_id, depth, lot_id, via_lot_id, rel_type, path, cyc) as (
+            select m.lot_id, 0, m.lot_id, null::bigint, null::varchar, array[m.lot_id], false
+              from lot_master m
+             where m.lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+            union
+            select t.root_lot_id, t.depth + 1, <include refid="to"/>, t.lot_id, g.rel_type, t.path || <include refid="to"/>,
+                   <include refid="to"/> = any(t.path)
+              from t
+              join lot_genealogy g on <include refid="from"/> = t.lot_id
+             where not t.cyc and t.depth &lt; #{depth} and <include refid="io.smarthappy.module.production.LotMapper.live"/>
+        ),
+        capped as (select * from t limit #{limit})
+        select c.root_lot_id, c.lot_id, c.depth, c.via_lot_id, c.rel_type, c.cyc as cycle
+          from capped c
+         order by c.root_lot_id, c.path, c.rel_type nulls first
+    </select>
+
+    <select id="more" resultType="boolean">
+        select exists (
+            select 1 from lot_genealogy g
+             where <include refid="from"/> in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+               and <include refid="io.smarthappy.module.production.LotMapper.live"/>)
+    </select>
+</mapper>

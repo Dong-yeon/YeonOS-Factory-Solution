@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<!--
+  모바일 웹앱 /m 공통 조각 (docs/74). 화면 템플릿은
+    <head th:replace="~{m/layout :: head(#{m.tab.home})}"></head>
+    <body class="hb-m" th:data-today="${today}">
+      <header th:replace="~{m/layout :: header(#{m.tab.home})}"></header>
+      <main class="m-main"> … </main>
+      <nav th:replace="~{m/layout :: tabs}"></nav>
+      <th:block th:replace="~{m/layout :: scripts}"></th:block> (화면 JS 는 그 뒤)
+  모델 값(MobilePageController.shell): mUser · can · tabs · activeTab · today.
+  사무 셸(/main)과 달리 탭·iframe 이 없다 — 고정 화면 몇 개를 아래 탭으로 오간다. 탭은 권한이 있는 것만(판정은 API).
+-->
+<head th:fragment="head(title)">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title th:text="|${title} - #{m.title}|">YeonOS 모바일</title>
+    <link rel="icon" type="image/svg+xml" th:href="@{/images/yeonos-mark.svg}">
+    <link rel="manifest" th:href="@{/m/manifest.webmanifest}">
+    <link rel="apple-touch-icon" th:href="@{/images/pwa/apple-touch-icon-180.png}">
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/css/tip.css}">
+    <link rel="stylesheet" th:href="@{/css/m.css}">
+</head>
+<body>
+<header th:fragment="header(title)" class="m-head">
+    <a class="m-brand" th:href="@{/m}" th:attr="aria-label=#{m.tab.home}"><img th:src="@{/images/yeonos-mark.svg}" alt="" width="24" height="24"></a>
+    <h1 th:text="${title}">홈</h1>
+    <span id="mNet" class="m-net" role="status" hidden th:text="#{m.offline}">오프라인</span>
+</header>
+<nav th:fragment="tabs" class="m-tabs" th:attr="aria-label=#{m.tabs}">
+    <ul>
+        <li th:each="t : ${tabs}">
+            <a th:href="@{${t.path}}" th:text="#{${t.labelKey}}" th:attr="aria-current=${t.code == activeTab ? 'page' : null}">탭</a>
+        </li>
+    </ul>
+</nav>
+<th:block th:fragment="scripts">
+    <script th:src="@{/js/common/hb.js}"></script>
+    <script th:src="@{/js/common/hb.tip.js}"></script>
+    <script th:src="@{/js/common/hb.text.js}"></script>
+    <script th:src="@{/js/common/hb.dialog.js}"></script>
+    <script th:src="@{/js/common/hb.pwa.js}"></script>
+    <script th:src="@{/js/views/m/m-common.js}"></script>
+</th:block>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  회사 정보 (sys-comp) — 시스템관리 2단계 (docs/36 9.5). 회사 이름·연락처·기본 언어·시간대.
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자(WEB). 도입 때 한 번.
+  예외 = 시간대는 작업일·채번 날짜·근무조 판정 기준이라 관리자 그룹만 + 확인 필수(Q9). 상태·사용 여부는 운영자만(여기 없음).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">회사 정보</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<section class="hb-narrow">
+    <div class="hb-toolbar">
+        <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+    </div>
+    <form id="compForm" class="hb-form" autocomplete="off">
+        <label><span th:text="#{sysComp.col.compCd}">회사코드</span>
+            <output id="compCd" class="hb-output"></output></label>
+        <label><span th:text="#{sysComp.col.compNm}">회사명</span>
+            <input data-field="compNm" maxlength="100" required></label>
+        <label><span th:text="#{sysComp.col.compEnNm}">영문명</span>
+            <input data-field="compEnNm" maxlength="100"></label>
+        <label><span th:text="#{sysComp.col.bizNo}">사업자번호</span>
+            <input data-field="bizNo" maxlength="12" inputmode="numeric"></label>
+        <label><span th:text="#{sysComp.col.ceoNm}">대표자</span>
+            <input data-field="ceoNm" maxlength="50"></label>
+        <label><span th:text="#{sysComp.col.telNo}">전화</span>
+            <input data-field="telNo" maxlength="30" inputmode="tel"></label>
+        <label class="hb-wide"><span th:text="#{sysComp.col.addr}">주소</span>
+            <input data-field="addr" maxlength="300"></label>
+        <label><span th:text="#{sysComp.col.localeCd}">기본 언어</span>
+            <select data-field="localeCd">
+                <option value="ko" th:text="#{myInfo.locale.ko}">한국어</option>
+                <option value="en" th:text="#{myInfo.locale.en}">English</option>
+            </select></label>
+        <label><span th:text="#{sysComp.col.timeZone}">시간대</span>
+            <select data-field="timeZone" data-help-key="sys-comp.timeZone"></select></label>
+        <label class="hb-check hb-wide" id="tzConfirmRow" hidden><input type="checkbox" id="confirmTz">
+            <span th:text="#{sysComp.confirmTz}">시간대를 바꾸면 작업일·채번 날짜·근무조 판정 기준이 바뀝니다. 확인했습니다.</span></label>
+    </form>
+    <p id="tzNote" class="hb-muted"></p>
+    <p id="updated" class="hb-muted"></p>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/comp-mgt.js}"></script>
+</body>
+</html>

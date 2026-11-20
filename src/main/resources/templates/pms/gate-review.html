@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  게이트 심사 (pms-gate) — PMS 3단계 (docs/32 PM3, D11).
+  프로젝트 → 게이트 목록(준비율·마지막 심사) → 심사: 이 게이트의 필수 산출물 현황 + 점검표 + 결정(통과·조건부 통과·불합격) + 결재 상신.
+  통과는 필수 산출물이 모두 승인·면제여야 상신된다. 조건부 통과의 조건은 결정될 때 이슈로 만들어진다. 결정 뒤에는 고칠 수 없다.
+-->
+<body data-table-menu="" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/pms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">게이트 심사</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{pms.keyword}">번호·이름·고객·품번</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{pms.col.status}">상태</legend>
+        <label><input type="radio" name="status" value="OPEN" checked><span th:text="#{pms.status.OPEN}">진행 중</span></label>
+        <label><input type="radio" name="status" value=""><span th:text="#{common.all}">전체</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+<!-- 프로젝트 고르기 = hb.grid(docs/40 §10.2 D1, 서버 페이징·정렬). 행을 누르거나 Enter → 아래 상세 -->
+<div id="projGrid" class="hb-grid-host pms-tmpl-grid"></div>
+
+<div class="hb-split" id="detailView" hidden>
+    <section class="hb-split-main">
+        <div class="pms-head"><h2 id="projTitle"></h2></div>
+        <div class="hb-replace-host pms-gate-list">
+            <table class="hb-cmp-table" id="gates">
+                <thead><tr>
+                    <th th:text="#{pms.col.wbs}">WBS</th>
+                    <th th:text="#{pms.col.gate}">게이트</th>
+                    <th th:text="#{pms.col.planDate}">계획일</th>
+                    <th th:text="#{pms.col.readiness}">필수 산출물</th>
+                    <th th:text="#{pms.col.lastReview}">마지막 심사</th>
+                    <th th:text="#{pms.col.gateStatus}">게이트</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <section class="hb-sub" id="scopeBox" hidden>
+            <h2 th:text="#{pms.gateScope}">이 게이트가 보는 산출물</h2>
+            <table class="hb-cmp-table" id="scope">
+                <thead><tr>
+                    <th th:text="#{pms.col.wbs}">WBS</th>
+                    <th th:text="#{pms.col.delivNm}">산출물</th>
+                    <th th:text="#{pms.col.required}">필수</th>
+                    <th th:text="#{pms.col.delivStatus}">상태</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newReviewBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{pms.newReview}">새 심사</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="mode" class="hb-muted" th:text="#{pms.selectGate}">왼쪽에서 게이트를 고르세요.</p>
+        <ul class="pms-deps" id="reviewList"></ul>
+
+        <section id="reviewBox" hidden>
+            <h2 id="reviewTitle"></h2>
+            <p id="reviewState" class="hb-muted"></p>
+            <form id="reviewForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{pms.col.reviewDate}">심사일</span><input type="date" data-field="reviewDate" required></label>
+                <label><span th:text="#{pms.col.decision}">결정</span>
+                    <select data-field="decision" data-help-key="pms-gate.decision">
+                        <option value="" th:text="#{pms.decision.none}">(아직)</option>
+                        <option value="GO" th:text="#{pms.decision.GO}">통과</option>
+                        <option value="CONDITIONAL" th:text="#{pms.decision.CONDITIONAL}">조건부 통과</option>
+                        <option value="NO_GO" th:text="#{pms.decision.NO_GO}">불합격</option>
+                    </select></label>
+                <label class="hb-wide"><span th:text="#{pms.col.summary}">심사 요약</span><textarea data-field="summary" maxlength="2000" rows="3"></textarea></label>
+            </form>
+            <h3 th:text="#{pms.checklist}">점검표</h3>
+            <div id="checks"></div>
+            <button type="button" id="addCheckBtn" class="hb-btn-ghost" th:text="#{pms.addCheck}">점검 항목 추가</button>
+            <h3 th:text="#{pms.conditions}">조건(조건부 통과 — 결정되면 이슈로)</h3>
+            <div id="conds"></div>
+            <button type="button" id="addCondBtn" class="hb-btn-ghost" th:text="#{pms.addCond}">조건 추가</button>
+            <div class="hb-toolbar" id="editTools">
+                <button type="button" id="saveReviewBtn" th:text="#{common.save}">저장</button>
+            </div>
+            <section class="hb-sub" id="submitBox">
+                <h2 th:text="#{pms.submitReview}">상신</h2>
+                <form id="lineForm" class="hb-form" autocomplete="off">
+                    <label class="hb-wide" id="approverBox"><span th:text="#{pms.col.approver}">결재자</span><select data-field="approver" id="approverSel"></select></label>
+                </form>
+                <div class="hb-toolbar"><button type="button" id="submitReviewBtn" th:text="#{pms.submitReview}">상신</button></div>
+            </section>
+            <!-- 되돌릴 수 없는 동작은 저장 줄과 떨어진 자리(docs/40 P1 ④) -->
+            <div class="hb-toolbar" id="dangerTools" hidden>
+                <button type="button" id="cancelReviewBtn" class="hb-btn-danger-outline" th:text="#{pms.cancelReview}">심사 취소</button>
+            </div>
+            <section class="hb-sub" id="aprBox" hidden>
+                <h2 th:text="#{pms.approval}">결재</h2>
+                <ul class="pms-deps" id="aprLines"></ul>
+                <label class="hb-field"><span th:text="#{pms.col.aprComment}">의견</span><input id="aprComment" maxlength="500"></label>
+                <div class="hb-toolbar">
+                    <button type="button" id="approveBtn" class="hb-btn-secondary" th:text="#{pms.apr.approve}">승인</button>
+                    <button type="button" id="rejectBtn" class="hb-btn-secondary" th:text="#{pms.apr.reject}">반려</button>
+                    <button type="button" id="withdrawBtn" class="hb-btn-ghost" th:text="#{pms.apr.withdraw}">회수</button>
+                </div>
+            </section>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/pms/pms-ui.js}"></script>
+<script th:src="@{/js/views/pms/gate-review.js}"></script>
+</body>
+</html>

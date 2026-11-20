@@ -1,0 +1,366 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 협력사 평가 (SRM S6, docs/31 4.6) — 회사 범위는 RLS, 쓰기의 comp_cd 는 hb_current_comp() -->
+<mapper namespace="io.smarthappy.module.srm.eval.EvalMapper">
+
+    <!-- ================================================================ 템플릿 -->
+
+    <sql id="tmplCols">
+        t.tmpl_id, t.tmpl_cd, t.rev, t.tmpl_nm, t.status, t.valid_from, t.valid_to, t.remark, t.released_by, t.released_at,
+        (select count(*) from srm_eval_item i where i.tmpl_id = t.tmpl_id) as item_cnt,
+        trim_scale(coalesce((select sum(i.weight) from srm_eval_item i where i.tmpl_id = t.tmpl_id), 0))::text as weight_sum,
+        t.row_ver, t.updated_at, t.updated_by
+    </sql>
+
+    <!-- 템플릿 목록·grid 공통 조건(c = TmplCrit) -->
+    <sql id="tmplWhere">
+        <where>
+            <if test="c.status != null">t.status = #{c.status}</if>
+            <if test="c.keywordLike != null">and (t.tmpl_cd ilike #{c.keywordLike} escape '\' or t.tmpl_nm ilike #{c.keywordLike} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findTmpls" resultType="io.smarthappy.module.srm.eval.EvalDtos$TmplRow">
+        select <include refid="tmplCols"/> from srm_eval_tmpl t
+        <include refid="tmplWhere"/>
+         order by t.tmpl_cd, t.rev desc
+         limit 1000
+    </select>
+
+    <!-- grid(UI 단계 3 ①, docs/31 5.2) — 정렬은 허용 목록 enum 이름으로만, 마지막에 PK(같은 코드면 새 리비전이 위) -->
+    <select id="findTmplPage" resultType="io.smarthappy.module.srm.eval.EvalDtos$TmplRow">
+        select <include refid="tmplCols"/> from srm_eval_tmpl t
+        <include refid="tmplWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'TMPL_NM'">t.tmpl_nm</when>
+                <when test="s.key == 'STATUS'">t.status</when>
+                <when test="s.key == 'VALID_FROM'">t.valid_from</when>
+                <otherwise>t.tmpl_cd</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         t.tmpl_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countTmpls" resultType="long">
+        select count(*) from srm_eval_tmpl t <include refid="tmplWhere"/>
+    </select>
+
+    <select id="findTmpl" resultType="io.smarthappy.module.srm.eval.EvalDtos$TmplRow">
+        select <include refid="tmplCols"/> from srm_eval_tmpl t where t.tmpl_id = #{id}
+    </select>
+
+    <select id="lockTmpl" resultType="io.smarthappy.module.srm.eval.EvalDtos$TmplRow" flushCache="true">
+        select t.tmpl_id, t.tmpl_cd, t.rev, t.tmpl_nm, t.status, t.valid_from, t.valid_to, t.row_ver
+          from srm_eval_tmpl t where t.tmpl_id = #{id} for update
+    </select>
+
+    <select id="findItems" resultType="io.smarthappy.module.srm.eval.EvalDtos$ItemRow">
+        select item_id, item_no, section_nm, item_nm, trim_scale(max_score)::text as max_score, trim_scale(weight)::text as weight,
+               trim_scale(fail_below)::text as fail_below, input_type, metric_cd, guide
+          from srm_eval_item where tmpl_id = #{tmplId} order by item_no
+    </select>
+
+    <select id="findGrades" resultType="io.smarthappy.module.srm.eval.EvalDtos$GradeRow">
+        select grade_id, grade_cd, trim_scale(min_score)::text as min_score, suggest_hold_yn
+          from srm_eval_grade where tmpl_id = #{tmplId} order by min_score desc
+    </select>
+
+    <select id="tmplCdExists" resultType="boolean">
+        select exists (select 1 from srm_eval_tmpl where tmpl_cd = #{tmplCd})
+    </select>
+
+    <select id="maxRev" resultType="int" flushCache="true">
+        select coalesce(max(rev), -1) from srm_eval_tmpl where tmpl_cd = #{tmplCd}
+    </select>
+
+    <select id="insertTmpl" resultType="long" flushCache="true">
+        insert into srm_eval_tmpl (comp_cd, tmpl_cd, rev, tmpl_nm, valid_from, valid_to, remark, created_by, updated_by)
+        values (hb_current_comp(), #{tmplCd}, #{rev}, #{tmplNm}, #{validFrom}, #{validTo}, #{remark}, #{by}, #{by})
+        returning tmpl_id
+    </select>
+
+    <update id="updateTmpl">
+        update srm_eval_tmpl
+           set tmpl_nm = #{tmplNm}, valid_from = #{validFrom}, valid_to = #{validTo}, remark = #{remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tmpl_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <delete id="deleteItems">
+        delete from srm_eval_item where tmpl_id = #{tmplId}
+    </delete>
+
+    <delete id="deleteGrades">
+        delete from srm_eval_grade where tmpl_id = #{tmplId}
+    </delete>
+
+    <!-- 점수 구간(R4b, docs/31 4.12.3) -->
+    <select id="findBands" resultType="io.smarthappy.module.srm.eval.EvalDtos$BandRow">
+        select b.item_id, trim_scale(b.upper_ppm)::text as upper_ppm, trim_scale(b.score_pct)::text as score_pct
+          from srm_eval_band b join srm_eval_item i on i.item_id = b.item_id
+         where b.tmpl_id = #{tmplId}
+         order by i.item_no, b.upper_ppm nulls last
+    </select>
+
+    <delete id="deleteBands">
+        delete from srm_eval_band where tmpl_id = #{tmplId}
+    </delete>
+
+    <insert id="insertBand">
+        insert into srm_eval_band (comp_cd, tmpl_id, item_id, upper_ppm, score_pct, created_by, updated_by)
+        select hb_current_comp(), #{tmplId}, i.item_id, #{f.upperPpm}, #{f.scorePct}, #{by}, #{by}
+          from srm_eval_item i where i.tmpl_id = #{tmplId} and i.item_no = #{itemNo}
+    </insert>
+
+    <insert id="copyBands">
+        insert into srm_eval_band (comp_cd, tmpl_id, item_id, upper_ppm, score_pct, created_by, updated_by)
+        select b.comp_cd, #{to}, n.item_id, b.upper_ppm, b.score_pct, #{by}, #{by}
+          from srm_eval_band b
+          join srm_eval_item o on o.item_id = b.item_id
+          join srm_eval_item n on n.tmpl_id = #{to} and n.item_no = o.item_no
+         where b.tmpl_id = #{from}
+    </insert>
+
+    <insert id="insertItem">
+        insert into srm_eval_item (comp_cd, tmpl_id, item_no, section_nm, item_nm, max_score, weight, fail_below, input_type, metric_cd,
+                                   guide, created_by, updated_by)
+        values (hb_current_comp(), #{tmplId}, #{f.itemNo}, #{f.sectionNm}, #{f.itemNm}, #{f.maxScore}, #{f.weight}, #{f.failBelow},
+                #{f.inputType}, #{f.metricCd}, #{f.guide}, #{by}, #{by})
+    </insert>
+
+    <insert id="insertGrade">
+        insert into srm_eval_grade (comp_cd, tmpl_id, grade_cd, min_score, suggest_hold_yn, created_by, updated_by)
+        values (hb_current_comp(), #{tmplId}, #{f.gradeCd}, #{f.minScore}, #{f.suggestHoldYn}, #{by}, #{by})
+    </insert>
+
+    <insert id="copyItems">
+        insert into srm_eval_item (comp_cd, tmpl_id, item_no, section_nm, item_nm, max_score, weight, fail_below, input_type, metric_cd,
+                                   guide, created_by, updated_by)
+        select comp_cd, #{to}, item_no, section_nm, item_nm, max_score, weight, fail_below, input_type, metric_cd, guide, #{by}, #{by}
+          from srm_eval_item where tmpl_id = #{from}
+    </insert>
+
+    <insert id="copyGrades">
+        insert into srm_eval_grade (comp_cd, tmpl_id, grade_cd, min_score, suggest_hold_yn, created_by, updated_by)
+        select comp_cd, #{to}, grade_cd, min_score, suggest_hold_yn, #{by}, #{by} from srm_eval_grade where tmpl_id = #{from}
+    </insert>
+
+    <update id="closeOpenReleased">
+        update srm_eval_tmpl
+           set valid_to = #{validFrom}::date - 1, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tmpl_cd = #{tmplCd} and tmpl_id &lt;&gt; #{exceptId} and status = 'RELEASED' and valid_to is null
+           and valid_from &lt; #{validFrom}
+    </update>
+
+    <update id="release">
+        update srm_eval_tmpl
+           set status = 'RELEASED', released_by = #{by}, released_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tmpl_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="obsolete">
+        update srm_eval_tmpl
+           set status = 'OBSOLETE', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tmpl_id = #{id} and status = #{from} and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 평가 -->
+
+    <select id="findSuppliers" resultType="io.smarthappy.module.srm.eval.EvalDtos$SupplierOption">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status
+          from srm_supplier s join mst_cust c on c.cust_id = s.cust_id
+         order by c.cust_cd
+         limit 2000
+    </select>
+
+    <select id="findSupplier" resultType="io.smarthappy.module.srm.eval.EvalDtos$SupplierOption">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status
+          from srm_supplier s join mst_cust c on c.cust_id = s.cust_id
+         where c.cust_cd = #{custCd}
+    </select>
+
+    <select id="findEffectiveTmpl" resultType="io.smarthappy.module.srm.eval.EvalDtos$TmplRow">
+        select <include refid="tmplCols"/> from srm_eval_tmpl t
+         where t.tmpl_cd = #{tmplCd} and t.status = 'RELEASED'
+           and t.valid_from &lt;= #{on} and (t.valid_to is null or t.valid_to &gt;= #{on})
+    </select>
+
+    <select id="findReleasedTmpls" resultType="io.smarthappy.module.srm.eval.EvalDtos$TmplRow">
+        select <include refid="tmplCols"/> from srm_eval_tmpl t where t.status = 'RELEASED' order by t.tmpl_cd, t.rev desc
+    </select>
+
+    <sql id="evalCols">
+        e.eval_id, e.eval_no, e.cust_id, c.cust_cd, c.cust_nm, s.trade_status, e.tmpl_id, t.tmpl_cd, t.rev as tmpl_rev, t.tmpl_nm,
+        e.period_from, e.period_to, e.status, trim_scale(e.total_score)::text as total_score, e.grade_cd, e.fail_yn,
+        e.suggest_trade_status, e.confirmed_by, e.confirmed_at, e.cancel_reason, e.remark, e.row_ver, e.updated_at, e.updated_by
+    </sql>
+    <sql id="evalFrom">
+          from srm_eval e
+          join mst_cust c on c.cust_id = e.cust_id
+          join srm_supplier s on s.cust_id = e.cust_id
+          join srm_eval_tmpl t on t.tmpl_id = e.tmpl_id
+    </sql>
+
+    <!-- 평가 목록·grid 공통 조건(c = EvalCrit) — 기간 끝 날 기준, 기간 필수 -->
+    <sql id="evalWhere">
+         where e.period_to between #{c.from} and #{c.to}
+        <if test="c.status != null">and e.status = #{c.status}</if>
+        <if test="c.keywordLike != null">
+           and (e.eval_no ilike #{c.keywordLike} escape '\' or c.cust_cd ilike #{c.keywordLike} escape '\' or c.cust_nm ilike #{c.keywordLike} escape '\')
+        </if>
+    </sql>
+
+    <select id="findEvals" resultType="io.smarthappy.module.srm.eval.EvalDtos$EvalRow">
+        select <include refid="evalCols"/>
+        <include refid="evalFrom"/>
+        <include refid="evalWhere"/>
+         order by e.period_to desc, e.eval_id desc
+         limit 2000
+    </select>
+
+    <!-- grid(UI 단계 3 ①, docs/31 5.2) — 정렬은 허용 목록 enum 이름으로만, 마지막에 PK. 점수·등급은 작성 중이면 비어 끝에 -->
+    <select id="findEvalPage" resultType="io.smarthappy.module.srm.eval.EvalDtos$EvalRow">
+        select <include refid="evalCols"/>
+        <include refid="evalFrom"/>
+        <include refid="evalWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'EVAL_NO'">e.eval_no</when>
+                <when test="s.key == 'SUPPLIER'">c.cust_nm</when>
+                <when test="s.key == 'STATUS'">e.status</when>
+                <when test="s.key == 'SCORE'">e.total_score is null, e.total_score</when>
+                <when test="s.key == 'GRADE'">e.grade_cd is null, e.grade_cd</when>
+                <otherwise>e.period_to</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         e.eval_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countEvals" resultType="long">
+        select count(*) <include refid="evalFrom"/> <include refid="evalWhere"/>
+    </select>
+
+    <select id="findEval" resultType="io.smarthappy.module.srm.eval.EvalDtos$EvalRow">
+        select <include refid="evalCols"/>
+        <include refid="evalFrom"/>
+         where e.eval_id = #{id}
+    </select>
+
+    <select id="lockEval" resultType="io.smarthappy.module.srm.eval.EvalDtos$EvalRow" flushCache="true">
+        select e.eval_id, e.eval_no, e.cust_id, e.tmpl_id, e.period_from, e.period_to, e.status, e.row_ver
+          from srm_eval e where e.eval_id = #{id} for update
+    </select>
+
+    <select id="findScores" resultType="io.smarthappy.module.srm.eval.EvalDtos$ScoreRow">
+        select sc.score_id, i.item_id, i.item_no, i.section_nm, i.item_nm, trim_scale(i.max_score)::text as max_score,
+               trim_scale(i.weight)::text as weight, trim_scale(i.fail_below)::text as fail_below, i.input_type, i.metric_cd, i.guide,
+               trim_scale(sc.score)::text as score, trim_scale(sc.raw_value)::text as raw_value, sc.auto_yn, sc.basis, sc.comment
+          from srm_eval_score sc join srm_eval_item i on i.item_id = sc.item_id
+         where sc.eval_id = #{evalId}
+         order by i.item_no
+    </select>
+
+    <select id="itemSpecs" resultType="io.smarthappy.module.srm.eval.EvalDtos$ItemSpec">
+        select item_id, max_score, weight, fail_below, input_type, metric_cd from srm_eval_item where tmpl_id = #{tmplId} order by item_no
+    </select>
+
+    <select id="gradeSpecs" resultType="io.smarthappy.module.srm.eval.EvalDtos$GradeSpec">
+        select grade_cd, min_score, suggest_hold_yn from srm_eval_grade where tmpl_id = #{tmplId}
+    </select>
+
+    <select id="scoreSpecs" resultType="io.smarthappy.module.srm.eval.EvalDtos$ScoreSpec" flushCache="true">
+        select item_id, score, auto_yn from srm_eval_score where eval_id = #{evalId}
+    </select>
+
+    <select id="insertEval" resultType="long" flushCache="true">
+        insert into srm_eval (comp_cd, eval_no, cust_id, tmpl_id, period_from, period_to, remark, created_by, updated_by)
+        values (hb_current_comp(), #{evalNo}, #{custId}, #{tmplId}, #{from}, #{to}, #{remark}, #{by}, #{by})
+        returning eval_id
+    </select>
+
+    <insert id="insertScores">
+        insert into srm_eval_score (comp_cd, eval_id, item_id, created_by, updated_by)
+        select comp_cd, #{evalId}, item_id, #{by}, #{by} from srm_eval_item where tmpl_id = #{tmplId} order by item_no
+    </insert>
+
+    <update id="touchEval">
+        update srm_eval set remark = #{remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eval_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <!-- 바뀐 행만 -->
+    <update id="updateScore">
+        update srm_eval_score set score = #{score}, comment = #{comment}, updated_at = now(), updated_by = #{by}
+         where eval_id = #{evalId} and item_id = #{itemId}
+           and (score is distinct from #{score}::numeric or comment is distinct from #{comment}::varchar)
+    </update>
+
+    <update id="updateAutoComment">
+        update srm_eval_score set comment = #{comment}, updated_at = now(), updated_by = #{by}
+         where eval_id = #{evalId} and item_id = #{itemId} and comment is distinct from #{comment}::varchar
+    </update>
+
+    <update id="updateAuto">
+        update srm_eval_score
+           set auto_yn = #{autoYn}, score = case when #{autoYn} = 'Y' then #{score}::numeric else score end,
+               raw_value = #{rawValue}, basis = #{basis}, updated_at = now(), updated_by = #{by}
+         where eval_id = #{evalId} and item_id = #{itemId}
+           and (auto_yn is distinct from #{autoYn}::char or raw_value is distinct from #{rawValue}::numeric
+                or basis is distinct from #{basis}::varchar
+                or (#{autoYn} = 'Y' and score is distinct from #{score}::numeric))
+    </update>
+
+    <update id="confirm">
+        update srm_eval
+           set status = 'CONFIRMED', total_score = #{total}, grade_cd = #{gradeCd}, fail_yn = #{failYn}, suggest_trade_status = #{suggest},
+               confirmed_by = #{by}, confirmed_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eval_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="cancel">
+        update srm_eval
+           set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eval_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ AUTO 지표 -->
+
+    <!-- 발행본(개정마다 한 행)의 발행일(회사 시간대)이 기간 안 — 기한 안 회신 = 그 개정에 회신일 ≤ 발행일 + 회신 기한 인 묶음(거절도 응답) -->
+    <select id="ackRate" resultType="io.smarthappy.module.srm.eval.EvalDtos$AckRate">
+        select count(*) as issued_cnt,
+               count(*) filter (where exists (select 1 from srm_po_ack a where a.po_id = r.po_id and a.rev = r.rev
+                                                 and a.ack_on &lt;= (r.issued_at at time zone #{zone})::date + #{dueDays})) as on_time_cnt
+          from srm_po_rev r join srm_po p on p.po_id = r.po_id
+         where p.cust_id = #{custId}
+           and (r.issued_at at time zone #{zone})::date between #{from} and #{to}
+    </select>
+
+    <select id="otdRate" resultType="io.smarthappy.module.srm.eval.EvalDtos$OtdRate">
+        select count(*) as due_cnt,
+               count(*) filter (where coalesce((select sum(r.qty) from srm_po_receipt r
+                                                 where r.po_line_id = l.po_line_id and r.occurred_on &lt;= l.due_date), 0)
+                                      &gt;= l.qty - l.cancel_qty) as on_time_cnt
+          from srm_po_line l join srm_po p on p.po_id = l.po_id
+         where p.cust_id = #{custId}
+           and p.source = 'SRM'
+           and p.status in ('ISSUED', 'ACKED', 'PARTIAL_RECEIVED', 'RECEIVED', 'CLOSED')
+           and l.line_status &lt;&gt; 'CANCELLED'
+           and l.qty - l.cancel_qty &gt; 0
+           and l.due_date between #{from} and #{to}
+    </select>
+
+    <select id="certState" resultType="io.smarthappy.module.srm.eval.EvalDtos$CertState">
+        select count(*) as current_cnt, min(x.expires_on) as min_expires
+          from (select distinct on (c.cert_type_cd) c.cert_type_cd, c.expires_on
+                  from srm_supplier_cert c
+                 where c.cust_id = #{custId} and c.use_yn = 'Y' and c.issued_on &lt;= #{on}
+                 order by c.cert_type_cd, c.issued_on desc, c.cert_id desc) x
+    </select>
+</mapper>

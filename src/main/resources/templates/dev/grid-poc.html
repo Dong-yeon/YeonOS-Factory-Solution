@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<!--
+  편집 그리드·위젯 PoC (docs/10 8장·11.3). local 프로필 전용(GridPocController), sys_prog·메뉴에 없음.
+  현행 CSP(script-src 'self'; style-src 'self') 그대로 — 인라인 스크립트·스타일 없음. 문구는 PoC 라 i18n 키를 쓰지 않는다.
+  poc-common.js 를 가장 먼저 로드해 vendor 의 CSP 위반까지 센다.
+-->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${prog.name}">편집 그리드·위젯 PoC</title>
+    <script th:src="@{/js/dev/grid-poc/poc-common.js}"></script>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/vendor/tabulator/6.7.1/tabulator.min.css}">
+    <link rel="stylesheet" th:href="@{/vendor/kendo-theme-default/14.10.0/default-main.css}">
+    <link rel="stylesheet" th:href="@{/vendor/tom-select/2.7.0/tom-select.min.css}">
+    <link rel="stylesheet" th:href="@{/vendor/vanilla-calendar-pro/3.4.0/vanilla-calendar-pro.css}">
+    <link rel="stylesheet" th:href="@{/css/dev/grid-poc.css}">
+</head>
+<body class="hb-page poc">
+<h1 th:text="${prog.name}">편집 그리드·위젯 PoC</h1>
+<p class="poc-note">local 프로필 전용 · docs/10 8장 · 체크리스트는 docs/10 11.5 · <span id="uaInfo"></span></p>
+
+<section class="poc-status">
+    <strong>CSP 위반</strong> <span id="cspCount" class="poc-count">0</span>
+    <span class="poc-dim">(script-src 'self'; style-src 'self' — 위반이 생기면 아래에 원인이 나온다. 콘솔에도 같은 내용)</span>
+    <ul id="cspList" class="poc-csp-list"></ul>
+</section>
+
+<section class="poc-section">
+    <h2>1. 편집 그리드 — Tabulator 6.7.1 (MIT)</h2>
+    <p class="poc-dim">셀 더블클릭 또는 Enter 로 편집 · 드래그·Shift+화살표로 범위 선택 · Ctrl+C 복사 · 셀을 고르고 Ctrl+V 붙여넣기(엑셀) ·
+        거래처코드~비고 열은 hb IME editor, "비고" 열만 Tabulator 기본 editor(비교용), 거래구분·사용은 Tabulator list editor</p>
+    <div class="poc-toolbar">
+        <button type="button" id="reloadBtn">재조회</button>
+        <button type="button" id="addRowBtn">행 추가</button>
+        <button type="button" id="deleteRowBtn">선택 행 삭제</button>
+        <button type="button" id="saveBtn">일괄 저장</button>
+        <span class="poc-sep"></span>
+        <button type="button" id="bumpBtn" class="poc-secondary">선택 행을 다른 사용자가 수정한 것으로 (→ 409)</button>
+        <button type="button" id="sampleTsvBtn" class="poc-secondary">50행×8열 예시를 클립보드로</button>
+    </div>
+    <div id="grid" class="poc-grid"></div>
+    <p id="gridMsg" class="hb-msg" role="status"></p>
+</section>
+
+<section class="poc-section">
+    <h2>2. 성능 (1천 행 클라이언트 편집)</h2>
+    <div class="poc-toolbar">
+        <button type="button" id="reset1000Btn">1,000행으로 다시 만들고 조회</button>
+        <button type="button" id="reset30Btn" class="poc-secondary">30행으로 되돌리기</button>
+        <button type="button" id="bulkEditBtn">전 행 수량 +1 (일괄 update)</button>
+        <button type="button" id="scrollEndBtn">끝 행까지 스크롤</button>
+    </div>
+    <p class="poc-dim">배율(Ctrl +/−) 90·100·125·150% 에서 각각 눌러 기록. 붙여넣기·저장·셀 편집 시간도 자동 기록된다.</p>
+    <table class="poc-perf">
+        <thead><tr><th>시각</th><th>측정</th><th>ms</th><th>배율</th><th>비고</th></tr></thead>
+        <tbody id="perfBody"></tbody>
+    </table>
+</section>
+
+<section class="poc-section">
+    <h2>3. 위젯 비교 — 같은 데이터, 같은 시나리오</h2>
+    <p class="poc-dim">"서울" 을 한글로 입력 → (조합 중) Enter / 조합 끝난 뒤 Enter / 조합 중 Tab / 조합 중 다른 곳 클릭.
+        Enter 로 폼 제출이 일어나면 기록에 ⚠ 가 남는다.</p>
+    <div class="poc-columns">
+        <form class="poc-form poc-widget" data-area="kendo" action="#" method="get">
+            <h3>Kendo UI Core <span id="kendoVersion" class="poc-dim"></span></h3>
+            <label class="poc-field"><span>DatePicker</span><input id="kDate"></label>
+            <label class="poc-field"><span>ComboBox (contains)</span><input id="kCombo"></label>
+            <label class="poc-field"><span>NumericTextBox</span><input id="kNum"></label>
+            <label class="poc-field"><span>DropDownList (filter)</span><select id="kDdl"></select></label>
+            <button type="submit" class="poc-hidden-submit" tabindex="-1">submit</button>
+        </form>
+        <form class="poc-form poc-widget" data-area="oss" action="#" method="get">
+            <h3>오픈소스 + 네이티브</h3>
+            <label class="poc-field"><span>Vanilla Calendar Pro 3.4.0</span><input id="vcDate" readonly></label>
+            <label class="poc-field"><span>네이티브 date</span><input id="nativeDate" type="date"></label>
+            <label class="poc-field"><span>Tom Select 2.7.0</span><select id="tsCombo"></select></label>
+            <label class="poc-field"><span>네이티브 숫자 (inputmode + Intl)</span><input id="nativeNum" inputmode="decimal"></label>
+            <button type="button" id="openDialogBtn" class="poc-secondary">&lt;dialog&gt; 열기</button>
+            <button type="submit" class="poc-hidden-submit" tabindex="-1">submit</button>
+        </form>
+    </div>
+    <h3>Split.js 1.6.5</h3>
+    <div class="poc-split">
+        <div id="splitLeft" class="poc-pane">왼쪽 (목록)</div>
+        <div id="splitRight" class="poc-pane">오른쪽 (상세) — 가운데 막대를 끌어 보기</div>
+    </div>
+    <dialog id="pocDialog" class="poc-dialog">
+        <form method="dialog">
+            <h3>네이티브 &lt;dialog&gt;</h3>
+            <label class="poc-field"><span>한글 입력 후 조합 중 Esc</span><input id="dialogInput"></label>
+            <button type="button" id="closeDialogBtn">닫기</button>
+        </form>
+    </dialog>
+</section>
+
+<section class="poc-section">
+    <h2>4. 이벤트 기록 <button type="button" id="copyLogBtn" class="poc-secondary">복사</button>
+        <button type="button" id="clearLogBtn" class="poc-secondary">지우기</button></h2>
+    <ol id="eventLog" class="poc-log"></ol>
+</section>
+
+<script th:src="@{/js/common/hb.js}"></script>
+<script th:src="@{/vendor/tabulator/6.7.1/tabulator.min.js}"></script>
+<script th:src="@{/vendor/jquery/3.6.4/jquery.min.js}"></script>
+<!-- Kendo UI Core 는 한 파일 번들 대신 ESM 위젯별 모듈 (kendo-esm.js 주석 참고) -->
+<script type="module" th:src="@{/js/dev/grid-poc/kendo-esm.js}"></script>
+<script th:src="@{/vendor/tom-select/2.7.0/tom-select.complete.min.js}"></script>
+<script th:src="@{/vendor/vanilla-calendar-pro/3.4.0/vanilla-calendar-pro.js}"></script>
+<script th:src="@{/vendor/split.js/1.6.5/split.min.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/dev/grid-poc/paste-parser.js}"></script>
+<script th:src="@{/js/dev/grid-poc/ime-editor.js}"></script>
+<script th:src="@{/js/dev/grid-poc/grid-poc.js}"></script>
+<script th:src="@{/js/dev/grid-poc/widgets-poc.js}"></script>
+</body>
+</html>

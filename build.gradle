@@ -1,0 +1,184 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.1.2'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id 'org.cyclonedx.bom' version '3.6.1'   // SBOM(CycloneDX) — 릴리스 산출물에 첨부 (docs/05 #7, docs/52 Y10)
+}
+
+group = 'io.smarthappy'
+version = '0.0.1-SNAPSHOT'
+description = 'YeonOS smart factory platform'
+
+java {
+    toolchain {
+        // Java 25(LTS) — 2026-11-09 21 → 25 전환(docs/13 L2 검토 절)
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+// jOOQ OSS 3.20+ 는 PostgreSQL 17/18 이상만 지원 — 우리는 PG 16 이라 OSS 가 PG 15+ 를 지원하는 3.19 줄로 고정(docs/43 J1·2장)
+ext['jooq.version'] = '3.19.39'
+// Thymeleaf 는 Boot 4.1.2 관리판(3.1.5)이 보안 공지 4건(GHSA-mvwv-34qr-qx5x·GHSA-6xr7-8ph3-q2g2 높음, GHSA-77qc-v5v5-29hc 중간,
+// GHSA-f79q-9862-cq4c 낮음)에 걸려 3.1.7 로 올린다(2026-11-16). Boot 다음 패치가 3.1.7 이상을 관리하면 이 두 줄과 함께 지운다
+ext['thymeleaf.version'] = '3.1.7.RELEASE'
+dependencies {
+    // Boot 4: 기능별 모듈 스타터 (web → webmvc, flyway 는 별도 스타터)
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'   // 운영 지표 /actuator/prometheus — 내부망·토큰 전용(docs/52 Y2)
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-aspectj'   // @ProgAuth 권한 검사
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
+    implementation 'org.springframework.boot:spring-boot-starter-mail'   // 메일 알림 SMTP 송신(아웃박스 토픽 MAIL, docs/36 18.3)
+    implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:4.1.0'   // Boot 4.1 대응판
+    implementation 'org.springframework.boot:spring-boot-starter-jooq'   // jOOQ 시범(module.apqp 만, 결정 #52 · docs/43) — OSS(Apache 2.0)
+    implementation 'org.flywaydb:flyway-database-postgresql'
+    implementation 'org.postgresql:postgresql'   // PgErrors 가 PSQLException 을 직접 본다
+    implementation 'org.apache.poi:poi-ooxml:5.5.1'   // 서버 엑셀 내보내기(SXSSF 스트리밍, docs/09 6장)
+
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-postgresql'
+    testImplementation 'com.tngtech.archunit:archunit:1.5.1'   // 모듈 경계 가드 시험(docs/27 S8 → docs/52 Q7) — 배포물 밖
+    testImplementation 'org.jooq:jooq-codegen'   // 코드 생성기 — 재생성 태스크(jooqGenerate)·어긋남 가드 시험만, 배포물 밖
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-parameters'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    systemProperty 'file.encoding', 'UTF-8'
+    // 시험 1,700건 넘게 Spring 컨텍스트를 캐시한다 — 기본 512m 이면 Java heap space 로 중단된 적이 있다(2026-10-22 PLM 보고)
+    // 2026-11-03: 시험 3,000건 넘자 1g 에서 전체 check 3회 중 2회 Java heap space(시험 클래스 약 365/440 에서 중단) → 1536m
+    maxHeapSize = '1536m'
+    // 서로 다른 시험 컨텍스트가 44개(2026-10-29) — 기본 캐시 32개를 다 쥐면 컨텍스트마다 연결 풀 10개라 시험 DB max_connections(300)에 닿고
+    // (Could not open JDBC Connection) 힙도 1g 를 넘는다(Java heap space). 16개로 묶으면 연결 ≤ 160, 밀려난 컨텍스트는 닫혀 풀을 돌려준다
+    systemProperty 'spring.test.context.cache.maxSize', '16'
+    // 테스트는 UTC 로 고정: 개발 PC(KST)에서만 통과하는 날짜 버그를 드러낸다. 업무 날짜는 BizClock(회사 시간대)
+    systemProperty 'user.timezone', 'UTC'
+    // 실측 테스트(엑셀 5만 행 등)는 -Dhb.perf=true 일 때만 (평소 check 에서는 건너뜀)
+    systemProperty 'hb.perf', System.getProperty('hb.perf', 'false')
+}
+
+// jOOQ 생성물 (docs/43, 결정 #52) — Flyway 스키마에서 생성해 저장소에 커밋, 컴파일에 포함(bootRun·compile 은 Docker 없이).
+// 스키마를 바꾸면 ./gradlew jooqGenerate (Docker 필요) → 차이를 검토해 커밋. 어긋나면 JooqGeneratedGuardTest 가 실패한다
+sourceSets {
+    main {
+        java {
+            srcDir 'src/main/jooq'
+        }
+    }
+}
+tasks.register('jooqGenerate', JavaExec) {
+    group = 'build'
+    description = 'Flyway 마이그레이션을 올린 일회용 PostgreSQL 에서 jOOQ 코드를 다시 만든다 → src/main/jooq (Docker 필요)'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'io.smarthappy.support.jooq.JooqCodegen'
+    args 'src/main/jooq'
+    workingDir = projectDir
+}
+
+// 설계 규칙: MyBatis XML에서 ${} 문자열 치환 금지 (SQL 인젝션 방지)
+tasks.register('checkNoDollarSql') {
+    group = 'verification'
+    description = 'mapper XML의 ${} 사용을 막는다'
+    def mapperDir = file('src/main/resources/mapper')
+    inputs.files(fileTree(mapperDir) { include '**/*.xml' })
+    doLast {
+        if (!mapperDir.exists()) return
+        def violations = []
+        mapperDir.eachFileRecurse { f ->
+            if (f.name.endsWith('.xml')) {
+                f.readLines('UTF-8').eachWithIndex { line, i ->
+                    if (line.contains('${')) violations << "${f.path}:${i + 1}: ${line.trim()}"
+                }
+            }
+        }
+        if (violations) {
+            throw new GradleException("mapper XML에 \${} 사용 금지:\n" + violations.join('\n'))
+        }
+    }
+}
+tasks.named('check') { dependsOn 'checkNoDollarSql' }
+
+// 화면 JS 타입 검사·단위 테스트 (docs/13 6.3·11장 L4). Node 는 빌드 도구로만 — 런타임 배포물(jar)에 들어가지 않는다.
+// 버전은 package.json(정확한 버전) + package-lock.json(무결성 해시)으로 고정, 받기는 npm ci.
+// Node 가 없는 PC 에서는 경고만 남기고 건너뛴다(2026-10-20 결정). CI 처럼 꼭 돌려야 하면 -Phb.requireNode=true → 없으면 실패.
+def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+def nodeOnPath = { ->
+    def names = isWindows ? ['node.exe'] : ['node']
+    (System.getenv('PATH') ?: '').split(File.pathSeparator).any { dir -> names.any { new File(dir, it).canExecute() } }
+}
+def requireNode = (findProperty('hb.requireNode') ?: 'false').toString() == 'true'
+def nodeChecked = null
+def nodeAvailable = { ->
+    if (nodeChecked != null) return nodeChecked
+    if (nodeOnPath()) return (nodeChecked = true)
+    if (requireNode) throw new GradleException('Node 가 PATH 에 없음(-Phb.requireNode=true) — JS 타입 검사·단위 테스트를 돌릴 수 없다')
+    logger.warn('경고: Node 가 PATH 에 없어 JS 타입 검사(typecheckJs)·단위 테스트(testJs)를 건너뛴다 — 설치하면 check 에 포함된다')
+    return (nodeChecked = false)
+}
+
+tasks.register('npmCi', Exec) {
+    group = 'verification'
+    description = 'package-lock.json 그대로 빌드 도구(TypeScript)를 받는다'
+    inputs.files('package.json', 'package-lock.json')
+    outputs.file('node_modules/.package-lock.json')
+    onlyIf { nodeAvailable() }
+    commandLine(isWindows ? ['cmd', '/c', 'npm', 'ci', '--no-audit', '--no-fund'] : ['npm', 'ci', '--no-audit', '--no-fund'])
+}
+
+tasks.register('typecheckJs', Exec) {
+    group = 'verification'
+    description = '// @ts-check 화면 JS 를 types/hb.d.ts 계약으로 검사(tsc, 출력 없음)'
+    dependsOn 'npmCi'
+    inputs.files(fileTree('src/main/resources/static/js') { include '**/*.js' }, fileTree('types'), 'jsconfig.json', 'package-lock.json')
+    outputs.upToDateWhen { false }
+    onlyIf { nodeAvailable() }
+    commandLine 'node', 'node_modules/typescript/bin/tsc', '-p', 'jsconfig.json'
+}
+
+tasks.register('testJs', Exec) {
+    group = 'verification'
+    description = 'JS 단위 테스트(node --test src/test/js)'
+    inputs.files(fileTree('src/test/js'), fileTree('src/main/resources/static/js') { include '**/*.js' })
+    outputs.upToDateWhen { false }
+    onlyIf { nodeAvailable() }
+    commandLine 'node', '--test', '--test-reporter=dot', 'src/test/js/*.test.js'
+}
+
+tasks.named('check') { dependsOn 'typecheckJs', 'testJs' }
+
+// 공급망 (docs/05 4.5): 같은 빌드가 같은 버전을 받게 잠그고(gradle.lockfile), 받은 파일의 체크섬을 검증한다
+// (gradle/verification-metadata.xml). 의존성을 바꾸면:
+//   ./gradlew dependencies --write-locks
+//   ./gradlew --write-verification-metadata sha256 check   → 생성된 차이를 검토한 뒤 커밋
+dependencyLocking {
+    lockAllConfigurations()
+}
+
+// SBOM (docs/05 #7, docs/52 Y10): ./gradlew cyclonedxBom → build/reports/cyclonedx/bom.{json,xml}.
+// 배포물에 들어가는 것만(runtimeClasspath) — 시험·빌드 도구는 빼서 "설치본에 무엇이 들어 있나"에 답한다. 릴리스 워크플로가 jar 와 함께 올린다
+tasks.named('cyclonedxDirectBom') {
+    includeConfigs = ['runtimeClasspath']
+}

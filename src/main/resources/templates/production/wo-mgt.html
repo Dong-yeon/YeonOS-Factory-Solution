@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  작업지시 관리 (prd-wo) — P2 3단계 (docs/25 4.4). 지시(품목·수량·계획일·라우팅/BOM 리비전·수주 행) → 발행 때 공정·파라미터·자재 소요 스냅샷.
+  발행 뒤에는 수량·기준정보가 고정되고 일정·우선순위·비고와 공정별 설비 배정(D1)만 바꾼다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">작업지시 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{prdWo.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,thisWeek,thisMonth,last30" data-default="last30" data-max-days="366" data-required="false"></div>
+    <label><span th:text="#{prdWo.col.plant}">공장</span><select name="plantCd" id="plantSel"></select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{prdWo.col.status}">상태</legend>
+        <label><input type="radio" name="status" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="status" value="PLANNED"><span th:text="#{code.WO_STATUS.PLANNED}">계획</span></label>
+        <label><input type="radio" name="status" value="RELEASED"><span th:text="#{code.WO_STATUS.RELEASED}">발행</span></label>
+        <label><input type="radio" name="status" value="ACTIVE"><span th:text="#{prdWo.status.active}">발행+진행 중</span></label>
+        <label><input type="radio" name="status" value="CANCELLED"><span th:text="#{code.WO_STATUS.CANCELLED}">취소</span></label>
+    </fieldset>
+    <label><span th:text="#{prdWo.col.itemCd}">품목 코드</span><input name="itemCd" maxlength="40"></label>
+    <label><span th:text="#{prdWo.col.woNo}">지시 번호</span><input name="keyword" maxlength="50"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{import.button}">엑셀 올리기</button>
+        </div>
+        <div id="woGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="releaseBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{prdWo.release}">발행</button>
+            <button type="button" id="completeBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{prdWo.complete}">지시 완료</button>
+            <button type="button" id="closeWoBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{prdWo.closeWo}">마감</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 저장 줄과 떨어진 자리(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}" hidden>
+            <button type="button" id="cancelBtn" class="hb-btn-danger-outline" hidden th:text="#{prdWo.cancel}">지시 취소</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{prdWo.selectOrNew}">왼쪽에서 지시를 고르거나 신규를 누르세요.</p>
+        <form id="woForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{prdWo.col.plant}">공장</span>
+                <select data-field="plantCd" id="formPlant"></select></label>
+            <label><span th:text="#{prdWo.col.itemCd}">품목 코드</span>
+                <input data-field="itemCd" maxlength="40" list="itemList" data-help-key="prd-wo.itemCd">
+                <datalist id="itemList"></datalist></label>
+            <label><span th:text="#{prdWo.col.planQty}">수량</span>
+                <input data-field="planQty" inputmode="decimal" maxlength="30" data-help-key="prd-wo.planQty"></label>
+            <label><span th:text="#{prdWo.col.planStart}">계획 시작일</span>
+                <input data-field="planStart" type="date" min="2000-01-01" max="2999-12-31" data-help-key="prd-wo.planStart"></label>
+            <label><span th:text="#{prdWo.col.planEnd}">계획 완료일</span>
+                <input data-field="planEnd" type="date" min="2000-01-01" max="2999-12-31"></label>
+            <label><span th:text="#{prdWo.col.priority}">우선</span>
+                <select data-field="priority">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                    <option value="4">4</option><option value="5" selected>5</option><option value="6">6</option>
+                    <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+                </select></label>
+            <label><span th:text="#{prdWo.col.routing}">라우팅</span>
+                <select data-field="routingId" id="routingSel" data-help-key="prd-wo.routing"></select></label>
+            <label><span th:text="#{prdWo.col.bom}">BOM</span>
+                <select data-field="bomId" id="bomSel"></select></label>
+            <label><span th:text="#{prdWo.col.order}">수주</span>
+                <select data-field="orderLineId" id="orderSel"></select></label>
+            <label><span th:text="#{prdWo.col.status}">상태</span>
+                <output id="woStatus" class="hb-output"></output></label>
+            <label class="hb-wide"><span th:text="#{prdWo.col.remark}">비고</span>
+                <input data-field="remark" maxlength="1000"></label>
+        </form>
+        <p id="unitInfo" class="hb-muted"></p>
+        <section class="hb-sub" id="snapSection" hidden>
+            <h2 th:text="#{prdWo.procs}">공정 (발행 때 라우팅)</h2>
+            <table class="hb-cmp-table" id="procs">
+                <thead><tr>
+                    <th th:text="#{prdWo.col.opSeq}">순서</th>
+                    <th th:text="#{prdWo.col.proc}">공정</th>
+                    <th th:text="#{prdWo.col.node}">작업장</th>
+                    <th class="hb-num" th:text="#{prdWo.col.ct}">표준 CT(초)</th>
+                    <th th:text="#{prdWo.col.equip}">설비</th>
+                    <th th:text="#{prdWo.col.params}">파라미터</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <h2 th:text="#{prdWo.boms}">자재 소요 (발행 때 BOM)</h2>
+            <table class="hb-cmp-table" id="boms">
+                <thead><tr>
+                    <th th:text="#{prdWo.col.item}">품목</th>
+                    <th th:text="#{prdWo.col.lineType}">유형</th>
+                    <th class="hb-num" th:text="#{prdWo.col.reqQty}">소요량</th>
+                    <th th:text="#{prdWo.col.src}">BOM 행</th>
+                    <th th:text="#{prdWo.col.phantom}">가상 조립</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+        <!-- 7a: 공정 완료판정(보존식)·재작업/수리 처리·마지막 공정 양품과 입고 (docs/25 4.9) -->
+        <section class="hb-sub" id="doneSection" hidden>
+            <h2 th:text="#{prdWo.completion}">완료판정 (투입 = 양품 + 폐기 + 재작업 + 수리)</h2>
+            <p id="doneInfo" class="hb-muted"></p>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="closeChecks">
+                    <thead><tr>
+                        <th th:text="#{prdWo.col.opSeq}">순서</th>
+                        <th th:text="#{prdWo.col.proc}">공정</th>
+                        <th th:text="#{prdWo.col.procStatus}">상태</th>
+                        <th class="hb-num" th:text="#{prdWo.col.input}">투입</th>
+                        <th class="hb-num" th:text="#{prdWo.col.good}">양품</th>
+                        <th class="hb-num" th:text="#{prdWo.col.scrap}">폐기</th>
+                        <th class="hb-num" th:text="#{prdWo.col.rework}">재작업(대기)</th>
+                        <th class="hb-num" th:text="#{prdWo.col.repair}">수리(대기)</th>
+                        <th class="hb-num" th:text="#{prdWo.col.diff}">차이(허용)</th>
+                        <th th:text="#{prdWo.col.judge}">판정</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <form id="reworkForm" class="hb-form" autocomplete="off" hidden th:if="${actions.contains('SAVE')}">
+                <h2 class="hb-wide" id="reworkTitle" th:text="#{prdWo.reworkTitle}">재작업·수리 처리</h2>
+                <label><span th:text="#{prdWo.col.kind}">종류</span>
+                    <select data-field="kind">
+                        <option value="REWORK" th:text="#{prdWo.kind.REWORK}">재작업</option>
+                        <option value="REPAIR" th:text="#{prdWo.kind.REPAIR}">수리</option>
+                    </select></label>
+                <label><span th:text="#{prdWo.col.reworkGood}">양품(새 LOT)</span>
+                    <input data-field="goodQty" inputmode="decimal" maxlength="30" data-help-key="prd-wo.reworkGood"></label>
+                <label><span th:text="#{prdWo.col.reworkScrap}">폐기</span>
+                    <input data-field="scrapQty" inputmode="decimal" maxlength="30"></label>
+                <label class="hb-wide"><span th:text="#{prdWo.col.reason}">사유·메모</span>
+                    <input data-field="reason" maxlength="500"></label>
+                <div class="hb-toolbar hb-wide">
+                    <button type="button" id="reworkSaveBtn" th:text="#{prdWo.reworkSave}">처리</button>
+                    <button type="button" id="reworkCancelBtn" class="hb-btn-ghost" th:text="#{prdWo.reworkCancel}">취소</button>
+                </div>
+            </form>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/mes/mes-ui.js}"></script>
+<script th:src="@{/js/views/production/wo-mgt.js}"></script>
+</body>
+</html>

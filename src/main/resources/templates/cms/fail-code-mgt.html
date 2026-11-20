@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  고장 코드 (cms-fail-code) — CMS 1부 C1 (docs/33 D1). 현상·원인·조치 3종 회사 코드 + 표준 상위 분류(회사가 늘리지 않음).
+  설비 클래스를 고르면 그 클래스 설비의 작업지시에서만 쓸 수 있다. 유형·코드는 만든 뒤 고정, 삭제 = 사용 중지.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">고장 코드</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.fail.col.codeType}">유형</legend>
+        <label><input type="radio" name="codeType" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="codeType" value="SYMPTOM"><span th:text="#{code.CMS_FAIL_TYPE.SYMPTOM}">현상</span></label>
+        <label><input type="radio" name="codeType" value="CAUSE"><span th:text="#{code.CMS_FAIL_TYPE.CAUSE}">원인</span></label>
+        <label><input type="radio" name="codeType" value="ACTION"><span th:text="#{code.CMS_FAIL_TYPE.ACTION}">조치</span></label>
+    </fieldset>
+    <label><span th:text="#{cms.fail.keyword}">코드·이름</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y" checked><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="failGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.fail.selectOrNew}">왼쪽에서 코드를 고르거나 신규를 누르세요.</p>
+        <form id="codeForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{cms.fail.col.codeType}">유형</span>
+                <select data-field="codeType" data-hb="select" data-code="CMS_FAIL_TYPE" data-blank="select"
+                        data-help-key="cms-fail-code.codeType"></select></label>
+            <label><span th:text="#{cms.fail.col.failCd}">코드</span>
+                <input data-field="failCd" maxlength="20" required data-help-key="cms-fail-code.failCd"></label>
+            <label class="hb-wide-2"><span th:text="#{cms.fail.col.failNm}">이름</span>
+                <input data-field="failNm" maxlength="100" required></label>
+            <label><span th:text="#{cms.fail.col.failCat}">상위 분류</span>
+                <select data-field="failCat" data-hb="select" data-code="CMS_FAIL_CAT" data-blank="select"
+                        data-help-key="cms-fail-code.failCat"></select></label>
+            <label><span th:text="#{cms.fail.col.equipClass}">설비 클래스</span>
+                <select data-field="equipClassCd" id="classSel" data-help-key="cms-fail-code.equipClassCd"></select></label>
+            <label><span th:text="#{cms.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{cms.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/fail-code-mgt.js}"></script>
+</body>
+</html>

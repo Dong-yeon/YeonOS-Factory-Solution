@@ -1,0 +1,2 @@
+# Jenkins 컨테이너가 읽는 파일 — Windows checkout 에서도 LF 그대로(plugins.txt 줄 끝  이 버전에 붙지 않게)
+* text eol=lf

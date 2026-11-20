@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{m/layout :: head(#{m.tab.home})}"></head>
+<!--
+  모바일 홈 (docs/74 화면 1). 내 결재 대기 수·안 읽은 알림·오늘 확인할 것(사무 홈 카드 API 그대로).
+  조각마다 그 사무 화면 조회 권한이 있을 때만 그린다(can) — 숨김은 편의, 판정은 각 API.
+-->
+<body class="hb-m" th:data-today="${today}">
+<header th:replace="~{m/layout :: header(#{m.tab.home})}"></header>
+<main class="m-main">
+    <p class="m-muted" th:text="#{m.home.hello(${mUser.userNm})}">홍길동 님</p>
+    <p id="msg" class="m-msg" role="status" aria-live="polite"></p>
+
+    <ul class="m-tiles">
+        <li th:if="${can.approval}">
+            <a class="m-tile" id="aprTile" th:href="@{/m/approval}">
+                <span th:text="#{m.home.approval}">결재 대기</span><span class="m-tile-num" id="aprCnt">–</span>
+            </a>
+        </li>
+        <li th:if="${can.inbox}">
+            <a class="m-tile" id="inboxTile" href="#inboxSec">
+                <span th:text="#{m.home.unread}">안 읽은 알림</span><span class="m-tile-num" id="inboxCnt">–</span>
+            </a>
+        </li>
+    </ul>
+
+    <div class="m-btn-row" th:if="${can.ncr or can.lot or can.equip}">
+        <a class="m-btn m-primary" th:if="${can.ncr}" th:href="@{/m/ncr}" th:text="#{m.home.goNcr}">부적합 등록</a>
+        <a class="m-btn" th:if="${can.lot or can.equip}" th:href="@{/m/find}" th:text="#{m.home.goFind}">LOT·설비 찾기</a>
+    </div>
+
+    <section th:if="${can.cards}" id="cardSec">
+        <h2><span th:text="#{m.home.todo}">오늘 확인할 것</span> <span id="asOf" class="m-muted m-small"></span></h2>
+        <ul id="cards" class="m-list"></ul>
+    </section>
+
+    <section th:if="${can.inbox}" id="inboxSec">
+        <h2 th:text="#{m.home.inbox}">알림</h2>
+        <ul id="inbox" class="m-list"></ul>
+    </section>
+
+    <div class="m-btn-row">
+        <button type="button" id="refreshBtn" th:text="#{m.refresh}">새로 고침</button>
+    </div>
+</main>
+<nav th:replace="~{m/layout :: tabs}"></nav>
+<th:block th:replace="~{m/layout :: scripts}"></th:block>
+<script th:src="@{/js/views/m/m-home.js}"></script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 거래처관리. 목록(findPage)·건수(count)·엑셀(cursor) 은 같은 조건·정렬 조각을 쓴다 (docs/09 6.1 — 화면/엑셀 SQL 불일치 방지) -->
+<mapper namespace="io.smarthappy.module.master.cust.CustMapper">
+
+    <sql id="columns">
+        c.cust_id, c.cust_cd, c.cust_nm, c.cust_type, c.biz_no, c.ceo_nm, c.tel, c.email, c.addr, c.remark,
+        c.use_yn, c.row_ver, c.updated_at, c.updated_by,
+        (select count(*) from mst_cust_contact t where t.cust_id = c.cust_id and t.use_yn = 'Y') as contact_cnt
+    </sql>
+
+    <sql id="where">
+        from mst_cust c
+        <where>
+            <if test="q.custCdLike != null">and c.cust_cd like #{q.custCdLike} escape '\'</if>
+            <if test="q.custNmLike != null">and c.cust_nm ilike #{q.custNmLike} escape '\'</if>
+            <if test="q.custType != null">and c.cust_type = #{q.custType}</if>
+            <if test="q.useYn != null">and c.use_yn = #{q.useYn}</if>
+        </where>
+    </sql>
+
+    <!-- 정렬: 화이트리스트 enum 이름으로만 열을 고른다(문자열 치환 금지). 마지막에 PK — 페이지 경계 중복·누락 방지 -->
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CUST_CD'">c.cust_cd</when>
+                <when test="s.key == 'CUST_NM'">c.cust_nm</when>
+                <when test="s.key == 'CUST_TYPE'">c.cust_type</when>
+                <when test="s.key == 'USE_YN'">c.use_yn</when>
+                <otherwise>c.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        c.cust_id
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.master.cust.CustDtos$CustRow">
+        select <include refid="columns"/>
+        <include refid="where"/>
+        <include refid="orderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.master.cust.CustDtos$CustRow" fetchSize="1000">
+        select <include refid="columns"/>
+        <include refid="where"/>
+        <include refid="orderBy"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.master.cust.CustDtos$CustRow">
+        select <include refid="columns"/> from mst_cust c where c.cust_id = #{id}
+    </select>
+
+    <select id="existsCd" resultType="boolean">
+        select exists (select 1 from mst_cust where cust_cd = #{custCd}
+        <if test="exceptId != null">and cust_id &lt;&gt; #{exceptId}</if>)
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into mst_cust (comp_cd, cust_cd, cust_nm, cust_type, biz_no, ceo_nm, tel, email, addr, remark, use_yn,
+                              created_by, updated_by)
+        values (hb_current_comp(), #{f.custCd}, #{f.custNm}, #{f.custType}, #{f.bizNo}, #{f.ceoNm}, #{f.tel},
+                #{f.email}, #{f.addr}, #{f.remark}, #{f.useYn}, #{by}, #{by})
+        returning cust_id
+    </select>
+
+    <update id="update">
+        update mst_cust
+           set cust_cd = #{f.custCd}, cust_nm = #{f.custNm}, cust_type = #{f.custType}, biz_no = #{f.bizNo},
+               ceo_nm = #{f.ceoNm}, tel = #{f.tel}, email = #{f.email}, addr = #{f.addr}, remark = #{f.remark},
+               use_yn = #{f.useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cust_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="disable">
+        update mst_cust set use_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cust_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="touch">
+        update mst_cust set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cust_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <select id="findContacts" resultType="io.smarthappy.module.master.cust.CustDtos$ContactRow">
+        select contact_id, cust_id, contact_nm, dept_nm, tel, email, main_yn, row_ver
+          from mst_cust_contact
+         where cust_id = #{custId} and use_yn = 'Y'
+         order by main_yn desc, contact_id
+    </select>
+
+    <select id="insertContact" resultType="long" flushCache="true">
+        insert into mst_cust_contact (comp_cd, cust_id, contact_nm, dept_nm, tel, email, main_yn, created_by, updated_by)
+        values (hb_current_comp(), #{custId}, #{c.contactNm}, #{c.deptNm}, #{c.tel}, #{c.email}, #{c.mainYn}, #{by}, #{by})
+        returning contact_id
+    </select>
+
+    <update id="updateContact">
+        update mst_cust_contact
+           set contact_nm = #{c.contactNm}, dept_nm = #{c.deptNm}, tel = #{c.tel}, email = #{c.email},
+               main_yn = #{c.mainYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where contact_id = #{c.contactId} and cust_id = #{custId} and use_yn = 'Y' and row_ver = #{c.rowVer}
+    </update>
+
+    <update id="disableContact">
+        update mst_cust_contact set use_yn = 'N', main_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where contact_id = #{id} and cust_id = #{custId} and use_yn = 'Y' and row_ver = #{rowVer}
+    </update>
+</mapper>

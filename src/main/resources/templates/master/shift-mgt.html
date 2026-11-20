@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  근무조 관리 (mst-shift) — P2 1단계 (docs/25 4.2). 공장마다 몇 개뿐이라 페이지 없는 표 + 상세 폼.
+  직접 치는 값 = 조 코드·이름·시작·끝(공장 현지 시각)·작업일 기준·휴게. 자정을 넘는 조는 끝 < 시작으로 적는다.
+  아래 "확인" 칸은 시각 하나가 어느 작업일·근무조로 잡히는지 바로 보여 준다(설정 실수 확인용).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">근무조 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <label class="hb-inline"><span th:text="#{shift.plant}">공장</span>
+                <select id="plantSel" data-help-key="mst-shift.plant"></select></label>
+            <span id="zoneInfo" class="hb-muted"></span>
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="shiftGrid" class="hb-grid-host"></div>
+        <section class="hb-sub" id="checkBox">
+            <h2 th:text="#{shift.check}">시각 → 작업일·근무조 확인</h2>
+            <div class="hb-toolbar">
+                <label class="hb-inline"><span th:text="#{shift.checkAt}">현지 시각</span>
+                    <input type="datetime-local" id="checkAt" data-field="localTime" data-help-key="mst-shift.check"></label>
+                <button type="button" id="checkBtn" class="hb-btn-secondary" th:text="#{shift.checkBtn}">확인</button>
+            </div>
+            <p id="checkResult" class="hb-muted" role="status"></p>
+        </section>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{shift.selectOrNew}">왼쪽에서 근무조를 고르거나 신규를 누르세요.</p>
+        <form id="shiftForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{shift.col.shiftCd}">조 코드</span>
+                <input data-field="shiftCd" maxlength="10" required data-help-key="mst-shift.shiftCd"></label>
+            <label><span th:text="#{shift.col.shiftNm}">조 이름</span>
+                <input data-field="shiftNm" maxlength="50" required></label>
+            <label><span th:text="#{shift.col.startTime}">시작</span>
+                <input type="time" step="60" data-field="startTime" required></label>
+            <label><span th:text="#{shift.col.endTime}">끝</span>
+                <input type="time" step="60" data-field="endTime" required data-help-key="mst-shift.endTime"></label>
+            <label class="hb-wide-2"><span th:text="#{shift.col.dayOffset}">작업일</span>
+                <select data-field="dayOffset" data-help-key="mst-shift.dayOffset">
+                    <option value="0" th:text="#{shift.offset.0}">시작한 날</option>
+                    <option value="-1" th:text="#{shift.offset.-1}">시작한 날의 전날(자정 뒤에 시작하는 조)</option>
+                </select></label>
+            <label><span th:text="#{shift.col.breakMin}">휴게(분)</span>
+                <input data-field="breakMin" data-hb="number" data-scale="0" data-min="0" data-max="600" data-pad="false"></label>
+            <label><span th:text="#{shift.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{shift.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{shift.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/mes/mes-ui.js}"></script>
+<script th:src="@{/js/views/master/shift-mgt.js}"></script>
+</body>
+</html>

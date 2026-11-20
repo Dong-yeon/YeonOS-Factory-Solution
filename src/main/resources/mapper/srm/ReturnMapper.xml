@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 반품 지시 (SRM 2부 R4c, docs/31 4.12.4) — 회사 범위는 RLS, 쓰기의 comp_cd 는 hb_current_comp(). QMS 표는 읽지 않는다(계약으로만) -->
+<mapper namespace="io.smarthappy.module.srm.claim.ReturnMapper">
+
+    <!-- ================================================================ 선택지 -->
+
+    <select id="findPlants" resultType="io.smarthappy.module.srm.claim.ReturnDtos$PlantOption">
+        select plant_cd, plant_nm from sys_plant where use_yn = 'Y' order by sort_no, plant_cd
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="findSuppliers" resultType="io.smarthappy.module.srm.claim.ReturnDtos$SupplierRef">
+        select c.cust_id, c.cust_cd, c.cust_nm
+          from mst_cust c join srm_supplier s on s.cust_id = c.cust_id
+         where c.use_yn = 'Y'
+         order by c.cust_cd
+         limit 2000
+    </select>
+
+    <select id="findSupplier" resultType="io.smarthappy.module.srm.claim.ReturnDtos$SupplierRef">
+        select c.cust_id, c.cust_cd, c.cust_nm
+          from mst_cust c join srm_supplier s on s.cust_id = c.cust_id
+         where c.cust_cd = #{custCd}
+    </select>
+
+    <!-- 교체 요구가 고를 발주 행 — 그 협력사·품목의 받은 것이 있는 SRM 발주 행(최근 발주 먼저) -->
+    <select id="poLineOptions" resultType="io.smarthappy.module.srm.claim.ReturnDtos$PoLineOption">
+        select l.po_line_id, p.po_no, l.line_no, p.po_date, p.status, trim_scale(l.recv_qty)::text as recv_qty, l.unit_cd
+          from srm_po_line l join srm_po p on p.po_id = l.po_id
+         where p.cust_id = #{custId} and l.item_id = #{itemId} and p.source = 'SRM' and l.recv_qty &gt; 0
+         order by p.po_date desc, p.po_id desc, l.line_no
+         limit 200
+    </select>
+
+    <!-- 교체 요구 단위 환산(R4c-단위) — 입고 게이트와 같은 표(품목 단위 환산, 사용 중만), 같은 단위면 1 -->
+    <select id="findPoLine" resultType="io.smarthappy.module.srm.claim.ReturnDtos$PoLineRef">
+        select l.po_line_id, p.cust_id, l.item_id, l.unit_cd,
+               case when l.unit_cd = i.unit_cd then 1 else ucp.factor end as po_factor,
+               case when cast(#{unitCd} as varchar) = i.unit_cd then 1 else ucr.factor end as ret_factor,
+               coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = l.unit_cd),
+                        (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = l.unit_cd)) as po_scale
+          from srm_po_line l join srm_po p on p.po_id = l.po_id
+          join mst_item i on i.item_id = l.item_id
+          left join mst_unit_conv ucp on ucp.item_id = l.item_id and ucp.from_unit = l.unit_cd and ucp.to_unit = i.unit_cd and ucp.use_yn = 'Y'
+          left join mst_unit_conv ucr on ucr.item_id = l.item_id and ucr.from_unit = cast(#{unitCd} as varchar) and ucr.to_unit = i.unit_cd
+                                     and ucr.use_yn = 'Y'
+         where l.po_line_id = #{poLineId}
+    </select>
+
+    <!-- ================================================================ 반품 -->
+
+    <sql id="retCols">
+        r.return_id, r.return_no, r.cust_id, c.cust_cd, c.cust_nm, r.plant_cd, pl.plant_nm, r.ncr_id, r.ncr_no, r.ncr_line_no, r.lot_id,
+        r.lot_no, r.po_line_id, p.po_no, l.line_no as po_line_no, r.item_id, i.item_cd, i.item_nm, r.unit_cd, trim_scale(r.qty)::text as qty,
+        r.replace_yn, r.status, r.confirmed_at, r.confirmed_by, r.shipped_at, r.ship_ref, r.cancel_reason, r.remark, r.row_ver, r.created_at,
+        r.created_by, r.updated_at, r.updated_by, l.unit_cd as po_unit_cd,
+        trim_scale(greatest(l.qty - l.cancel_qty - l.recv_qty, 0))::text as po_open_qty
+    </sql>
+    <sql id="retFrom">
+          from srm_return r
+          join mst_cust c on c.cust_id = r.cust_id
+          join mst_item i on i.item_id = r.item_id
+          left join sys_plant pl on pl.plant_cd = r.plant_cd
+          left join srm_po_line l on l.po_line_id = r.po_line_id
+          left join srm_po p on p.po_id = l.po_id
+    </sql>
+
+    <!-- 목록·grid 공통(c = ReturnCrit) — 기간 = 만든 날(회사 시간대) -->
+    <sql id="retMatched">
+        select <include refid="retCols"/> <include refid="retFrom"/>
+         where r.created_at &gt;= (#{c.from}::date)::timestamp at time zone #{c.zone}
+           and r.created_at &lt; (#{c.to}::date + 1)::timestamp at time zone #{c.zone}
+        <if test="c.status != null">and r.status = #{c.status}</if>
+        <if test="c.keywordLike != null">
+           and (r.return_no ilike #{c.keywordLike} escape '\' or r.ncr_no ilike #{c.keywordLike} escape '\'
+                or r.lot_no ilike #{c.keywordLike} escape '\' or i.item_cd ilike #{c.keywordLike} escape '\'
+                or c.cust_cd ilike #{c.keywordLike} escape '\' or c.cust_nm ilike #{c.keywordLike} escape '\')
+        </if>
+    </sql>
+
+    <select id="findReturns" resultType="io.smarthappy.module.srm.claim.ReturnDtos$ReturnRow">
+        select x.* from (<include refid="retMatched"/>) x
+         order by x.created_at desc, x.return_id desc
+         limit 2000
+    </select>
+
+    <!-- grid — 정렬은 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findReturnPage" resultType="io.smarthappy.module.srm.claim.ReturnDtos$ReturnRow">
+        select x.* from (<include refid="retMatched"/>) x
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'RETURN_NO'">x.return_no</when>
+                <when test="s.key == 'SUPPLIER'">x.cust_nm</when>
+                <when test="s.key == 'NCR_NO'">x.ncr_no</when>
+                <when test="s.key == 'ITEM'">x.item_cd</when>
+                <when test="s.key == 'STATUS'">x.status</when>
+                <otherwise>x.created_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         x.return_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countReturns" resultType="long">
+        select count(*) from (<include refid="retMatched"/>) n
+    </select>
+
+    <select id="findReturn" resultType="io.smarthappy.module.srm.claim.ReturnDtos$ReturnRow">
+        select <include refid="retCols"/> <include refid="retFrom"/> where r.return_id = #{returnId}
+    </select>
+
+    <select id="lockReturn" resultType="io.smarthappy.module.srm.claim.ReturnDtos$ReturnRow" flushCache="true">
+        select return_id, return_no, cust_id, plant_cd, ncr_id, ncr_no, ncr_line_no, lot_id, lot_no, item_id, unit_cd, status, row_ver
+          from srm_return where return_id = #{returnId} for update
+    </select>
+
+    <select id="liveReturns" resultType="map">
+        select r.ncr_id || ':' || r.ncr_line_no as k, r.return_no as no
+          from srm_return r
+         where r.cust_id = #{custId} and r.status &lt;&gt; 'CANCELLED'
+           and r.ncr_id in <foreach collection="ncrIds" item="n" open="(" separator="," close=")">#{n}</foreach>
+    </select>
+
+    <select id="insertReturn" resultType="long" flushCache="true">
+        insert into srm_return (comp_cd, return_no, cust_id, plant_cd, ncr_id, ncr_no, ncr_line_no, lot_id, lot_no, po_line_id, item_id,
+                                unit_cd, qty, replace_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{no}, #{v.custId}, #{v.plantCd}, #{v.ncrId}, #{v.ncrNo}, #{v.lineNo}, #{v.lotId}, #{v.lotNo},
+                #{v.poLineId}, #{v.itemId}, #{v.unitCd}, #{v.qty}, #{v.replaceYn}, #{v.remark}, #{by}, #{by})
+        returning return_id
+    </select>
+
+    <update id="updateReturn">
+        update srm_return
+           set plant_cd = #{v.plantCd}, qty = #{v.qty}, replace_yn = #{v.replaceYn}, po_line_id = #{v.poLineId}, remark = #{v.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where return_id = #{returnId} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="confirm">
+        update srm_return
+           set status = 'CONFIRMED', confirmed_at = now(), confirmed_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where return_id = #{returnId} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="cancel">
+        update srm_return
+           set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where return_id = #{returnId} and status in ('DRAFT', 'CONFIRMED') and row_ver = #{rowVer}
+    </update>
+
+    <!-- 반품 ↔ 클레임(같은 근거 NCR) — 취소된 클레임 제외. 같은 협력사만(방어) -->
+    <select id="claimsOfNcr" resultType="io.smarthappy.module.srm.claim.ReturnDtos$LinkRow">
+        select k.claim_id as id, k.claim_no as no, k.status, n.ncr_no, (k.created_at at time zone #{zone})::date as created_on
+          from srm_claim k join srm_claim_ncr n on n.claim_id = k.claim_id
+         where n.ncr_id = #{ncrId} and k.cust_id = #{custId} and k.status &lt;&gt; 'CANCELLED'
+         order by k.claim_id
+         limit 200
+    </select>
+</mapper>

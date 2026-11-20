@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  라우팅 관리 (mst-routing) — P1 5단계 (docs/20). 목록 = 라우팅 머리(품목 × 공장 × 리비전), 상세 = 머리 폼 + 공정 단계 목록(+ 단계별 파라미터).
+  사용성 체크(docs/11 4.3): 주 사용자 = 생산기술 담당(WEB, 마우스·키보드). 일상 변경은 BOM 과 같이 "새 리비전 → 고치기 → 확정".
+  직접 치는 값 = 품목·공장·공정 순번·공정·작업장·사이클타임·캐비티·준비 시간·파라미터 목표/범위(공정 설계 값이라 서버가 채울 수 없음).
+  서버가 채우는 값 = 리비전(비우면 A0, A1 …), 시작일(비우면 오늘), 캐비티(비우면 1), 준비 시간(비우면 0).
+  예외 = 확정본 수정(새 리비전으로), 외주 아닌 공정의 작업장·사이클타임 누락(확정 거부), 같은 날 겹치는 확정본(오류).
+  버튼 노출은 편의, 판정은 API 의 @ProgAuth (확정 = APPROVE, 폐기 = DELETE).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">라우팅 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{mstRouting.col.itemCd}">품목 코드</span>
+        <input name="itemCd" maxlength="40"></label>
+    <label><span th:text="#{mstRouting.col.itemNm}">품목명</span>
+        <input name="itemNm" maxlength="200"></label>
+    <label><span th:text="#{mstRouting.col.plantCd}">공장</span>
+        <select name="plantCd" id="searchPlant"></select></label>
+    <label><span th:text="#{mstRouting.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="BOM_STATUS" data-blank="all"></select></label>
+    <label class="hb-check"><input type="checkbox" name="withObsolete" value="true">
+        <span th:text="#{mstRouting.withObsolete}">폐기 포함</span></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="routingGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="releaseBtn" th:if="${actions.contains('APPROVE')}" th:text="#{mstRouting.release}">확정</button>
+            <button type="button" id="newRevBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{mstRouting.newRev}">새 리비전</button>
+            <div class="hb-danger-zone">
+                <button type="button" id="obsoleteBtn" class="hb-btn-danger-outline" th:if="${actions.contains('DELETE')}" th:text="#{mstRouting.obsolete}">폐기</button>
+            </div>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{mstRouting.selectOrNew}">왼쪽에서 라우팅을 고르거나 신규를 누르세요.</p>
+
+        <form id="routingForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{mstRouting.col.itemCd}">품목 코드</span>
+                <input data-field="itemCd" maxlength="40" required data-help-key="mst-routing.itemCd"></label>
+            <label class="hb-wide-2"><span th:text="#{mstRouting.col.itemNm}">품목명</span>
+                <output id="itemNm" class="hb-output"></output></label>
+            <label><span th:text="#{mstRouting.col.plantCd}">공장</span>
+                <select data-field="plantCd" required data-help-key="mst-routing.plantCd"></select></label>
+            <label><span th:text="#{mstRouting.col.rev}">리비전</span>
+                <input data-field="rev" maxlength="4"></label>
+            <label><span th:text="#{mstRouting.col.status}">상태</span>
+                <output id="status" class="hb-output"></output></label>
+            <label><span th:text="#{mstRouting.col.validFrom}">시작일</span>
+                <input data-field="validFrom" type="date"></label>
+            <label><span th:text="#{mstRouting.col.validTo}">종료일</span>
+                <output id="validTo" class="hb-output"></output></label>
+            <label><span th:text="#{mstRouting.col.changeNo}">변경 번호</span>
+                <input data-field="changeNo" maxlength="30"></label>
+            <label class="hb-wide"><span th:text="#{mstRouting.col.changeReason}">변경 사유</span>
+                <input data-field="changeReason" maxlength="500"></label>
+            <label class="hb-wide"><span th:text="#{mstRouting.col.remark}">비고</span>
+                <textarea data-field="remark" maxlength="1000" rows="2"></textarea></label>
+        </form>
+
+        <section class="hb-sub" id="stepSection" hidden>
+            <h2 th:text="#{mstRouting.steps}">공정 단계</h2>
+            <p class="hb-muted" th:text="#{mstRouting.stepsHint}">사이클타임은 한 사이클(캐비티 수만큼 생산)에 걸리는 초입니다.</p>
+            <div id="steps" class="hb-rows hb-routing-steps" role="list"></div>
+            <div class="hb-toolbar" id="stepTools" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="addStepBtn" class="hb-btn-secondary" th:text="#{mstRouting.addStep}">단계 추가</button>
+                <button type="button" id="saveStepsBtn" th:text="#{mstRouting.saveSteps}">단계 저장</button>
+            </div>
+            <div id="bomCheck" class="hb-routing-bomcheck" hidden></div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/master/routing-mgt.js}"></script>
+</body>
+</html>

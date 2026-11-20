@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- PMS 4단계 공수·이슈 (docs/32 PM4). 회사 범위는 RLS — 조건에 comp_cd 를 쓰지 않는다. 공수는 늘 본인 조건 -->
+<mapper namespace="io.smarthappy.module.pms.WorkMapper">
+
+    <!-- ================================================================ 공수 -->
+
+    <select id="lockDay" resultType="string" flushCache="true">
+        select pg_advisory_xact_lock(hashtextextended(#{key}, 0))::text
+    </select>
+
+    <sql id="logCols">
+        w.wl_id, w.user_id, w.work_day, w.proj_id, p.proj_no, p.proj_nm, w.task_id, t.task_nm as wbs_task_nm, w.category_cd,
+        w.hours, w.entry_method, w.status, w.confirmed_at, w.reopen_reason, w.note, w.row_ver
+    </sql>
+
+    <select id="findLogs" resultType="io.smarthappy.module.pms.WorkDtos$LogRow">
+        select <include refid="logCols"/>
+          from pms_work_log w
+          join pms_project p on p.proj_id = w.proj_id
+          left join pms_task t on t.task_id = w.task_id
+         where w.user_id = #{userId} and w.work_day between #{from} and #{to}
+         order by w.work_day, p.proj_no, w.wl_id
+    </select>
+
+    <!-- 진행 중 프로젝트의 내 잎 작업: 진행 중, 또는 시작 전인데 그 날이 계획 기간 안 -->
+    <select id="findSuggestions" resultType="io.smarthappy.module.pms.WorkDtos$Suggestion">
+        select p.proj_id, p.proj_no, p.proj_nm, t.task_id, t.task_nm, t.plan_start, t.plan_end, t.status
+          from pms_task t join pms_project p on p.proj_id = t.proj_id
+         where t.owner_user_id = #{userId} and t.is_summary = 'N' and p.status = 'ACTIVE'
+           and (t.status = 'IN_PROGRESS' or (t.status = 'NOT_STARTED' and #{day} between t.plan_start and t.plan_end))
+         order by p.proj_no, t.plan_start, t.task_id
+         limit 50
+    </select>
+
+    <select id="findOpenProjects" resultType="io.smarthappy.module.pms.WorkDtos$ProjOption">
+        select proj_id, proj_no, proj_nm from pms_project where status in ('DRAFT', 'ACTIVE', 'ON_HOLD') order by proj_no desc limit 500
+    </select>
+
+    <select id="findPrevious" resultType="io.smarthappy.module.pms.WorkDtos$LogRow">
+        select w.wl_id, w.hours, w.category_cd, w.work_day from pms_work_log w
+         where w.user_id = #{userId} and w.proj_id = #{projId} and w.task_id is not distinct from #{taskId}
+           and w.work_day &lt; #{day} and w.work_day >= #{day}::date - 14 and w.hours > 0
+         order by w.work_day desc, w.wl_id desc
+         limit 1
+    </select>
+
+    <select id="insertLog" resultType="long" flushCache="true">
+        insert into pms_work_log (comp_cd, user_id, work_day, proj_id, task_id, category_cd, hours, entry_method, note,
+                                  created_by, updated_by)
+        values (hb_current_comp(), #{userId}, #{day}, #{projId}, #{taskId}, #{categoryCd}, #{hours}, #{method}, #{note}, #{by}, #{by})
+        returning wl_id
+    </select>
+
+    <update id="updateLog">
+        update pms_work_log
+           set task_id = #{taskId}, category_cd = #{categoryCd}, hours = #{hours}, entry_method = #{method}, note = #{note},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wl_id = #{id} and user_id = #{userId} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <delete id="deleteLog">
+        delete from pms_work_log where wl_id = #{id} and user_id = #{userId} and status = 'DRAFT'
+    </delete>
+
+    <update id="confirmDay">
+        update pms_work_log
+           set status = 'CONFIRMED', confirmed_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where user_id = #{userId} and work_day = #{day} and status = 'DRAFT'
+    </update>
+
+    <update id="reopenDay">
+        update pms_work_log
+           set status = 'DRAFT', reopen_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where user_id = #{userId} and work_day = #{day} and status = 'CONFIRMED'
+    </update>
+
+    <select id="summary" resultType="io.smarthappy.module.pms.WorkDtos$SummaryRow">
+        select w.user_id, u.login_id, u.user_nm, w.category_cd,
+               trim_scale(coalesce(sum(w.hours) filter (where w.status = 'CONFIRMED'), 0)) as confirmed_hours,
+               trim_scale(coalesce(sum(w.hours) filter (where w.status = 'DRAFT'), 0)) as draft_hours,
+               min(w.work_day) as first_day, max(w.work_day) as last_day
+          from pms_work_log w join sys_user u on u.user_id = w.user_id
+         where w.proj_id = #{projId}
+         group by w.user_id, u.login_id, u.user_nm, w.category_cd
+         order by u.user_nm, w.category_cd
+    </select>
+
+    <!-- ================================================================ 이슈 -->
+
+    <sql id="issueCols">
+        i.issue_id, i.issue_no, i.proj_id, p.proj_no, p.proj_nm, i.task_id, t.task_nm, i.title, i.detail, i.severity, i.status,
+        i.issue_type, i.close_kind,
+        i.owner_user_id, u.login_id as owner_login_id, u.user_nm as owner_nm, i.due_date, i.resolution, i.resolved_on, i.source,
+        i.gate_review_id, r.review_no as gate_review_no, i.obj_type, i.obj_id,
+        case i.obj_type when 'ITEM' then it.item_cd when 'CUST' then c.cust_cd when 'EQUIP' then e.equip_cd when 'ASSET' then a.asset_cd end as obj_cd,
+        case i.obj_type when 'ITEM' then it.item_nm when 'CUST' then c.cust_nm when 'EQUIP' then e.equip_nm when 'ASSET' then a.asset_nm end as obj_nm,
+        i.capa_id, i.row_ver, i.created_at, i.created_by, i.updated_at, i.updated_by,
+        (i.status in ('OPEN', 'IN_PROGRESS') and i.due_date &lt; #{lateRef}) as late
+    </sql>
+
+    <sql id="issueFrom">
+        from pms_issue i
+        join pms_project p on p.proj_id = i.proj_id
+        left join pms_task t on t.task_id = i.task_id
+        left join sys_user u on u.user_id = i.owner_user_id
+        left join pms_gate_review r on r.review_id = i.gate_review_id
+        left join mst_item it on i.obj_type = 'ITEM' and it.item_id = i.obj_id
+        left join mst_cust c on i.obj_type = 'CUST' and c.cust_id = i.obj_id
+        left join mst_equip e on i.obj_type = 'EQUIP' and e.equip_id = i.obj_id
+        left join mst_phys_asset a on i.obj_type = 'ASSET' and a.asset_id = i.obj_id
+    </sql>
+
+    <sql id="issueWhere">
+        <where>
+            <if test="projId != null">and i.proj_id = #{projId}</if>
+            <if test="statuses != null and statuses.size() > 0">
+                and i.status in <foreach collection="statuses" item="s" open="(" separator="," close=")">#{s}</foreach>
+            </if>
+            <if test="severity != null">and i.severity = #{severity}</if>
+            <if test="issueType != null">and i.issue_type = #{issueType}</if>
+            <if test="ownerId != null">and i.owner_user_id = #{ownerId}</if>
+            <if test="objType != null">and i.obj_type = #{objType} and i.obj_id = #{objId}</if>
+            <if test="keywordLike != null">
+                and (i.issue_no ilike #{keywordLike} escape '\' or i.title ilike #{keywordLike} escape '\'
+                     or p.proj_no ilike #{keywordLike} escape '\')
+            </if>
+        </where>
+    </sql>
+
+    <select id="findIssues" resultType="io.smarthappy.module.pms.WorkDtos$IssueRow">
+        select <include refid="issueCols"/>
+        <include refid="issueFrom"/>
+        <include refid="issueWhere"/>
+         order by case i.severity when 'HIGH' then 0 when 'MID' then 1 else 2 end, i.due_date nulls last, i.issue_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ②) — 같은 조건 issueWhere, 정렬은 허용 목록 enum 이름으로만, 마지막에 PK(목록처럼 최근 먼저) -->
+    <select id="findIssuePage" resultType="io.smarthappy.module.pms.WorkDtos$IssueRow">
+        select <include refid="issueCols"/>
+        <include refid="issueFrom"/>
+        <include refid="issueWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ISSUE_NO'">i.issue_no</when>
+                <when test="s.key == 'TITLE'">i.title</when>
+                <when test="s.key == 'PROJ_NO'">p.proj_no</when>
+                <when test="s.key == 'STATUS'">i.status</when>
+                <when test="s.key == 'OWNER_NM'">u.user_nm</when>
+                <when test="s.key == 'DUE_DATE'">i.due_date</when>
+                <otherwise>case i.severity when 'HIGH' then 0 when 'MID' then 1 else 2 end</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         i.issue_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countIssues" resultType="long">
+        select count(*) from pms_issue i join pms_project p on p.proj_id = i.proj_id
+        <include refid="issueWhere"/>
+    </select>
+
+    <select id="findIssue" resultType="io.smarthappy.module.pms.WorkDtos$IssueRow">
+        select <include refid="issueCols"/>
+        <include refid="issueFrom"/>
+         where i.issue_id = #{id}
+    </select>
+
+    <select id="findIssueProjId" resultType="long">
+        select proj_id from pms_issue where issue_id = #{id}
+    </select>
+
+    <select id="insertIssue" resultType="long" flushCache="true">
+        insert into pms_issue (comp_cd, issue_no, proj_id, task_id, title, detail, severity, owner_user_id, due_date, obj_type, obj_id,
+                               issue_type, created_by, updated_by)
+        values (hb_current_comp(), #{issueNo}, #{f.projId}, #{f.taskId}, #{f.title}, #{f.detail}, #{f.severity}, #{f.ownerUserId},
+                #{f.dueDate}, #{f.objType}, #{f.objId}, #{f.issueType}, #{by}, #{by})
+        returning issue_id
+    </select>
+
+    <select id="insertApqpIssue" resultType="long" flushCache="true">
+        insert into pms_issue (comp_cd, issue_no, proj_id, task_id, title, detail, severity, owner_user_id, due_date, obj_type, obj_id,
+                               source, apqp_action_id, issue_type, created_by, updated_by)
+        values (hb_current_comp(), #{issueNo}, #{f.projId}, #{f.taskId}, #{f.title}, #{f.detail}, #{f.severity}, #{f.ownerUserId},
+                #{f.dueDate}, #{f.objType}, #{f.objId}, 'APQP', #{actionId}, #{f.issueType}, #{by}, #{by})
+        returning issue_id
+    </select>
+
+    <select id="findApqpIssues" resultType="io.smarthappy.module.pms.WorkDtos$ApqpIssueRow">
+        select i.apqp_action_id as action_id, i.issue_id, i.issue_no, i.status, p.proj_id, p.proj_no
+          from pms_issue i
+          join pms_project p on p.proj_id = i.proj_id
+         where i.apqp_action_id in
+        <foreach collection="actionIds" item="a" open="(" separator="," close=")">#{a}</foreach>
+         order by i.apqp_action_id
+    </select>
+
+    <update id="updateIssue">
+        update pms_issue
+           set task_id = #{f.taskId}, title = #{f.title}, detail = #{f.detail}, severity = #{f.severity},
+               owner_user_id = #{f.ownerUserId}, due_date = #{f.dueDate}, obj_type = #{f.objType}, obj_id = #{f.objId},
+               issue_type = #{f.issueType}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where issue_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="linkCapa">
+        update pms_issue set capa_id = #{capaId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where issue_id = #{id} and row_ver = #{rowVer} and capa_id is null
+    </update>
+
+    <update id="updateIssueStatus">
+        update pms_issue
+           set status = #{status}, resolution = #{resolution}, resolved_on = #{resolvedOn}, close_kind = #{closeKind},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where issue_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <select id="findIssueLock" resultType="io.smarthappy.module.pms.WorkDtos$IssueLockRow">
+        select i.status as issue_status, p.status as proj_status
+          from pms_issue i join pms_project p on p.proj_id = i.proj_id
+         where i.issue_id = #{id}
+    </select>
+
+    <select id="codeUsable" resultType="boolean">
+        select hb_code_usable(hb_current_comp(), #{grp}, #{code})
+    </select>
+
+    <select id="findObj" resultType="io.smarthappy.module.pms.WorkDtos$ObjRef">
+        <choose>
+            <when test="objType == 'ITEM'">select 'ITEM' as obj_type, item_id as obj_id, item_cd as obj_cd, item_nm as obj_nm from mst_item where item_cd = #{objCd}</when>
+            <when test="objType == 'CUST'">select 'CUST' as obj_type, cust_id as obj_id, cust_cd as obj_cd, cust_nm as obj_nm from mst_cust where cust_cd = #{objCd}</when>
+            <when test="objType == 'EQUIP'">select 'EQUIP' as obj_type, equip_id as obj_id, equip_cd as obj_cd, equip_nm as obj_nm from mst_equip where equip_cd = #{objCd}</when>
+            <otherwise>select 'ASSET' as obj_type, asset_id as obj_id, asset_cd as obj_cd, asset_nm as obj_nm from mst_phys_asset where asset_cd = #{objCd}</otherwise>
+        </choose>
+         limit 2
+    </select>
+</mapper>

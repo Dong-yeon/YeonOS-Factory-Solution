@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="#{pop.title}">작업장</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/css/pop.css}">
+</head>
+<!--
+  POP 작업장 홈 (docs/25 4.6) — 단말(ROLE_TERMINAL)만. 작업자가 없으면 배지 화면, PIN 이 필요하면 키패드,
+  있으면 "내 할 일"(이 작업장의 발행·진행 지시 공정 + 자격 게이트 미리보기). 착수·실적은 5b.
+-->
+<body class="hb-pop" data-surface="pop" data-login-url="/pop/activate">
+<header class="hb-pop-head">
+    <span class="hb-pop-where" id="where"></span>
+    <span id="shift"></span>
+    <span class="hb-pop-grow"></span>
+    <span id="worker"></span>
+    <button type="button" id="switchBtn" hidden th:text="#{pop.switchWorker}">작업자 바꾸기</button>
+    <button type="button" id="langBtn" th:text="#{pop.otherLang}">English</button>
+    <span class="hb-pop-net" id="net" data-online="true" th:text="#{pop.online}">온라인</span>
+    <span class="hb-pop-pending" id="pending" hidden></span>
+    <button type="button" class="hb-pop-rejected" id="rejectedBtn" hidden></button>
+</header>
+<main class="hb-pop-main">
+    <p id="feedback" class="hb-pop-feedback" role="status" aria-live="assertive"></p>
+    <input id="scan" class="hb-pop-scan" inputmode="none" autocomplete="off" th:aria-label="#{pop.scanLabel}">
+
+    <section id="badgePanel" class="hb-pop-panel" hidden>
+        <p class="hb-pop-big" th:text="#{pop.scanBadge}">배지를 스캔하세요</p>
+        <p class="hb-pop-sub" th:text="#{pop.scanGuide}">스캐너로 작업자 배지를 읽으면 바로 바뀝니다.</p>
+    </section>
+
+    <section id="pinPanel" class="hb-pop-panel" hidden>
+        <p class="hb-pop-big" id="pinWho"></p>
+        <p th:text="#{pop.enterPin}">PIN 을 누르세요</p>
+        <div class="hb-pop-dots" id="pinDots" aria-hidden="true"></div>
+        <div class="hb-pop-keypad" id="keypad"></div>
+        <button type="button" id="pinCancel" th:text="#{pop.cancel}">취소</button>
+    </section>
+
+    <!-- 감독자 승인(docs/25 4.37) — 정책이 켜진 공장의 정정: 감독자 배지 스캔 → PIN → 승인 토큰으로 정정을 다시 보낸다 -->
+    <section id="approvalPanel" class="hb-pop-panel" hidden>
+        <p class="hb-pop-big" th:text="#{pop.approval}">감독자 승인</p>
+        <p id="approvalWhat" class="hb-pop-sub"></p>
+        <p id="approvalStep" th:text="#{pop.approvalScan}">감독자 배지를 스캔하세요</p>
+        <div id="approvalPinBox" hidden>
+            <p id="approverWho"></p>
+            <div class="hb-pop-dots" id="approvalDots" aria-hidden="true"></div>
+            <div class="hb-pop-keypad" id="approvalKeypad"></div>
+        </div>
+        <button type="button" id="approvalCancel" th:text="#{pop.cancel}">취소</button>
+    </section>
+
+    <!-- 다시 보낼 때 서버가 거부한 실적(재고 부족·마감 등) — 사라지지 않게 남겨 작업자가 고른다(docs/25 4.20) -->
+    <section id="rejectedPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" id="rejectedClose" th:text="#{pop.back}">← 내 할 일</button>
+            <h2 th:text="#{pop.rejected}">보내지 못한 실적</h2>
+        </div>
+        <p class="hb-pop-sub" th:text="#{pop.rejectedGuide}">서버가 받지 않은 실적입니다. 사유를 확인하고 다시 보내거나 버리세요.</p>
+        <ul class="hb-pop-list" id="rejectedList"></ul>
+    </section>
+
+    <!-- 고장 신고 — 설비·현상(CMS 선택지)·내용, 온라인만. 공정 화면에서 열면 그 공정 설비를 미리 고른다 -->
+    <section id="breakdownPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" id="breakdownClose" th:text="#{pop.back}">← 내 할 일</button>
+            <h2 th:text="#{pop.breakdown}">고장 신고</h2>
+        </div>
+        <p class="hb-pop-sub" th:text="#{pop.breakdownGuide}">설비 고장을 보전 담당에게 알립니다.</p>
+        <section class="hb-pop-card" id="bdForm">
+            <h3 th:text="#{pop.breakdownEquip}">설비</h3>
+            <div id="bdEquips" class="hb-pop-grid"></div>
+            <h3 th:text="#{pop.breakdownSymptom}">현상</h3>
+            <p id="bdSymptomInfo" class="hb-pop-sub"></p>
+            <div id="bdSymptoms" class="hb-pop-grid"></div>
+            <label class="hb-pop-text"><span th:text="#{pop.breakdownText}">내용</span>
+                <textarea id="bdText" rows="3" maxlength="200"></textarea></label>
+            <button type="button" class="hb-pop-primary hb-pop-wide" id="bdSend" th:text="#{pop.breakdownSend}">신고 보내기</button>
+        </section>
+        <!-- 신고 사진(docs/25 4.44) — 접수 뒤에만, 한도(photoMax) 0 이면 없음. 단말에서 줄여(긴 변 1600px·JPEG) 보낸다 -->
+        <section class="hb-pop-card" id="bdPhotoCard" hidden>
+            <h3 th:text="#{pop.bdPhoto}">사진</h3>
+            <p id="bdPhotoInfo" class="hb-pop-sub"></p>
+            <ul id="bdPhotos" class="hb-pop-photos"></ul>
+            <input type="file" id="bdPhotoInput" accept="image/jpeg,image/png" capture="environment" hidden>
+            <button type="button" class="hb-pop-primary hb-pop-wide" id="bdPhotoAdd" th:text="#{pop.bdPhotoAdd}">사진 찍기</button>
+            <button type="button" class="hb-pop-wide" id="bdPhotoDone" th:text="#{pop.bdPhotoDone}">끝내기</button>
+        </section>
+    </section>
+
+    <!-- 설비 점검(docs/25 4.58) — 예방점검(CHECK 방식) 실행: 열린 점검 → 항목 입력 → 점검 완료/건너뛰기. 고장 신고와 같은 틀, 온라인만 -->
+    <section id="pmPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" id="pmClose" th:text="#{pop.back}">← 내 할 일</button>
+            <h2 th:text="#{pop.pm}">설비 점검</h2>
+            <button type="button" id="pmRefresh" th:text="#{pop.refresh}">새로 보기</button>
+        </div>
+        <p id="pmInfo" class="hb-pop-sub"></p>
+        <ul class="hb-pop-tasks" id="pmRuns"></ul>
+        <section class="hb-pop-card" id="pmRun" hidden>
+            <h3 id="pmRunTitle"></h3>
+            <p id="pmRunInfo" class="hb-pop-sub"></p>
+            <div class="hb-pop-entry">
+                <ul id="pmItems" class="hb-pop-list hb-pop-checks"></ul>
+                <div class="hb-pop-keypad" id="pmPad" hidden></div>
+            </div>
+            <button type="button" class="hb-pop-primary hb-pop-wide" id="pmDone" th:text="#{pop.pmDone}">점검 완료</button>
+            <div class="hb-pop-actions">
+                <button type="button" id="pmBack" th:text="#{pop.pmBack}">← 점검 목록</button>
+                <button type="button" class="hb-pop-danger" id="pmSkip" th:text="#{pop.pmSkip}">이번 점검 건너뛰기</button>
+            </div>
+            <div id="pmSkipBox" class="hb-pop-choices" hidden>
+                <p th:text="#{pop.pmSkipPick}">건너뛰는 이유를 고르세요</p>
+                <div id="pmSkipReasons" class="hb-pop-grid"></div>
+                <label class="hb-pop-text"><span th:text="#{pop.pmSkipMemo}">메모(선택)</span>
+                    <textarea id="pmSkipMemo" rows="2" maxlength="500"></textarea></label>
+                <button type="button" class="hb-pop-danger hb-pop-wide" id="pmSkipSend" th:text="#{pop.pmSkipSend}">건너뛰기 확정</button>
+            </div>
+        </section>
+        <!-- 끝난 뒤 — 불량 항목이 있으면 고장 신고로 이어 갈 수 있다(신고 여부는 작업자가 고른다) -->
+        <section class="hb-pop-card" id="pmResult" hidden>
+            <h3 id="pmResultTitle"></h3>
+            <p id="pmResultInfo"></p>
+            <button type="button" class="hb-pop-danger hb-pop-wide" id="pmToBreakdown" hidden th:text="#{pop.pmToBreakdown}">고장 신고로 이어 가기</button>
+            <button type="button" class="hb-pop-wide" id="pmResultClose" th:text="#{pop.pmResultClose}">점검 목록으로</button>
+        </section>
+    </section>
+
+    <!-- 검사 입력(docs/25 4.57) — 초품·순회(중물)·종품·공정 검사 측정값. 시작·판정 자동, NG 는 [불합격 확정] 한 번. 온라인만 -->
+    <section id="inspPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" id="inspClose" th:text="#{pop.inspClose}">← 공정으로</button>
+            <h2 th:text="#{pop.insp}">검사</h2>
+        </div>
+        <p id="inspProc" class="hb-pop-sub"></p>
+        <p id="inspTypeInfo" class="hb-pop-sub"></p>
+        <ul class="hb-pop-tasks" id="inspTypes"></ul>
+        <section class="hb-pop-card" id="inspCard" hidden>
+            <div class="hb-pop-insp-head">
+                <h3 id="inspTitle"></h3>
+                <span id="inspState"></span>
+            </div>
+            <p id="inspInfo" class="hb-pop-sub"></p>
+            <p id="inspGuide" class="hb-pop-sub"></p>
+            <div id="inspNgBox" hidden>
+                <button type="button" class="hb-pop-danger hb-pop-wide" id="inspNg" th:text="#{pop.inspNg}">불합격 확정</button>
+            </div>
+            <div class="hb-pop-entry">
+                <ul id="inspLines" class="hb-pop-list hb-pop-checks"></ul>
+                <div id="inspPadBox" class="hb-pop-insp-pad" hidden>
+                    <div class="hb-pop-keypad" id="inspPad"></div>
+                    <div class="hb-pop-actions">
+                        <button type="button" id="inspSign" th:text="#{pop.inspSign}">부호 바꾸기 (+/−)</button>
+                        <button type="button" id="inspPadClose" th:text="#{pop.inspPadClose}">키패드 닫기</button>
+                    </div>
+                </div>
+            </div>
+            <button type="button" class="hb-pop-wide" id="inspBack" th:text="#{pop.inspBack}">← 검사 목록</button>
+        </section>
+    </section>
+
+    <section id="taskPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <h2 th:text="#{pop.myTasks}">내 할 일</h2>
+            <button type="button" id="refreshBtn" th:text="#{pop.refresh}">새로 보기</button>
+            <!-- 고장 신고(docs/25 4.35) — 세션 breakdown 이 참일 때만(CMS 구현 없음·PDA = 숨김) -->
+            <!-- 설비 점검(docs/25 4.58) — 세션 pm 이 참일 때만(CMS 구현 없음·PDA = 숨김) -->
+            <button type="button" id="pmBtn" hidden th:text="#{pop.pm}">설비 점검</button>
+            <button type="button" class="hb-pop-danger" id="breakdownBtn" hidden th:text="#{pop.breakdown}">고장 신고</button>
+        </div>
+        <p id="taskInfo" class="hb-pop-sub"></p>
+        <ul class="hb-pop-tasks" id="tasks"></ul>
+    </section>
+
+    <!-- 공정: 착수·멈춤·재개·종료 / 실적 확정(수량·불량·투입) / 파라미터 / 오늘 실적·정정 -->
+    <section id="procPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" id="backBtn" th:text="#{pop.back}">← 내 할 일</button>
+            <h2 id="procTitle"></h2>
+            <span id="procStatus"></span>
+            <!-- 검사 입력(docs/25 4.57) — 이 공정에 오늘 유효한 검사계획이 있을 때만(QMS 구현 없음 = 숨김) -->
+            <button type="button" id="inspBtn" hidden th:text="#{pop.insp}">검사</button>
+            <button type="button" class="hb-pop-danger" id="procBreakdownBtn" hidden th:text="#{pop.breakdown}">고장 신고</button>
+        </div>
+        <p id="procInfo" class="hb-pop-sub"></p>
+        <p id="procGate" class="hb-pop-gate"></p>
+        <!-- 일일 배정 자리(docs/25 4.56) — APS 현행 계획의 순번·시각, 순서 어김은 표시만 -->
+        <div id="procPlan"></div>
+        <div class="hb-pop-actions">
+            <button type="button" class="hb-pop-primary" id="startBtn" hidden th:text="#{pop.start}">착수</button>
+            <button type="button" id="pauseBtn" hidden th:text="#{pop.pause}">멈춤</button>
+            <button type="button" class="hb-pop-primary" id="resumeBtn" hidden th:text="#{pop.resume}">재개</button>
+            <!-- 되돌리기 어려운 동작은 위험 톤 + 주동작과 떨어진 오른쪽 끝(docs/40 P2) -->
+            <button type="button" class="hb-pop-danger" id="endBtn" hidden th:text="#{pop.end}">종료</button>
+        </div>
+        <div id="reasonBox" class="hb-pop-choices" hidden>
+            <p th:text="#{pop.pickReason}">멈춘 이유를 고르세요</p>
+            <div id="reasons" class="hb-pop-grid"></div>
+        </div>
+
+        <section id="resultBox" class="hb-pop-card" hidden>
+            <h3 th:text="#{pop.result}">실적</h3>
+            <!-- 수집 COUNT 제안(docs/25 4.27) — 눌러야 칸에 들어간다, 확정은 사람 -->
+            <p id="countBox" class="hb-pop-sub" hidden><span id="countInfo"></span>
+                <button type="button" id="countUseBtn" class="hb-btn-secondary" th:text="#{pop.countUse}">수집 값 쓰기</button></p>
+            <div class="hb-pop-entry">
+                <div class="hb-pop-fields" id="qtyFields">
+                    <button type="button" class="hb-pop-field" data-qty="goodQty"><span th:text="#{pop.good}">양품</span><b></b></button>
+                    <button type="button" class="hb-pop-field" data-qty="scrapQty"><span th:text="#{pop.scrap}">폐기</span><b></b></button>
+                    <button type="button" class="hb-pop-field" data-qty="reworkQty"><span th:text="#{pop.rework}">재작업</span><b></b></button>
+                    <button type="button" class="hb-pop-field" data-qty="repairQty"><span th:text="#{pop.repair}">수리</span><b></b></button>
+                </div>
+                <div class="hb-pop-keypad" id="qtyPad"></div>
+            </div>
+            <div id="defectBox" hidden>
+                <p th:text="#{pop.defectGuide}">불량 수량마다 유형을 고르세요</p>
+                <div id="defectRows"></div>
+            </div>
+            <div>
+                <p class="hb-pop-sub" th:text="#{pop.inputGuide}">투입 자재 LOT 은 스캐너로 읽으세요</p>
+                <ul id="inputs" class="hb-pop-list"></ul>
+                <p id="bomInfo" class="hb-pop-sub"></p>
+            </div>
+            <button type="button" class="hb-pop-primary hb-pop-wide" id="confirmBtn" th:text="#{pop.confirm}">실적 확정</button>
+        </section>
+
+        <section id="paramBox" class="hb-pop-card" hidden>
+            <h3 th:text="#{pop.params}">파라미터</h3>
+            <ul id="params" class="hb-pop-list"></ul>
+        </section>
+
+        <section class="hb-pop-card">
+            <h3 th:text="#{pop.today}">오늘 실적</h3>
+            <p id="todayInfo" class="hb-pop-sub"></p>
+            <ul id="today" class="hb-pop-list"></ul>
+        </section>
+    </section>
+</main>
+<script th:src="@{/js/common/hb.js}"></script>
+<script th:src="@{/js/common/hb.scan.js}"></script>
+<script th:src="@{/js/common/hb.text.js}"></script>
+<script th:src="@{/js/common/hb.dialog.js}"></script>
+<script th:src="@{/js/common/hb.pop.js}"></script>
+<script th:src="@{/js/common/hb.kiosk.js}"></script>
+<script th:src="@{/js/pop/home.js}"></script>
+<script th:src="@{/js/pop/pm.js}"></script>
+<script th:src="@{/js/pop/insp.js}"></script>
+</body>
+</html>

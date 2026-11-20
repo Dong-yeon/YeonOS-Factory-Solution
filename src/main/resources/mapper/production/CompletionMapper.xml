@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 공정 완료판정·재작업/수리 처리·지시 완료·마감 (P2 7a, docs/25 4.9). 회사 조건은 RLS, 수량 계산은 hb_proc_qty 하나 -->
+<mapper namespace="io.smarthappy.module.production.CompletionMapper">
+
+    <sql id="procQtyCols">
+        p.wo_proc_id, p.wo_id, p.op_seq, p.proc_cd, p.proc_nm, p.status, p.row_ver, w.status as wo_status, w.plant_cd, w.unit_cd,
+        q.good, q.scrap, q.rework, q.repair, q.rework_done, q.repair_done, q.disp_good, q.disp_scrap, p.equip_id, p.proc_id, w.item_id
+          from prd_wo_proc p
+          join prd_wo w on w.wo_id = p.wo_id
+         cross join lateral hb_proc_qty(p.wo_proc_id) q
+    </sql>
+
+    <select id="procQty" resultType="io.smarthappy.module.production.CompletionDtos$ProcQty" flushCache="true" useCache="false">
+        select <include refid="procQtyCols"/>
+         where p.wo_proc_id = #{id}
+    </select>
+
+    <select id="procQtys" resultType="io.smarthappy.module.production.CompletionDtos$ProcQty" flushCache="true" useCache="false">
+        select <include refid="procQtyCols"/>
+         where p.wo_id = #{woId}
+         order by p.op_seq
+    </select>
+
+    <select id="prevProc" resultType="io.smarthappy.module.production.CompletionDtos$ProcQty" flushCache="true" useCache="false">
+        select <include refid="procQtyCols"/>
+         where p.wo_id = #{woId} and p.op_seq &lt; #{opSeq}
+         order by p.op_seq desc
+         limit 1
+    </select>
+
+    <!-- 이 공정 산출 LOT — 실적 양품 LOT(역분개 행도 같은 LOT) + 재작업/수리 처리 양품 LOT. 완료판정 경고 문맥(4.46) -->
+    <select id="outputLots" resultType="long" flushCache="true" useCache="false">
+        select r.lot_id from prd_result r where r.wo_proc_id = #{id} and r.lot_id is not null
+         union
+        select k.lot_id from prd_rework k where k.wo_proc_id = #{id} and k.lot_id is not null
+         order by 1
+    </select>
+
+    <!-- 그 공정 산출 LOT 중 보류 중인 것(docs/72 3.1 — 보류 LOT 이 있는 공정은 완료판정하지 않는다) -->
+    <select id="heldOutputLots" resultType="int" flushCache="true" useCache="false">
+        select count(*) from lot_master m
+         where m.hold_yn = 'Y'
+           and m.lot_id in (select r.lot_id from prd_result r where r.wo_proc_id = #{id} and r.lot_id is not null
+                             union
+                            select k.lot_id from prd_rework k where k.wo_proc_id = #{id} and k.lot_id is not null)
+    </select>
+
+    <select id="lockProc" resultType="string" flushCache="true" useCache="false">
+        select status from prd_wo_proc where wo_proc_id = #{id} for update
+    </select>
+
+    <insert id="insertClose">
+        insert into prd_wo_proc_close (comp_cd, wo_id, wo_proc_id, input_qty, good_qty, scrap_qty, rework_qty, repair_qty, eff_good_qty,
+                                       diff_qty, tol_pct, first_op_yn, remark, occurred_at, entry_method, recorded_by)
+        values (hb_current_comp(), #{f.woId}, #{f.woProcId}, #{f.inputQty}, #{f.goodQty}, #{f.scrapQty}, #{f.reworkQty}, #{f.repairQty},
+                #{f.effGoodQty}, #{f.diffQty}, #{f.tolPct}, #{f.firstOpYn}, #{f.remark}, #{at}, 'KEY', #{by})
+    </insert>
+
+    <update id="closeProc">
+        update prd_wo_proc set status = 'DONE', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_proc_id = #{id} and status = 'READY' and row_ver = #{rowVer}
+    </update>
+
+    <select id="findReworkByReq" resultType="io.smarthappy.module.production.CompletionDtos$ReworkRow" flushCache="true" useCache="false">
+        select r.rework_id, r.wo_proc_id, l.lot_no
+          from prd_rework r left join lot_master l on l.lot_id = r.lot_id
+         where r.client_req_id = #{req}
+    </select>
+
+    <select id="insertRework" resultType="long" flushCache="true">
+        insert into prd_rework (comp_cd, wo_id, wo_proc_id, kind, qty, good_qty, scrap_qty, unit_cd, lot_id, reason, client_req_id,
+                                occurred_at, entry_method, recorded_by)
+        values (hb_current_comp(), #{f.woId}, #{f.woProcId}, #{f.kind}, #{f.qty}, #{f.goodQty}, #{f.scrapQty}, #{f.unitCd}, #{f.lotId},
+                #{f.reason}, #{f.clientReqId}, #{at}, 'KEY', #{by})
+        returning rework_id
+    </select>
+
+    <select id="openProcs" resultType="int" flushCache="true" useCache="false">
+        select count(*) from prd_wo_proc where wo_id = #{woId} and status &lt;&gt; 'DONE'
+    </select>
+
+    <update id="complete">
+        update prd_wo set status = 'DONE', done_at = #{doneAt}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_id = #{woId} and status = 'IN_PROGRESS' and row_ver = #{rowVer}
+    </update>
+
+    <update id="closeWo">
+        update prd_wo set status = 'CLOSED', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_id = #{woId} and status = 'DONE' and row_ver = #{rowVer}
+    </update>
+
+    <select id="receivedQty" resultType="java.math.BigDecimal" flushCache="true" useCache="false">
+        select coalesce(sum(qty), 0) from prd_receipt where wo_id = #{woId}
+    </select>
+</mapper>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="io.smarthappy.platform.policy.PolicyMapper">
+
+    <resultMap id="policyDef" type="io.smarthappy.platform.policy.PolicyDef">
+        <id property="policyKey" column="policy_key"/>
+        <result property="valueType" column="value_type"/>
+        <result property="defaultValue" column="default_value"/>
+        <result property="allowedValues" column="allowed_values" typeHandler="org.apache.ibatis.type.ArrayTypeHandler"/>
+        <result property="minValue" column="min_value"/>
+        <result property="maxValue" column="max_value"/>
+        <result property="plantScopeYn" column="plant_scope_yn"/>
+    </resultMap>
+
+    <select id="findDef" resultMap="policyDef">
+        select policy_key, value_type, default_value, allowed_values, min_value, max_value, plant_scope_yn
+          from sys_policy_def
+         where policy_key = #{policyKey}
+    </select>
+
+    <select id="findValue" resultType="string">
+        select policy_value
+          from sys_policy
+         where policy_key = #{policyKey}
+           and plant_cd in (#{plantCd}, '*')
+         order by case when plant_cd = '*' then 1 else 0 end
+         limit 1
+    </select>
+
+    <!-- row_ver: 정책 값 변경은 관리자 편집이므로 올린다 -->
+    <update id="upsert">
+        insert into sys_policy (comp_cd, plant_cd, policy_key, policy_value, created_by, updated_by)
+        values (#{compCd}, #{plantCd}, #{policyKey}, #{value}, #{actor}, #{actor})
+        on conflict (comp_cd, plant_cd, policy_key) do update
+           set policy_value = excluded.policy_value,
+               row_ver      = sys_policy.row_ver + 1,
+               updated_at   = now(),
+               updated_by   = excluded.updated_by
+    </update>
+</mapper>

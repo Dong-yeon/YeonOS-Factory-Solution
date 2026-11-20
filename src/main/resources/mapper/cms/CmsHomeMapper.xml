@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  홈 카드 집계 (docs/37 17.3). 회사 조건은 RLS. 조건은 목록 쿼리와 같은 식이어야 한다 — 갈라지면 HomeModuleCardTest 가 깨진다.
+  - 점검: CmsPmMapper findRuns(예정일 범위 + 상태 + runCols 의 공장 식: 설비 공장, 자산이면 설치된 설비의 공장). ix_cms_chk_run_due
+  - 고장: CmsMapper findMwos(신고 시각 [from, to) + 상태 IN + 유형 + 공장), 상태는 목록 선택지 "진행 중"(REQ,OPEN,WIP). ix_cms_mwo_status (comp_cd, status, reported_at)
+-->
+<mapper namespace="io.smarthappy.module.cms.CmsHomeMapper">
+
+    <!-- 열린 점검 + 공장(findRuns 의 runCols plant_cd 와 같은 식) -->
+    <sql id="openRuns">
+        select r.run_id, r.due_date, p.plan_nm, coalesce(e.equip_cd, a.asset_cd) as target_cd,
+               coalesce(e.plant_cd, (select e2.plant_cd from mst_asset_install i join mst_equip e2 on e2.equip_id = i.equip_id
+                                      where i.asset_id = r.asset_id and i.removed_at is null and i.void_yn = 'N' limit 1)) as plant_cd
+          from cms_chk_run r
+          join cms_pm_plan p on p.plan_id = r.plan_id
+          left join mst_equip e on e.equip_id = r.equip_id
+          left join mst_phys_asset a on a.asset_id = r.asset_id
+         where r.status = 'OPEN'
+           and r.due_date &lt;= #{to}
+    </sql>
+
+    <select id="chkDueSummary" resultType="io.smarthappy.module.cms.CmsHomeMapper$ChkDueSummary">
+        select count(*) filter (where x.due_date &gt;= #{from} and x.due_date &lt; #{today}) as overdue_cnt,
+               count(*) filter (where x.due_date = #{today}) as today_cnt,
+               count(*) filter (where x.due_date &gt; #{today}) as soon_cnt,
+               count(*) filter (where x.due_date &lt; #{from}) as before_cnt
+          from (<include refid="openRuns"/>) x
+        <where><if test="plantCd != null">x.plant_cd = #{plantCd}</if></where>
+    </select>
+
+    <select id="chkDueTop" resultType="io.smarthappy.module.cms.CmsHomeMapper$ChkDueRow">
+        select x.target_cd, x.plan_nm, x.due_date
+          from (<include refid="openRuns"/>) x
+         where x.due_date &gt;= #{from}
+           <if test="plantCd != null">and x.plant_cd = #{plantCd}</if>
+         order by x.due_date, x.run_id
+         limit #{limit}
+    </select>
+
+    <!-- 진행 중 = 목록 상태 묶음 "REQ,OPEN,WIP"(mwo-mgt 의 "진행 중" 선택지)와 같게 — 숫자 링크가 그 선택지로 열린다(H24) -->
+    <select id="bmWaitSummary" resultType="io.smarthappy.module.cms.CmsHomeMapper$BmWaitSummary">
+        select count(*) filter (where m.reported_at &gt;= #{from}) as open_cnt,
+               count(*) filter (where m.reported_at &gt;= #{from} and m.status in ('REQ', 'OPEN')) as untouched_cnt,
+               count(*) filter (where m.reported_at &gt;= #{from} and m.down_yn = 'Y') as down_cnt,
+               count(*) filter (where m.reported_at &lt; #{from}) as before_cnt
+          from cms_mwo m
+         where m.mwo_type = 'BM'
+           and m.status in ('REQ', 'OPEN', 'WIP')
+           and m.reported_at &lt; #{to}
+           <if test="plantCd != null">and m.plant_cd = #{plantCd}</if>
+    </select>
+
+    <select id="bmWaitTop" resultType="io.smarthappy.module.cms.CmsHomeMapper$BmWaitRow">
+        select m.mwo_no, m.title, m.status, m.down_yn, m.reported_at
+          from cms_mwo m
+         where m.mwo_type = 'BM'
+           and m.status in ('REQ', 'OPEN', 'WIP')
+           and m.reported_at &gt;= #{from} and m.reported_at &lt; #{to}
+           <if test="plantCd != null">and m.plant_cd = #{plantCd}</if>
+         order by m.down_yn desc, case when m.status = 'WIP' then 1 else 0 end, m.reported_at, m.mwo_id
+         limit #{limit}
+    </select>
+
+    <!-- 사유 미입력 비가동(6단계) — CmsStateMapper findReview 의 pending + 겹침과 같은 식. 사후 사유(cms_state_note)는 살아 있는 것만 -->
+    <sql id="pendingStates">
+          from cms_equip_state_log s
+          join mst_equip e on e.equip_id = s.equip_id
+          left join cms_state_note n on n.state_log_id = s.state_log_id and n.void_yn = 'N'
+         where s.start_at &lt; #{to} and (s.end_at is null or s.end_at &gt; #{from})
+           and s.reason_id is null and n.note_id is null and s.state_cat not in ('PRD', 'UNKNOWN')
+           <if test="plantCd != null">and e.plant_cd = #{plantCd}</if>
+    </sql>
+
+    <select id="statePendingSummary" resultType="io.smarthappy.module.cms.CmsHomeMapper$StatePendingSummary">
+        select count(*) as pending_cnt, count(*) filter (where s.end_at is null) as open_cnt
+        <include refid="pendingStates"/>
+    </select>
+
+    <select id="statePendingTop" resultType="io.smarthappy.module.cms.CmsHomeMapper$StatePendingRow">
+        select e.plant_cd, e.equip_cd, s.state_cat, s.start_at, s.end_at
+        <include refid="pendingStates"/>
+         order by s.start_at, s.state_log_id
+         limit #{limit}
+    </select>
+</mapper>

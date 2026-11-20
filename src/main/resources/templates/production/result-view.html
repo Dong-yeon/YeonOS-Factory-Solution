@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  실적 조회 (prd-result) — docs/25 4.16. 작업일 기간 × 조건 × 보기(상세·지시·공정·작업자·근무조) → hb.grid(쪽·정렬·건수, 열은 보기마다 — docs/40 §10.2 D1) + 불량 유형 합계 → [엑셀].
+  줄의 기준은 원래 실적 — 정정된 실적은 상세에서 흐리게(정정 시각·사유), 묶음에서는 빠진다(순수량). 저장·정정은 POP.
+-->
+<body data-table-menu="excelBtn" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">실적 조회</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{prdResult.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,yesterday,thisWeek,last7,thisMonth,lastMonth" data-default="last7"
+         data-max="today" data-max-days="92" data-help-key="prd-result.period"></div>
+    <label><span th:text="#{prdResult.col.plant}">공장</span><select name="plantCd" id="plantSel"></select></label>
+    <label><span th:text="#{prdResult.col.shiftCd}">근무조</span><select name="shiftCd" id="shiftSel"></select></label>
+    <label><span th:text="#{prdResult.col.woNo}">지시 번호</span><input name="keyword" maxlength="50"></label>
+    <label><span th:text="#{prdResult.col.itemCd}">품목 코드</span><input name="itemCd" maxlength="40"></label>
+    <label><span th:text="#{prdResult.col.procCd}">공정 코드</span><input name="procCd" maxlength="20"></label>
+    <label><span th:text="#{prdResult.col.workerCd}">작업자 코드</span><input name="workerCd" maxlength="20"></label>
+    <label><span th:text="#{prdResult.view}">보기</span>
+        <select name="view" data-help-key="prd-result.view">
+            <option value="DETAIL" th:text="#{prdResult.view.DETAIL}">실적 한 건씩</option>
+            <option value="WO" th:text="#{prdResult.view.WO}">지시별</option>
+            <option value="PROC" th:text="#{prdResult.view.PROC}">공정별</option>
+            <option value="WORKER" th:text="#{prdResult.view.WORKER}">작업자별</option>
+            <option value="SHIFT" th:text="#{prdResult.view.SHIFT}">작업일·근무조별</option>
+        </select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-toolbar">
+    <button type="button" id="excelBtn" class="hb-btn-secondary" disabled th:if="${actions.contains('EXCEL')}" th:text="#{prdResult.excel}">엑셀</button>
+</div>
+<div id="resultGrid" class="hb-grid-host"></div>
+<section class="hb-sub">
+    <h2 th:text="#{prdResult.defects}">불량 유형 합계(정정 제외)</h2>
+    <div id="defects"></div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/production/result-view.js}"></script>
+</body>
+</html>

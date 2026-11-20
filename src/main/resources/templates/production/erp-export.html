@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  ERP 업로드용 엑셀 (prd-erp-export) — MES P2 7c (docs/25 4.11, 07 D4). 종류(지시 실적 / 입고) × 기간(회사 날짜, 끝 날 포함) →
+  미리보기(500행) + ERP 품목 매핑 없는 행 수 + 같은 기간 이전 내보내기(D20 — 막지 않고 알림) → [엑셀](서버 내보내기, 기록 남김).
+-->
+<body data-table-menu="excelBtn" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">ERP 업로드용 엑셀</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{prdErp.kind}">종류</span>
+        <select name="kind" required data-help-key="prd-erp-export.kind">
+            <option value="RESULT" th:text="#{prdErp.kind.RESULT}">지시 실적(완료일)</option>
+            <option value="RECEIPT" th:text="#{prdErp.kind.RECEIPT}">생산 입고(입고일)</option>
+        </select></label>
+    <div id="period" data-hb="dateRange" th:data-label="#{prdErp.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,yesterday,thisWeek,last7,thisMonth,lastMonth" data-default="last7"
+         data-max="today" data-max-days="92"></div>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-toolbar">
+    <span id="info" class="hb-muted"></span>
+    <button type="button" id="excelBtn" class="hb-btn-secondary" disabled th:if="${actions.contains('EXCEL')}" th:text="#{prdErp.excel}">엑셀</button>
+</div>
+<p id="warn" class="hb-msg hb-msg-error" hidden></p>
+<section class="hb-sub" id="exportsSec" hidden>
+    <h2 th:text="#{prdErp.exports}">이 기간과 겹치는 이전 내보내기</h2>
+    <ul id="exports" class="hb-plain-list"></ul>
+</section>
+<div class="hb-replace-host hb-rpt-table" id="preview"></div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/production/erp-export.js}"></script>
+</body>
+</html>

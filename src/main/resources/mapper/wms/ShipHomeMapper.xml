@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  홈 카드 집계 (docs/37 20장). 회사 조건은 RLS. "출하 대기" = DRAFT·PICKING(아직 나가지 않은 출하 지시, 공장 선택이 없으면 회사 전체).
+  ix_wms_ship_plant (comp_cd, plant_cd, status, plan_date) — 열린 지시는 적고 나간 지시가 쌓이므로 status 조건이 인덱스를 탄다.
+-->
+<mapper namespace="io.smarthappy.module.wms.ship.ShipHomeMapper">
+
+    <select id="shipOpenSummary" resultType="io.smarthappy.module.wms.ship.ShipHomeMapper$ShipOpenSummary">
+        select count(*) as open_cnt,
+               count(*) filter (where s.status = 'PICKING') as picking_cnt,
+               count(*) filter (where s.plan_date &lt; #{today}) as late_cnt
+          from wms_ship s
+         where s.status in ('DRAFT', 'PICKING')
+           <if test="plantCd != null">and s.plant_cd = #{plantCd}</if>
+    </select>
+
+    <select id="shipOpenTop" resultType="io.smarthappy.module.wms.ship.ShipHomeMapper$ShipOpenRow">
+        select s.ship_no, s.plant_cd, c.cust_nm, s.status, s.plan_date
+          from wms_ship s join mst_cust c on c.cust_id = s.cust_id
+         where s.status in ('DRAFT', 'PICKING')
+           <if test="plantCd != null">and s.plant_cd = #{plantCd}</if>
+         order by s.plan_date, s.ship_id
+         limit #{limit}
+    </select>
+
+    <!--
+      예약 초과 품목(docs/53 (가) L1-4) — 공장·품목마다 출하 예약(열린 지시 미피킹 합, AvailSql.openShipReserve) &gt; 가용(AvailSql.available
+      + 보류 아닌 LOT, StockQuery.available 과 같은 정의). 가용은 예약이 있는 품목만 센다(열린 지시 줄은 적다).
+    -->
+    <sql id="reserveOver">
+        with res as (
+            select r.plant_cd, r.item_id, sum(r.qty) as reserved
+              from (<include refid="io.smarthappy.module.wms.inv.AvailSql.openShipReserve"/>) r
+             where 1 = 1 <if test="plantCd != null">and r.plant_cd = #{plantCd}</if>
+             group by r.plant_cd, r.item_id
+            having sum(r.qty) &gt; 0
+        ),
+        av as (
+            select s.plant_cd, s.item_id, sum(s.qty) as qty
+              from inv_stock s
+              left join lot_master lm on lm.lot_id = s.lot_id
+             where (s.plant_cd, s.item_id) in (select plant_cd, item_id from res)
+               and s.qty &gt; 0
+               and (s.lot_id is null or lm.hold_yn = 'N')
+               and <include refid="io.smarthappy.module.wms.inv.AvailSql.available"/>
+             group by s.plant_cd, s.item_id
+        ),
+        over as (
+            select res.plant_cd, res.item_id, res.reserved, coalesce(av.qty, 0) as avail
+              from res left join av on av.plant_cd = res.plant_cd and av.item_id = res.item_id
+             where res.reserved &gt; coalesce(av.qty, 0)
+        )
+    </sql>
+
+    <select id="reserveOverCount" resultType="long">
+        <include refid="reserveOver"/>
+        select count(*) from over
+    </select>
+
+    <select id="reserveOverTop" resultType="io.smarthappy.module.wms.ship.ShipHomeMapper$ReserveOverRow">
+        <include refid="reserveOver"/>
+        select o.plant_cd, i.item_cd, i.item_nm, i.unit_cd, o.reserved, o.avail
+          from over o join mst_item i on i.item_id = o.item_id
+         order by o.reserved - o.avail desc, o.plant_cd, i.item_cd
+         limit #{limit}
+    </select>
+</mapper>

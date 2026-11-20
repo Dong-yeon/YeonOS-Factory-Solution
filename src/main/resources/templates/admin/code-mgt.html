@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  회사 공통코드 (sys-code) — 시스템관리 2단계 (docs/36 9.3). 회사가 늘릴 수 있는 코드 그룹(단위·특별특성 기호·비가동 사유 …)에 회사 코드를 더한다.
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자·기준정보 담당(WEB). 도입 때, 새 사유가 생길 때.
+  시스템 코드는 읽기 전용으로 함께 보인다. 코드는 추가 뒤 고정(업무 행이 글자로 참조), 삭제 대신 사용 중지.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">회사 공통코드</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" autocomplete="off">
+    <label><span th:text="#{sysCode.group}">코드 그룹</span>
+        <select name="grpCd" id="grpSel" data-help-key="sys-code.grpCd"></select></label>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="codeGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{sysCode.selectOrNew}">왼쪽에서 회사 코드를 고르거나 신규를 누르세요.</p>
+        <form id="codeForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{sysCode.col.code}">코드</span>
+                <input data-field="code" maxlength="30" required spellcheck="false" data-help-key="sys-code.code"></label>
+            <label><span th:text="#{sysCode.col.name}">이름</span>
+                <input data-field="codeNm" maxlength="100" required></label>
+            <label><span th:text="#{sysCode.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{sysCode.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label id="scaleRow" hidden><span th:text="#{sysCode.col.scale}">소수 자릿수</span>
+                <input data-field="scale" data-hb="number" data-scale="0" data-min="0" data-max="6" data-pad="false" data-help-key="sys-code.scale"></label>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/views/admin/code-mgt.js}"></script>
+</body>
+</html>

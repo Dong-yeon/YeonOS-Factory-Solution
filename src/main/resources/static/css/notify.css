@@ -1,0 +1,35 @@
+/* 내 알림·공지 (docs/36 11.4) — 공통 page.css 는 병행 중 건드리지 않는다 */
+.hb-inbox-tabs { margin-bottom: var(--hb-space-5); }
+.hb-inbox-badge { margin-left: var(--hb-space-2); padding: 0 var(--hb-space-2); border-radius: var(--hb-radius-lg);
+    background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); font-size: var(--hb-fs-xs); font-weight: var(--hb-fw-bold); }
+.hb-inbox-badge[hidden], .hb-inbox-view[hidden] { display: none; }
+.hb-inbox-list { list-style: none; margin: 0; padding: 0; max-width: var(--hb-layout-read-max); }
+.hb-inbox-list > li { border-bottom: 1px solid var(--hb-border-subtle); }
+.hb-page button.hb-inbox-item { display: block; width: 100%; min-height: var(--hb-target-min); padding: var(--hb-space-4);
+    border: 0; border-radius: 0; background: none; font: inherit; color: var(--hb-text); text-align: left; cursor: pointer; }
+.hb-page button.hb-inbox-item:hover, .hb-page button.hb-inbox-item:focus-visible,
+.hb-page button.hb-inbox-item[aria-current="true"] { background: var(--hb-bg-hover); }
+.hb-inbox-title { display: block; overflow-wrap: anywhere; }
+li[data-unread="true"] .hb-inbox-title { font-weight: var(--hb-fw-bold); }
+li[data-unread="true"] .hb-inbox-title::before { content: "● "; color: var(--hb-action); }
+.hb-inbox-meta { display: block; margin-top: var(--hb-space-1); color: var(--hb-text-muted); font-size: var(--hb-fs-sm); }
+.hb-inbox-lines { list-style: none; margin: 0; padding: 0 var(--hb-space-4) var(--hb-space-4) var(--hb-space-7); }
+.hb-page .hb-inbox-lines button { min-height: 0; padding: var(--hb-space-1) 0; border: 0; background: none; font: inherit;
+    color: var(--hb-action); text-align: left; cursor: pointer; }
+.hb-page .hb-inbox-lines button:hover { background: none; text-decoration: underline; }
+.hb-page .hb-inbox-lines button:disabled { background: none; color: var(--hb-text); cursor: default; text-decoration: none; }
+.hb-inbox-empty { padding: var(--hb-space-6) var(--hb-space-4); color: var(--hb-text-muted); }
+.hb-inbox-subs { display: grid; gap: var(--hb-space-3); margin: var(--hb-space-4) 0; }
+.hb-inbox-sub { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-2) var(--hb-space-5); }
+.hb-inbox-mail { display: inline-flex; align-items: center; gap: var(--hb-space-2); min-height: var(--hb-target-min); cursor: pointer; }
+.hb-notice-title { margin: 0 0 var(--hb-space-2); font-size: var(--hb-fs-lg); overflow-wrap: anywhere; }
+.hb-notice-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+/* 변경 이력 바뀐 칸·결재선 표 (docs/36 12.2) */
+.hb-audit-diff { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--hb-fs-sm); }
+.hb-audit-diff[hidden] { display: none; }
+.hb-audit-diff th, .hb-audit-diff td { padding: var(--hb-space-2) var(--hb-space-3); border-bottom: 1px solid var(--hb-border-subtle);
+    text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.hb-audit-diff th { color: var(--hb-text-muted); font-weight: var(--hb-fw-semibold); }
+.hb-audit-diff td.hb-audit-col { color: var(--hb-text-muted); font-family: var(--hb-font-mono); }
+.hb-audit-diff td.hb-audit-null { color: var(--hb-text-subtle); }
+.hb-split[hidden] { display: none; }

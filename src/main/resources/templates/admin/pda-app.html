@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  현장 단말 앱 (sys-pda-app) — docs/50 4장. POP 태블릿·창고 PDA 공용 APK 를 내려받는 곳.
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자(WEB). 단말을 새로 들일 때·새 버전이 나왔을 때.
+  직접 치는 칸 없음 — 버전·크기·SHA-256 은 서버가 운영자가 놓은 파일에서 계산한다(F3). 파일이 없거나 틀리면 안내만(D2).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">현장 단말 앱</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<section class="hb-narrow">
+    <p id="state" class="hb-msg" role="status"></p>
+    <dl class="hb-info" id="info" hidden>
+        <dt th:text="#{sysPdaApp.version}">버전</dt>
+        <dd id="version" data-help-key="sys-pda-app.version">-</dd>
+        <dt th:text="#{sysPdaApp.minVersion}">최소 버전</dt>
+        <dd id="minVersion" data-help-key="sys-pda-app.minVersion">-</dd>
+        <dt th:text="#{sysPdaApp.releasedAt}">배포일</dt>
+        <dd id="releasedAt">-</dd>
+        <dt th:text="#{sysPdaApp.size}">크기</dt>
+        <dd id="size">-</dd>
+        <dt th:text="#{sysPdaApp.sha256}">SHA-256</dt>
+        <dd id="sha256" data-help-key="sys-pda-app.sha256">-</dd>
+        <dt th:text="#{sysPdaApp.notes}">바뀐 점</dt>
+        <dd id="notes">-</dd>
+    </dl>
+    <p><a id="downloadLink" class="hb-btn-secondary hb-link-btn" th:href="@{/api/platform/pda-app/download}"
+          th:text="#{sysPdaApp.download}" hidden>APK 내려받기</a></p>
+
+    <section class="hb-section">
+        <h2 th:text="#{sysPdaApp.install}">설치 안내</h2>
+        <ol>
+            <li th:text="#{sysPdaApp.install.1}">단말 설정에서 이 앱의 설치를 허용합니다(출처를 알 수 없는 앱). MDM 이 있으면 MDM 으로 배포합니다.</li>
+            <li th:text="#{sysPdaApp.install.2}">내려받은 APK 를 단말에 옮겨 설치합니다.</li>
+            <li><span th:text="#{sysPdaApp.install.3}">처음 열 때 서버 주소를 넣습니다:</span> <code id="serverUrl"></code></li>
+            <li th:text="#{sysPdaApp.install.4}">사내 인증서를 쓰는 서버면 단말에 그 인증서를 먼저 설치합니다.</li>
+            <li th:text="#{sysPdaApp.install.5}">앱이 열리면 "POP 단말 관리" 에서 받은 등록 코드로 단말을 활성화합니다.</li>
+        </ol>
+    </section>
+</section>
+
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/pda-app.js}"></script>
+</body>
+</html>

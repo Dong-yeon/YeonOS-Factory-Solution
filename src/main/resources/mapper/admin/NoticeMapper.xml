@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  공지·자료 (docs/36 11.2). 회사별 표는 RLS 가 회사를 거른다(다른 회사 id 는 0건 → 404).
+  게시 중 = 사용 + post_from <= 오늘 + (post_to 없음 또는 >= 오늘). 오늘은 회사 날짜(BizClock)를 받는다 — DB current_date 는 세션 시간대.
+-->
+<mapper namespace="io.smarthappy.module.admin.NoticeMapper">
+
+    <sql id="state">
+        case when n.use_yn = 'N' then 'OFF'
+             when n.post_from &gt; #{today} then 'SCHEDULED'
+             when n.post_to is not null and n.post_to &lt; #{today} then 'ENDED'
+             else 'POSTED' end
+    </sql>
+
+    <sql id="posted">
+        n.use_yn = 'Y' and n.post_from &lt;= #{today} and (n.post_to is null or n.post_to &gt;= #{today})
+    </sql>
+
+    <sql id="fileCnt">
+        (select count(*) from sys_file f
+          where f.target_type = 'sys-notice' and f.target_id = n.notice_id::text and f.use_yn = 'Y')
+    </sql>
+
+    <sql id="where">
+        from sys_notice n
+        <where>
+            <if test="q.keywordLike != null">and n.title ilike #{q.keywordLike} escape '\'</if>
+            <if test="q.catCd != null">and n.cat_cd = #{q.catCd}</if>
+            <if test="q.stateCd == 'OFF'">and n.use_yn = 'N'</if>
+            <if test="q.stateCd == 'SCHEDULED'">and n.use_yn = 'Y' and n.post_from &gt; #{q.today}</if>
+            <if test="q.stateCd == 'ENDED'">and n.use_yn = 'Y' and n.post_to is not null and n.post_to &lt; #{q.today}</if>
+            <if test="q.stateCd == 'POSTED'">
+                and n.use_yn = 'Y' and n.post_from &lt;= #{q.today} and (n.post_to is null or n.post_to &gt;= #{q.today})
+            </if>
+        </where>
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.admin.NoticeDtos$NoticeRow">
+        select n.notice_id, n.cat_cd, n.title, n.pin_yn, n.post_from, n.post_to, n.use_yn,
+               <bind name="today" value="q.today"/><include refid="state"/> as state_cd,
+               <include refid="fileCnt"/> as file_cnt, n.updated_by, n.updated_at, n.row_ver
+        <include refid="where"/>
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'TITLE'">n.title</when>
+                <when test="s.key == 'UPDATED_AT'">n.updated_at</when>
+                <otherwise>n.post_from</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        n.notice_id desc
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="find" resultType="io.smarthappy.module.admin.NoticeDtos$NoticeRow">
+        select n.notice_id, n.cat_cd, n.title, n.body, n.pin_yn, n.post_from, n.post_to, n.use_yn,
+               <include refid="state"/> as state_cd, <include refid="fileCnt"/> as file_cnt,
+               n.updated_by, n.updated_at, n.row_ver
+          from sys_notice n
+         where n.notice_id = #{noticeId}
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into sys_notice (comp_cd, cat_cd, title, body, pin_yn, post_from, post_to, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.catCd}, #{f.title}, #{f.body}, #{f.pinYn}, #{f.postFrom}, #{f.postTo}, #{f.useYn},
+                #{by}, #{by})
+        returning notice_id
+    </select>
+
+    <update id="update">
+        update sys_notice
+           set cat_cd = #{f.catCd}, title = #{f.title}, body = #{f.body}, pin_yn = #{f.pinYn},
+               post_from = #{f.postFrom}, post_to = #{f.postTo}, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where notice_id = #{noticeId} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ===================== 읽는 사람 ===================== -->
+
+    <select id="findPosted" resultType="io.smarthappy.module.admin.NoticeDtos$NoticeItem">
+        select n.notice_id, n.cat_cd, n.title, n.pin_yn, n.post_from, n.post_to, <include refid="fileCnt"/> as file_cnt,
+               not exists (select 1 from sys_notice_read r where r.notice_id = n.notice_id and r.user_id = #{userId}) as unread
+          from sys_notice n
+         where <include refid="posted"/>
+           <if test="catCd != null">and n.cat_cd = #{catCd}</if>
+         order by n.pin_yn desc, n.post_from desc, n.notice_id desc
+         limit #{limit}
+    </select>
+
+    <select id="findPostedOne" resultType="io.smarthappy.module.admin.NoticeDtos$NoticeRow">
+        select n.notice_id, n.cat_cd, n.title, n.body, n.pin_yn, n.post_from, n.post_to, n.use_yn, 'POSTED' as state_cd,
+               <include refid="fileCnt"/> as file_cnt, n.updated_by, n.updated_at, n.row_ver
+          from sys_notice n
+         where n.notice_id = #{noticeId} and <include refid="posted"/>
+    </select>
+
+    <insert id="markRead">
+        insert into sys_notice_read (comp_cd, notice_id, user_id)
+        values (hb_current_comp(), #{noticeId}, #{userId})
+        on conflict do nothing
+    </insert>
+
+    <!-- 종 버튼 숫자: 게시 중이고 since(최근 30일) 뒤에 게시가 시작된 안 읽은 공지 — 오래된 공지가 새 사용자에게 쌓이지 않게 -->
+    <select id="countUnread" resultType="long">
+        select count(*)
+          from sys_notice n
+         where <include refid="posted"/>
+           and n.post_from &gt;= #{since}
+           and not exists (select 1 from sys_notice_read r where r.notice_id = n.notice_id and r.user_id = #{userId})
+    </select>
+</mapper>

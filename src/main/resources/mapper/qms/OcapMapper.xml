@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- OCAP 표준 조치 목록 (docs/29_P3 26장) — 회사 범위는 RLS -->
+<mapper namespace="io.smarthappy.module.qms.OcapMapper">
+
+    <sql id="cols">o.ocap_id, o.rule_cd, o.seq, o.action_text, o.use_yn, o.row_ver, o.updated_at, o.updated_by</sql>
+
+    <sql id="where">
+        from qms_ocap_item o
+        <where>
+            <if test="rule != null and rule == '*'.toString()">o.rule_cd is null</if>
+            <if test="rule != null and rule != '*'.toString()">o.rule_cd = #{rule}</if>
+            <if test="useYn != null">and o.use_yn = #{useYn}</if>
+            <if test="kw != null">and o.action_text ilike #{kw} escape '\'</if>
+        </where>
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.OcapDtos$OcapRow">
+        select <include refid="cols"/> <include refid="where"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'RULE'">coalesce(o.rule_cd, '')</when>
+                <when test="s.key == 'SEQ'">o.seq</when>
+                <when test="s.key == 'TEXT'">o.action_text</when>
+                <otherwise>o.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        o.ocap_id
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.OcapDtos$OcapRow">
+        select <include refid="cols"/> from qms_ocap_item o where o.ocap_id = #{id}
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into qms_ocap_item (comp_cd, rule_cd, seq, action_text, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.ruleCd}, #{f.seq}, #{f.actionText}, #{f.useYn}, #{by}, #{by})
+        returning ocap_id
+    </select>
+
+    <update id="update">
+        update qms_ocap_item
+           set rule_cd = #{f.ruleCd}, seq = #{f.seq}, action_text = #{f.actionText}, use_yn = #{f.useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ocap_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="findOptions" resultType="io.smarthappy.module.qms.OcapDtos$OcapRow">
+        select <include refid="cols"/> from qms_ocap_item o
+         where o.use_yn = 'Y' and (o.rule_cd is null or o.rule_cd = #{rule})
+         order by o.rule_cd nulls first, o.seq, o.ocap_id
+    </select>
+
+    <select id="lockForPick" resultType="io.smarthappy.module.qms.OcapDtos$OcapRow">
+        select <include refid="cols"/> from qms_ocap_item o
+         where o.ocap_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by o.ocap_id
+         for share
+    </select>
+
+    <insert id="insertPicks">
+        insert into qms_spc_event_act_ocap (comp_cd, act_id, ocap_id, rule_cd, action_text, created_by)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{actId}, #{r.ocapId}, #{r.ruleCd}, #{r.actionText}, #{by})
+        </foreach>
+    </insert>
+
+    <select id="findPicksOfEvent" resultType="io.smarthappy.module.qms.OcapDtos$PickRow">
+        select p.act_id, p.ocap_id, p.rule_cd, p.action_text
+          from qms_spc_event_act_ocap p join qms_spc_event_act a on a.act_id = p.act_id
+         where a.event_id = #{eventId}
+         order by a.act_seq, p.act_ocap_id
+    </select>
+</mapper>

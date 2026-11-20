@@ -1,0 +1,316 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 장비 연동 E0 (docs/65 16장). 회사 조건은 RLS -->
+<mapper namespace="io.smarthappy.module.cms.edge.EdgeMapper">
+
+    <!-- ================================================================ 연동 마스터 -->
+
+    <sql id="linkCols">
+        l.equip_id, e.equip_cd, e.equip_nm, e.plant_cd, l.conn_mode, l.terminal_id, t.terminal_cd, l.adapter_url, l.hb_sec,
+        l.write_enabled_yn, l.use_yn, l.last_seen_at, l.last_seq, l.pack_state, l.pack_mode, l.pack_at, l.lost_at, l.row_ver
+    </sql>
+
+    <select id="findLink" resultType="io.smarthappy.module.cms.edge.EdgeDtos$LinkRef" flushCache="true" useCache="false">
+        select <include refid="linkCols"/>
+          from cms_equip_link l
+          join mst_equip e on e.equip_id = l.equip_id
+          join sys_terminal t on t.terminal_id = l.terminal_id
+         where e.equip_cd = #{equipCd} and e.use_yn = 'Y'
+    </select>
+
+    <select id="findLinkById" resultType="io.smarthappy.module.cms.edge.EdgeDtos$LinkRef" flushCache="true" useCache="false">
+        select <include refid="linkCols"/>
+          from cms_equip_link l
+          join mst_equip e on e.equip_id = l.equip_id
+          join sys_terminal t on t.terminal_id = l.terminal_id
+         where l.equip_id = #{equipId}
+    </select>
+
+    <select id="lockLink" resultType="io.smarthappy.module.cms.edge.EdgeDtos$LinkRef" flushCache="true" useCache="false">
+        select <include refid="linkCols"/>
+          from cms_equip_link l
+          join mst_equip e on e.equip_id = l.equip_id
+          join sys_terminal t on t.terminal_id = l.terminal_id
+         where l.equip_id = #{equipId}
+           for update of l
+    </select>
+
+    <select id="linksOfTerminal" resultType="io.smarthappy.module.cms.edge.EdgeDtos$LinkRef" flushCache="true" useCache="false">
+        select <include refid="linkCols"/>
+          from cms_equip_link l
+          join mst_equip e on e.equip_id = l.equip_id
+          join sys_terminal t on t.terminal_id = l.terminal_id
+         where l.terminal_id = #{terminalId} and l.use_yn = 'Y' and e.use_yn = 'Y'
+         order by e.equip_cd
+    </select>
+
+    <update id="updateSeq">
+        update cms_equip_link set last_seq = #{seq} where equip_id = #{equipId}
+    </update>
+
+    <update id="updatePack">
+        update cms_equip_link set pack_state = #{state}, pack_mode = #{mode}, pack_at = #{at} where equip_id = #{equipId}
+    </update>
+
+    <update id="touchSeen">
+        update cms_equip_link set last_seen_at = #{at}
+         where equip_id = #{equipId} and (last_seen_at is null or last_seen_at &lt; #{at})
+    </update>
+
+    <update id="markLost">
+        update cms_equip_link set lost_at = #{at} where equip_id = #{equipId} and lost_at is null
+    </update>
+
+    <update id="clearLost">
+        update cms_equip_link set lost_at = null where equip_id = #{equipId} and lost_at is not null
+    </update>
+
+    <!-- 판정식은 EquipLinkJudge 와 같다: last_seen_at + hb_sec × miss 를 넘김 -->
+    <select id="lostCandidates" resultType="io.smarthappy.module.cms.edge.EdgeDtos$LinkRef" flushCache="true" useCache="false">
+        select <include refid="linkCols"/>
+          from cms_equip_link l
+          join mst_equip e on e.equip_id = l.equip_id
+          join sys_terminal t on t.terminal_id = l.terminal_id
+         where l.use_yn = 'Y' and e.use_yn = 'Y' and l.lost_at is null and l.last_seen_at is not null
+           and l.last_seen_at + make_interval(secs => l.hb_sec * #{miss}) &lt; #{now}
+         order by l.equip_id
+           for update of l skip locked
+    </select>
+
+    <select id="links" resultType="io.smarthappy.module.cms.edge.EdgeDtos$LinkRow" flushCache="true" useCache="false">
+        select e.equip_id, e.equip_cd, e.equip_nm, e.plant_cd, h.node_cd,
+               l.conn_mode, coalesce(l.terminal_id, 0) as terminal_id, t.terminal_cd, l.adapter_url, coalesce(l.hb_sec, 5) as hb_sec,
+               coalesce(l.write_enabled_yn, 'N') as write_enabled_yn, coalesce(l.use_yn, 'N') as use_yn, l.last_seen_at, l.last_seq,
+               l.pack_state, l.pack_mode, l.pack_at, l.lost_at, l.row_ver,
+               (select count(*) from cms_equip_cmd c where c.equip_id = e.equip_id and c.status in ('REQUESTED', 'SENT', 'CLAIMED', 'WRITTEN'))
+                   as open_cmd_cnt,
+               (select count(*) from cms_alarm_log a where a.equip_id = e.equip_id and a.cleared_at is null) as open_alarm_cnt
+          from mst_equip e
+          left join cms_equip_link l on l.equip_id = e.equip_id
+          left join sys_terminal t on t.terminal_id = l.terminal_id
+          left join mst_equip_hier h on h.node_id = e.node_id
+         where e.use_yn = 'Y'
+           <if test="plantCd != null">and e.plant_cd = #{plantCd}</if>
+           <if test="keyword != null">
+           and (e.equip_cd ilike #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\')
+           </if>
+         order by (l.equip_id is null), e.plant_cd, h.node_cd nulls last, e.equip_cd
+         limit 1000
+    </select>
+
+    <insert id="insertLink">
+        insert into cms_equip_link (equip_id, comp_cd, conn_mode, terminal_id, adapter_url, hb_sec, write_enabled_yn, use_yn, remark,
+                                    created_by, updated_by)
+        values (#{equipId}, hb_current_comp(), #{f.connMode}, #{terminalId}, #{f.adapterUrl}, #{f.hbSec}, #{f.writeEnabledYn},
+                #{f.useYn}, #{f.remark}, #{by}, #{by})
+    </insert>
+
+    <update id="updateLink">
+        update cms_equip_link
+           set conn_mode = #{f.connMode}, terminal_id = #{terminalId}, adapter_url = #{f.adapterUrl}, hb_sec = #{f.hbSec},
+               write_enabled_yn = #{f.writeEnabledYn}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where equip_id = #{equipId} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="equipIdOf" resultType="long">
+        select equip_id from mst_equip where equip_cd = #{equipCd} and use_yn = 'Y'
+    </select>
+
+    <select id="collector" resultType="io.smarthappy.module.cms.edge.EdgeDtos$TerminalOpt">
+        select terminal_id, terminal_cd, terminal_nm, plant_cd from sys_terminal
+         where terminal_cd = #{terminalCd} and terminal_type = 'COLLECTOR' and revoked_at is null
+    </select>
+
+    <select id="collectors" resultType="io.smarthappy.module.cms.edge.EdgeDtos$TerminalOpt">
+        select terminal_id, terminal_cd, terminal_nm, plant_cd from sys_terminal
+         where terminal_type = 'COLLECTOR' and revoked_at is null
+         order by plant_cd, terminal_cd
+    </select>
+
+    <!-- ================================================================ 태그 -->
+
+    <sql id="tagCols">
+        tag_id, equip_id, tag_cd, tag_nm, data_type, min_value, max_value, unit,
+        coalesce(array_to_string(allowed_states, ','), '') as allowed_states, writable_yn, use_yn, row_ver
+    </sql>
+
+    <select id="tags" resultType="io.smarthappy.module.cms.edge.EdgeDtos$TagRow" flushCache="true" useCache="false">
+        select <include refid="tagCols"/> from cms_equip_tag where equip_id = #{equipId} order by use_yn desc, tag_cd
+    </select>
+
+    <select id="findTag" resultType="io.smarthappy.module.cms.edge.EdgeDtos$TagRow" flushCache="true" useCache="false">
+        select <include refid="tagCols"/> from cms_equip_tag where equip_id = #{equipId} and tag_cd = #{tagCd}
+    </select>
+
+    <insert id="insertTag">
+        insert into cms_equip_tag (comp_cd, equip_id, tag_cd, tag_nm, data_type, min_value, max_value, unit, allowed_states,
+                                   writable_yn, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{equipId}, #{f.tagCd}, #{f.tagNm}, #{f.dataType}, #{min}, #{max}, #{f.unit},
+                string_to_array(nullif(#{states}, ''), ',')::varchar(10)[], #{f.writableYn}, #{f.useYn}, #{by}, #{by})
+    </insert>
+
+    <update id="updateTag">
+        update cms_equip_tag
+           set tag_nm = #{f.tagNm}, min_value = #{min}, max_value = #{max}, unit = #{f.unit},
+               allowed_states = string_to_array(nullif(#{states}, ''), ',')::varchar(10)[],
+               writable_yn = #{f.writableYn}, use_yn = #{f.useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where tag_id = #{f.tagId} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 명령 -->
+
+    <sql id="cmdCols">
+        c.cmd_id, c.cmd_key, c.equip_id, e.equip_cd, c.tag_cd, c.cmd_value, c.reason, c.conn_mode, c.terminal_id, t.terminal_cd, c.status,
+        c.result_cd, c.readback, c.requested_at, c.requested_by, c.expires_at, c.claimed_at, c.lease_until, c.finished_at,
+        g.data_type, l.adapter_url
+    </sql>
+    <sql id="cmdFrom">
+        from cms_equip_cmd c
+        join mst_equip e on e.equip_id = c.equip_id
+        join sys_terminal t on t.terminal_id = c.terminal_id
+        join cms_equip_tag g on g.tag_id = c.tag_id
+        join cms_equip_link l on l.equip_id = c.equip_id
+    </sql>
+
+    <select id="insertCmd" resultType="long" flushCache="true">
+        insert into cms_equip_cmd (comp_cd, cmd_key, equip_id, tag_id, tag_cd, cmd_value, reason, conn_mode, terminal_id, requested_by,
+                                   expires_at)
+        values (hb_current_comp(), #{c.cmdKey}, #{c.equipId}, (select tag_id from cms_equip_tag where equip_id = #{c.equipId} and tag_cd = #{c.tagCd}),
+                #{c.tagCd}, #{c.cmdValue}, #{c.reason}, #{c.connMode}, #{c.terminalId}, #{c.requestedBy}, #{c.expiresAt})
+        returning cmd_id
+    </select>
+
+    <select id="lockCmdByKey" resultType="io.smarthappy.module.cms.edge.EdgeDtos$CmdRow" flushCache="true" useCache="false">
+        select <include refid="cmdCols"/> <include refid="cmdFrom"/>
+         where c.cmd_key = #{cmdKey}
+           for update of c
+    </select>
+
+    <select id="findCmd" resultType="io.smarthappy.module.cms.edge.EdgeDtos$CmdRow" flushCache="true" useCache="false">
+        select <include refid="cmdCols"/> <include refid="cmdFrom"/> where c.cmd_id = #{cmdId}
+    </select>
+
+    <update id="setCmdStatus">
+        update cms_equip_cmd
+           set status = #{status},
+               result_cd = coalesce(#{resultCd}, case when #{status}::varchar = 'DONE' then null else result_cd end),
+               readback = coalesce(#{readback}, readback),
+               finished_at = case when #{status}::varchar in ('DONE', 'FAILED', 'REJECTED', 'EXPIRED', 'UNKNOWN')
+                                  then coalesce(finished_at, now()) end
+         where cmd_id = #{cmdId}
+    </update>
+
+    <select id="claimable" resultType="io.smarthappy.module.cms.edge.EdgeDtos$CmdRow" flushCache="true" useCache="false">
+        select <include refid="cmdCols"/> <include refid="cmdFrom"/>
+         where c.terminal_id = #{terminalId} and c.status = 'REQUESTED' and c.conn_mode = 'EDGE' and c.expires_at &gt; now()
+         order by c.cmd_id
+         limit #{limit}
+           for update of c skip locked
+    </select>
+
+    <update id="markClaimed">
+        update cms_equip_cmd set status = 'CLAIMED', claimed_at = now(), lease_until = now() + make_interval(secs => #{leaseSec})
+         where cmd_id = #{cmdId} and status = 'REQUESTED'
+    </update>
+
+    <select id="toClaimed" resultType="io.smarthappy.module.cms.edge.EdgeDtos$ClaimedCmd">
+        select c.cmd_key, e.equip_cd, c.tag_cd, g.data_type, c.cmd_value as value, c.lease_until, c.expires_at
+          from cms_equip_cmd c
+          join mst_equip e on e.equip_id = c.equip_id
+          join cms_equip_tag g on g.tag_id = c.tag_id
+         where c.cmd_id = #{cmdId}
+    </select>
+
+    <select id="outboxSent" resultType="boolean" flushCache="true" useCache="false">
+        select exists (select 1 from sys_outbox where topic = 'EQUIP_CMD' and biz_key = #{bizKey} and status = 'SENT')
+    </select>
+
+    <select id="cmds" resultType="io.smarthappy.module.cms.edge.EdgeDtos$CmdRow" flushCache="true" useCache="false">
+        select <include refid="cmdCols"/> <include refid="cmdFrom"/>
+         where c.equip_id = #{equipId}
+         order by c.cmd_id desc
+         limit #{limit}
+    </select>
+
+    <select id="steps" resultType="io.smarthappy.module.cms.edge.EdgeDtos$StepRow" flushCache="true" useCache="false">
+        select step_id, cmd_id, phase, ok_yn, step_value, detail, src, occurred_at, recorded_at, recorded_by
+          from cms_equip_cmd_step
+         where cmd_id in <foreach collection="cmdIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by cmd_id, step_id
+    </select>
+
+    <insert id="insertStep">
+        insert into cms_equip_cmd_step (comp_cd, cmd_id, phase, ok_yn, step_value, detail, src, terminal_id, inbound_id, occurred_at,
+                                        entry_method, recorded_by)
+        values (hb_current_comp(), #{cmdId}, #{phase}, #{okYn}, #{value}, #{detail}, #{src}, #{terminalId}, #{inboundId}, #{occurredAt},
+                #{method}, #{by})
+    </insert>
+
+    <select id="overdue" resultType="io.smarthappy.module.cms.edge.EdgeDtos$CmdRow" flushCache="true" useCache="false">
+        select <include refid="cmdCols"/> <include refid="cmdFrom"/>
+         where c.status in ('REQUESTED', 'SENT', 'CLAIMED', 'WRITTEN') and c.expires_at &lt; #{now}
+         order by c.cmd_id
+         limit 500
+           for update of c skip locked
+    </select>
+
+    <!-- ================================================================ 사건 -->
+
+    <insert id="insertLog">
+        insert into cms_equip_link_log (comp_cd, equip_id, terminal_id, event_cd, seq_from, seq_to, detail, inbound_id, occurred_at, recorded_by)
+        values (hb_current_comp(), #{equipId}, #{terminalId}, #{eventCd}, #{seqFrom}, #{seqTo}, #{detail}, #{inboundId}, #{occurredAt}, #{by})
+    </insert>
+
+    <select id="logs" resultType="io.smarthappy.module.cms.edge.EdgeDtos$LogRow" flushCache="true" useCache="false">
+        select g.log_id, g.equip_id, e.equip_cd, t.terminal_cd, g.event_cd, g.seq_from, g.seq_to, g.detail, g.inbound_id, g.occurred_at,
+               g.recorded_at
+          from cms_equip_link_log g
+          left join mst_equip e on e.equip_id = g.equip_id
+          left join sys_terminal t on t.terminal_id = g.terminal_id
+         <where>
+           <if test="equipId != null">g.equip_id = #{equipId}</if>
+         </where>
+         order by g.log_id desc
+         limit #{limit}
+    </select>
+
+    <!-- ================================================================ 소모품·장치 세션 -->
+
+    <select id="lockCons" resultType="io.smarthappy.module.cms.edge.EdgeDtos$ConsRow" flushCache="true" useCache="false">
+        select equip_id, cons_cd, level_cd, changed_at from cms_equip_consumable
+         where equip_id = #{equipId} and cons_cd = #{consCd}
+           for update
+    </select>
+
+    <insert id="upsertCons">
+        insert into cms_equip_consumable (comp_cd, equip_id, cons_cd, level_cd) values (hb_current_comp(), #{equipId}, #{consCd}, #{level})
+        on conflict (comp_cd, equip_id, cons_cd) do update set level_cd = excluded.level_cd, changed_at = now()
+    </insert>
+
+    <select id="consumables" resultType="io.smarthappy.module.cms.edge.EdgeDtos$ConsRow">
+        select equip_id, cons_cd, level_cd, changed_at from cms_equip_consumable where equip_id = #{equipId} order by cons_cd
+    </select>
+
+    <select id="lockSession" resultType="io.smarthappy.module.cms.edge.EdgeDtos$SessionRow" flushCache="true" useCache="false">
+        select terminal_id, boot_id, started_at, last_hb_at, skew_ms, skew_logged_at from cms_edge_session
+         where terminal_id = #{terminalId}
+           for update
+    </select>
+
+    <insert id="insertSession">
+        insert into cms_edge_session (comp_cd, terminal_id, boot_id, skew_ms) values (hb_current_comp(), #{terminalId}, #{bootId}, #{skewMs})
+        on conflict do nothing
+    </insert>
+
+    <update id="updateSession">
+        update cms_edge_session
+           set boot_id = #{bootId}, last_hb_at = now(), skew_ms = #{skewMs},
+               started_at = case when #{restart} then now() else started_at end
+         where terminal_id = #{terminalId}
+    </update>
+
+    <update id="markSkewLogged">
+        update cms_edge_session set skew_logged_at = now() where terminal_id = #{terminalId}
+    </update>
+</mapper>

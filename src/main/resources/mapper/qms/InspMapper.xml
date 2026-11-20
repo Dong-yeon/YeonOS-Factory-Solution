@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- P3 QMS 2부 Q6 검사 실행·측정값 원장 (docs/29_P3 12.2). LOT·품목·공정·자산은 읽기만 -->
+<mapper namespace="io.smarthappy.module.qms.InspMapper">
+
+    <sql id="cols">
+        h.insp_id, h.insp_no, h.insp_type, h.lot_id, l.lot_no, i.item_cd, i.item_nm, p.proc_cd, h.insp_plan_id, pl.rev as plan_rev,
+        h.lot_qty, h.status, h.result, h.occurred_at, h.judged_at, h.judged_by, h.void_reason, h.remark, h.row_ver, h.created_by
+    </sql>
+    <sql id="from">
+        from qms_insp h
+        join lot_master l on l.lot_id = h.lot_id
+        join mst_item i on i.item_id = h.item_id
+        left join mst_proc p on p.proc_id = h.proc_id
+        join qms_insp_plan pl on pl.insp_plan_id = h.insp_plan_id
+    </sql>
+
+    <!-- 목록·그리드가 같은 조건(UI 단계 3, 결정 #45) -->
+    <sql id="listWhere">
+        <where>
+            <if test="keywordLike != null">and (h.insp_no ilike #{keywordLike} escape '\' or l.lot_no ilike #{keywordLike} escape '\'
+                or i.item_cd ilike #{keywordLike} escape '\')</if>
+            <if test="inspType != null">and h.insp_type = #{inspType}</if>
+            <if test="status != null">and h.status = #{status}</if>
+            <if test="result != null">and h.result = #{result}</if>
+        </where>
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.InspDtos$InspRow">
+        select <include refid="cols"/> <include refid="from"/> <include refid="listWhere"/>
+        order by h.occurred_at desc, h.insp_id desc
+        limit #{limit}
+    </select>
+
+    <!-- 그리드: 정렬은 허용 enum 키만(choose) + 마지막 PK -->
+    <select id="findGrid" resultType="io.smarthappy.module.qms.InspDtos$InspRow">
+        select <include refid="cols"/> <include refid="from"/> <include refid="listWhere"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'INSP_NO'">h.insp_no</when>
+                <when test="s.key == 'INSP_TYPE'">h.insp_type</when>
+                <when test="s.key == 'LOT_NO'">l.lot_no</when>
+                <when test="s.key == 'STATUS'">h.status</when>
+                <otherwise>h.occurred_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        h.insp_id desc
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countList" resultType="long">
+        select count(*) <include refid="from"/> <include refid="listWhere"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.InspDtos$InspRow">
+        select <include refid="cols"/> <include refid="from"/> where h.insp_id = #{id}
+    </select>
+
+    <!-- 초품·종품 나란히(docs/29_P3 27장) — 기준 검사 머리 -->
+    <select id="offHead" resultType="io.smarthappy.module.qms.InspDtos$OffHead">
+        select insp_id, insp_type, lot_id, item_id, proc_id from qms_insp where insp_id = #{id}
+    </select>
+
+    <sql id="offCols">
+        h.insp_id, h.insp_no, h.insp_type, h.lot_id, l.lot_no, h.status, h.result, h.occurred_at, h.judged_at, h.judged_by
+    </sql>
+
+    <!-- 같은 품목·공정의 초품·종품(무효 빼고) 최근부터 — 지시 거름은 서비스가 LotLookup 으로. 부분 인덱스 ix_qms_insp_off -->
+    <select id="offCandidates" resultType="io.smarthappy.module.qms.InspDtos$OffRow">
+        select <include refid="offCols"/>
+          from qms_insp h join lot_master l on l.lot_id = h.lot_id
+         where h.item_id = #{itemId}
+           <choose>
+               <when test="procId != null">and h.proc_id = #{procId}</when>
+               <otherwise>and h.proc_id is null</otherwise>
+           </choose>
+           and h.insp_type in ('FIRST_OFF', 'LAST_OFF') and h.status &lt;&gt; 'VOID'
+         order by h.occurred_at desc, h.insp_id desc
+         limit #{limit}
+    </select>
+
+    <!-- 짝 1순위(27.4): 지시의 LOT 들에서 바로 거름 — 품목·공정 최근 상한에 잘리지 않는다. 인덱스 ix_qms_insp_lot -->
+    <select id="offOfWoLots" resultType="io.smarthappy.module.qms.InspDtos$OffRow">
+        select <include refid="offCols"/>
+          from qms_insp h join lot_master l on l.lot_id = h.lot_id
+         where h.insp_type in ('FIRST_OFF', 'LAST_OFF') and h.status &lt;&gt; 'VOID'
+           <choose>
+               <when test="procId != null">and h.proc_id = #{procId}</when>
+               <otherwise>and h.proc_id is null</otherwise>
+           </choose>
+           and h.lot_id in <foreach collection="lotIds" item="x" open="(" separator="," close=")">#{x}</foreach>
+         order by h.occurred_at desc, h.insp_id desc
+    </select>
+
+    <!-- 공정 완료 경고(27장): 그 공정·산출 LOT 들의 한 유형 검사(무효 빼고) -->
+    <select id="offOfLots" resultType="io.smarthappy.module.qms.InspDtos$OffRow">
+        select <include refid="offCols"/>
+          from qms_insp h join lot_master l on l.lot_id = h.lot_id
+         where h.insp_type = #{inspType} and h.proc_id = #{procId} and h.status &lt;&gt; 'VOID'
+           and h.lot_id in <foreach collection="lotIds" item="x" open="(" separator="," close=")">#{x}</foreach>
+         order by h.occurred_at desc, h.insp_id desc
+    </select>
+
+    <!-- 엑셀 올리기(docs/29_P3 25장) — 검사 번호로 머리만, 회사 범위는 RLS -->
+    <select id="findInspByNo" resultType="io.smarthappy.module.qms.InspDtos$InspRow">
+        select insp_id, insp_no, status, occurred_at from qms_insp where insp_no = #{no}
+    </select>
+
+    <select id="gaugeIdByCd" resultType="long">
+        select asset_id from mst_phys_asset where asset_type = 'GAUGE' and asset_cd = #{cd}
+    </select>
+
+    <!-- 대사용 — 살아 있는 측정값 수(무효 행·무효된 값 제외) -->
+    <select id="countLiveMeas" resultType="long">
+        select count(*) from qms_insp_meas m
+         where m.void_of_id is null and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+    </select>
+
+    <select id="lockInsp" resultType="io.smarthappy.module.qms.InspDtos$InspRow">
+        select insp_id, status, row_ver from qms_insp where insp_id = #{id} for update
+    </select>
+
+    <select id="findLines" resultType="io.smarthappy.module.qms.InspDtos$LineRow">
+        select x.insp_line_id, x.line_no, x.char_id, coalesce(i.item_cd, p.proc_cd) || '-' || c.char_no as char_label, c.char_nm, x.data_type,
+               x.nominal, x.lsl, x.usl, x.scale, x.unit_nm, x.gauge_class, x.sample_size, x.ac, x.re, x.result
+          from qms_insp_line x
+          join qms_char c on c.char_id = x.char_id
+          left join mst_item i on i.item_id = c.item_id
+          left join mst_proc p on p.proc_id = c.proc_id
+         where x.insp_id = #{id}
+         order by x.line_no
+    </select>
+
+    <!-- 살아 있는 값 = 무효 행이 아니고 그를 가리키는 무효 행도 없음 -->
+    <select id="findLiveMeas" resultType="io.smarthappy.module.qms.InspDtos$MeasRow">
+        select m.meas_id, m.insp_line_id, m.sample_no, m.value, m.ok_yn, m.gauge_asset_id, a.asset_cd as gauge_cd, m.occurred_at, m.recorded_by,
+               m.entry_method
+          from qms_insp_meas m
+          join qms_insp_line x on x.insp_line_id = m.insp_line_id
+          left join mst_phys_asset a on a.asset_id = m.gauge_asset_id
+         where x.insp_id = #{id} and m.void_of_id is null
+           and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+         order by m.insp_line_id, m.sample_no
+    </select>
+
+    <select id="findLot" resultType="io.smarthappy.module.qms.InspDtos$LotRef">
+        select l.lot_id, l.item_id, i.item_class_id, l.qty_created, l.unit_cd = i.unit_cd as base_unit
+          from lot_master l join mst_item i on i.item_id = l.item_id
+         where l.lot_no = #{lotNo}
+    </select>
+
+    <select id="findProc" resultType="long">
+        select proc_id from mst_proc where proc_cd = #{cd}
+    </select>
+
+    <!-- 확정 계획 행(스냅샷), 스냅샷 칸이 비어 있으면 특성 현재 값 -->
+    <select id="findPlanLines" resultType="io.smarthappy.module.qms.InspDtos$PlanLine">
+        select l.line_id, l.line_no, l.char_id, coalesce(l.data_type, c.data_type) as data_type,
+               coalesce(l.nominal, c.nominal) as nominal, coalesce(l.lsl, c.lsl) as lsl, coalesce(l.usl, c.usl) as usl,
+               coalesce(l.scale, c.scale) as scale, coalesce(l.unit_nm, c.unit_nm) as unit_nm, l.gauge_class, l.sampling_plan_id
+          from qms_insp_plan_line l join qms_char c on c.char_id = l.char_id
+         where l.insp_plan_id = #{planId}
+         order by l.line_no
+    </select>
+
+    <select id="insertInsp" resultType="long" flushCache="true">
+        insert into qms_insp (comp_cd, insp_no, insp_type, lot_id, item_id, proc_id, insp_plan_id, lot_qty, occurred_at, remark, created_by, updated_by,
+                              open_worker_id, open_terminal_id, open_req_id)
+        values (hb_current_comp(), #{no}, #{type}, #{lotId}, #{itemId}, #{procId}, #{planId}, #{lotQty}, #{at}, #{remark}, #{by}, #{by},
+                #{floor.workerId,jdbcType=BIGINT}, #{floor.terminalId,jdbcType=BIGINT}, #{floor.clientReqId,jdbcType=VARCHAR})
+        returning insp_id
+    </select>
+
+    <insert id="insertLines">
+        insert into qms_insp_line (comp_cd, insp_id, line_no, plan_line_id, char_id, data_type, nominal, lsl, usl, scale, unit_nm, gauge_class,
+                                   sample_size, ac, re, created_by)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{inspId}, #{r.lineNo}, #{r.planLineId}, #{r.charId}, #{r.dataType}, #{r.nominal}, #{r.lsl}, #{r.usl}, #{r.scale},
+             #{r.unitNm}, #{r.gaugeClass}, #{r.sampleSize}, #{r.ac}, #{r.re}, #{by})
+        </foreach>
+    </insert>
+
+    <insert id="insertMeas">
+        insert into qms_insp_meas (comp_cd, insp_line_id, sample_no, value, ok_yn, gauge_asset_id, occurred_at, recorded_by, entry_method, import_job_id,
+                                   performed_by, terminal_id, client_req_id)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{r.inspLineId}, #{r.sampleNo}, #{r.value}, #{r.okYn}, #{r.gaugeAssetId}, #{r.occurredAt}, #{by},
+             #{src.entryMethod}, #{src.importJobId,jdbcType=BIGINT}, #{src.workerId,jdbcType=BIGINT}, #{src.terminalId,jdbcType=BIGINT},
+             #{src.clientReqId,jdbcType=VARCHAR})
+        </foreach>
+    </insert>
+
+    <insert id="insertVoid">
+        insert into qms_insp_meas (comp_cd, insp_line_id, sample_no, void_of_id, occurred_at, recorded_by)
+        select hb_current_comp(), m.insp_line_id, m.sample_no, m.meas_id, #{at}, #{by}
+          from qms_insp_meas m join qms_insp_line x on x.insp_line_id = m.insp_line_id
+         where m.meas_id = #{measId} and x.insp_id = #{inspId} and m.void_of_id is null
+           and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+    </insert>
+
+    <update id="setLineResult">
+        update qms_insp_line set result = #{result} where insp_line_id = #{lineId} and result is null
+    </update>
+
+    <update id="judge">
+        update qms_insp set status = 'JUDGED', result = #{result}, judged_at = now(), judged_by = #{by}, judged_worker_id = #{workerId,jdbcType=BIGINT},
+                            row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_id = #{id} and status = 'OPEN' and row_ver = #{rowVer}
+    </update>
+
+    <!-- 이 검사를 근거로 한 처리 중(OPEN·PENDING) NCR 번호 — 무효 경고(docs/29_P3 16장 QQ-1) -->
+    <select id="findOpenNcrNos" resultType="string">
+        select ncr_no from qms_ncr where insp_id = #{id} and status in ('OPEN', 'PENDING') order by ncr_id
+    </select>
+
+    <update id="voidInsp">
+        update qms_insp set status = 'VOID', void_reason = #{reason}, voided_at = now(), voided_by = #{by},
+                            row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_id = #{id} and status in ('OPEN', 'JUDGED') and row_ver = #{rowVer}
+    </update>
+
+    <!-- 그 클래스의 사용 중 게이지(상태는 서비스가 GaugeStatus 로) -->
+    <select id="findGauges" resultType="io.smarthappy.module.qms.InspDtos$GaugeOption">
+        select asset_id, asset_cd, asset_nm from mst_phys_asset
+         where asset_type = 'GAUGE' and gauge_class = #{gaugeClass} and use_yn = 'Y'
+         order by asset_cd
+         limit 200
+    </select>
+
+    <select id="gaugeClassOf" resultType="string">
+        select gauge_class from mst_phys_asset where asset_id = #{assetId} and asset_type = 'GAUGE'
+    </select>
+</mapper>

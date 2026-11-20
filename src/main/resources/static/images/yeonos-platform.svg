@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 344" role="img" aria-label="공통 플랫폼 계층 위의 MES·QMS·WMS·SRM·PMS·CMS 가 같은 키(품목·LOT·설비·작업지시)로 여러 방향 데이터를 주고받고, 사무 화면과 현장 단말이 같은 데이터를 본다">
+  <!-- YeonOS 로그인 일러스트 (자체 제작). 連(잇다) = 한 줄 흐름이 아니라 같은 키로 잇는 그물:
+       아래 플랫폼 계층이 받치고, 여섯 모듈이 가운데 공통 키(허브)와 서로를 여러 방향으로 잇는다. 위는 같은 데이터를 보는 사무 화면·현장 단말.
+       CSP(style-src 'self') 때문에 스타일 요소 없이 표현 속성만 쓴다. 외부 폰트·파일 없음. -->
+  <defs>
+    <pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#2a4266"/>
+    </pattern>
+    <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5eead4"/>
+    </marker>
+  </defs>
+
+  <rect width="520" height="344" fill="url(#dots)"/>
+  <text x="516" y="152" font-family="'Noto Serif KR', 'Batang', serif" font-size="110" fill="#ffffff" fill-opacity="0.05" text-anchor="end">連</text>
+
+  <!-- 플랫폼 계층과 모듈을 잇는 받침선 -->
+  <g stroke="#475569" stroke-width="1.2" stroke-dasharray="3 4">
+    <line x1="70" y1="197" x2="70" y2="290"/>
+    <line x1="450" y1="197" x2="450" y2="290"/>
+    <line x1="150" y1="272" x2="150" y2="290"/>
+    <line x1="370" y1="272" x2="370" y2="290"/>
+  </g>
+
+  <!-- 사무 화면·현장 단말 → 같은 데이터 -->
+  <g stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="2 4" fill="none">
+    <line x1="200" y1="32" x2="236" y2="141"/>
+    <line x1="320" y1="32" x2="284" y2="141"/>
+  </g>
+
+  <!-- 모듈 ↔ 공통 키 (모든 모듈이 같은 키를 쓴다) -->
+  <g stroke="#3b82f6" stroke-width="1.6" stroke-opacity="0.55">
+    <line x1="150" y1="105" x2="260" y2="180"/>
+    <line x1="370" y1="105" x2="260" y2="180"/>
+    <line x1="70" y1="180" x2="260" y2="180"/>
+    <line x1="450" y1="180" x2="260" y2="180"/>
+    <line x1="150" y1="255" x2="260" y2="180"/>
+    <line x1="370" y1="255" x2="260" y2="180"/>
+  </g>
+
+  <!-- 모듈 ↔ 모듈 직접 주고받기 (양방향) -->
+  <g stroke="#5eead4" stroke-width="2" fill="none" marker-start="url(#tip)" marker-end="url(#tip)">
+    <line x1="198" y1="105" x2="322" y2="105"/>
+    <line x1="150" y1="126" x2="150" y2="234"/>
+    <line x1="370" y1="126" x2="370" y2="234"/>
+    <line x1="198" y1="255" x2="322" y2="255"/>
+    <line x1="82" y1="160" x2="114" y2="125"/>
+  </g>
+  <g font-family="Pretendard, 'Malgun Gothic', sans-serif" font-size="10" fill="#99f6e4">
+    <text x="260" y="98" text-anchor="middle">검사·처분</text>
+    <text x="156" y="150">투입·입고</text>
+    <text x="364" y="150" text-anchor="end">수입검사</text>
+    <text x="260" y="249" text-anchor="middle">납품 입고</text>
+    <text x="88" y="136" text-anchor="end">설비 상태</text>
+  </g>
+
+  <!-- 공통 키 허브 -->
+  <circle cx="260" cy="180" r="44" fill="#0f2a3a" stroke="#5eead4" stroke-width="1.5"/>
+  <g font-family="Pretendard, 'Malgun Gothic', sans-serif" text-anchor="middle">
+    <text x="260" y="171" font-size="12" font-weight="700" fill="#f1f5f9">같은 키</text>
+    <text x="260" y="187" font-size="10" fill="#cbd5e1">품목 · LOT</text>
+    <text x="260" y="201" font-size="10" fill="#cbd5e1">설비 · 작업지시</text>
+  </g>
+
+  <!-- 모듈 -->
+  <g font-family="Pretendard, 'Malgun Gothic', sans-serif" text-anchor="middle">
+    <rect x="106" y="88" width="88" height="34" rx="9" fill="#13253d" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="150" y="103" font-size="13" font-weight="700" fill="#f1f5f9">MES</text>
+    <text x="150" y="116" font-size="9" fill="#94a3b8">생산</text>
+
+    <rect x="326" y="88" width="88" height="34" rx="9" fill="#13253d" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="370" y="103" font-size="13" font-weight="700" fill="#f1f5f9">QMS</text>
+    <text x="370" y="116" font-size="9" fill="#94a3b8">품질</text>
+
+    <rect x="26" y="163" width="88" height="34" rx="9" fill="#13253d" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="70" y="178" font-size="13" font-weight="700" fill="#f1f5f9">CMS</text>
+    <text x="70" y="191" font-size="9" fill="#94a3b8">설비</text>
+
+    <rect x="406" y="163" width="88" height="34" rx="9" fill="#13253d" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="450" y="178" font-size="13" font-weight="700" fill="#f1f5f9">PMS</text>
+    <text x="450" y="191" font-size="9" fill="#94a3b8">프로젝트</text>
+
+    <rect x="106" y="238" width="88" height="34" rx="9" fill="#13253d" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="150" y="253" font-size="13" font-weight="700" fill="#f1f5f9">WMS</text>
+    <text x="150" y="266" font-size="9" fill="#94a3b8">창고</text>
+
+    <rect x="326" y="238" width="88" height="34" rx="9" fill="#13253d" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="370" y="253" font-size="13" font-weight="700" fill="#f1f5f9">SRM</text>
+    <text x="370" y="266" font-size="9" fill="#94a3b8">협력사</text>
+  </g>
+
+  <!-- 사무 화면 / 현장 단말 -->
+  <g font-family="Pretendard, 'Malgun Gothic', sans-serif" font-size="11" fill="#e2e8f0">
+    <rect x="96" y="6" width="130" height="26" rx="13" fill="#0b1626" stroke="#64748b" stroke-width="1.2"/>
+    <rect x="110" y="13" width="14" height="10" rx="1.5" fill="none" stroke="#94a3b8" stroke-width="1.4"/>
+    <line x1="113" y1="26" x2="121" y2="26" stroke="#94a3b8" stroke-width="1.4"/>
+    <text x="132" y="23">사무 화면</text>
+
+    <rect x="294" y="6" width="130" height="26" rx="13" fill="#0b1626" stroke="#64748b" stroke-width="1.2"/>
+    <rect x="308" y="11" width="10" height="16" rx="2" fill="none" stroke="#94a3b8" stroke-width="1.4"/>
+    <circle cx="313" cy="23.5" r="1" fill="#94a3b8"/>
+    <text x="326" y="23">현장 POP·PDA</text>
+  </g>
+
+  <!-- 플랫폼 계층 -->
+  <rect x="16" y="290" width="488" height="46" rx="12" fill="#0b1626" stroke="#64748b" stroke-width="1.2"/>
+  <g font-family="Pretendard, 'Malgun Gothic', sans-serif" text-anchor="middle">
+    <text x="260" y="309" font-size="12" font-weight="700" fill="#e2e8f0">YeonOS 플랫폼 계층</text>
+    <text x="260" y="326" font-size="10" fill="#94a3b8">회사별 격리(RLS) · 권한 · 감사 · 원장 규약 · 아웃박스</text>
+  </g>
+</svg>

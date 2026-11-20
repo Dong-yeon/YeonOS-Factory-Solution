@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  위험성평가 (cms-risk) — CMS 1부 C6 (docs/33 4.7, D12·D17 · docs/27 M10 산업안전보건법).
+  작성 중(DRAFT): 머리·유해위험요인·참여자를 고친다. 확정 요청: 항목 하나 이상, 중간 이상 위험은 개선 대책·담당·기한, 근로자(대표) 참여 →
+  정책에 따라 결재(CMS_RA) 또는 APPROVE 권한으로 바로 확정. 확정본(RELEASED)은 내용 불변 — 개선 진행(완료일·개선 후 위험성)과 주지일만.
+  새 평가 = 확정본 복사(끝낸 개선 대책은 현재 조치로). 엑셀 = 위험성평가표(항목).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">위험성평가</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{cms.risk.from}">평가일부터</span><input type="date" name="from" id="fromDate"></label>
+    <label><span th:text="#{cms.risk.to}">까지</span><input type="date" name="to" id="toDate"></label>
+    <label><span th:text="#{cms.mwo.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="CMS_RA_STATUS" data-blank="all"></select></label>
+    <label><span th:text="#{cms.risk.keyword}">번호·제목</span><input name="keyword" maxlength="100"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="raGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" hidden th:text="#{common.save}">저장</button>
+            <button type="button" id="copyBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{cms.risk.copy}">새 평가로 복사</button>
+            <button type="button" id="excelBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" hidden th:text="#{cms.sec.excel}">엑셀 내려받기</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 저장 줄과 떨어진 자리(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('DELETE')}">
+            <button type="button" id="obsoleteBtn" class="hb-btn-danger-outline" hidden th:text="#{cms.risk.obsolete}">폐기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.risk.selectOrNew}">왼쪽에서 평가를 고르거나 신규를 누르세요.</p>
+        <p id="stateLine" class="hb-muted"></p>
+        <form id="raForm" class="hb-form" autocomplete="off">
+            <label class="hb-wide"><span th:text="#{cms.risk.col.title}">제목</span><input data-field="title" maxlength="200"></label>
+            <label><span th:text="#{cms.risk.col.type}">유형</span>
+                <select data-field="raType" data-hb="select" data-code="CMS_RA_TYPE" data-blank="select"></select></label>
+            <label><span th:text="#{cms.risk.col.method}">방법</span>
+                <select data-field="method" data-hb="select" data-code="CMS_RA_METHOD" data-help-key="cms-risk.method"></select></label>
+            <label><span th:text="#{cms.risk.col.assessDate}">평가일</span><input type="date" data-field="assessDate"></label>
+            <label><span th:text="#{cms.col.plant}">공장</span><select data-field="plantCd" id="plantSel"></select></label>
+            <label class="hb-wide"><span th:text="#{cms.risk.col.scope}">범위</span><input data-field="scopeText" maxlength="500"></label>
+            <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+
+        <section class="hb-sub" id="itemSection" hidden>
+            <h2 th:text="#{cms.risk.items}">유해위험요인</h2>
+            <p id="problems" class="hb-msg-error"></p>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table hb-plant-table" id="items">
+                    <thead><tr>
+                        <th th:text="#{cms.risk.col.seq}">순번</th>
+                        <th th:text="#{cms.risk.col.hazard}">유해위험요인</th>
+                        <th th:text="#{cms.risk.col.level}">위험성</th>
+                        <th th:text="#{cms.risk.col.plan}">개선 대책</th>
+                        <th th:text="#{cms.risk.col.done}">완료</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div id="itemBox">
+                <h3 id="itemMode" class="hb-muted"></h3>
+                <form id="itemForm" class="hb-form" autocomplete="off">
+                    <label><span th:text="#{cms.risk.col.seq}">순번</span><input data-field="seq" inputmode="numeric" maxlength="4"></label>
+                    <label><span th:text="#{cms.risk.col.hazardCat}">분류</span>
+                        <select data-field="hazardCat" data-hb="select" data-code="CMS_HAZARD_CAT" data-blank="select"></select></label>
+                    <label class="hb-wide"><span th:text="#{cms.risk.col.task}">작업·공정</span><input data-field="taskText" maxlength="200"></label>
+                    <label class="hb-wide"><span th:text="#{cms.risk.col.hazard}">유해위험요인</span><input data-field="hazardText" maxlength="500"></label>
+                    <label class="hb-wide"><span th:text="#{cms.risk.col.currentMeasure}">현재 안전조치</span><input data-field="currentMeasure" maxlength="500"></label>
+                    <label><span th:text="#{cms.risk.col.equip}">설비</span><input data-field="equipCd" maxlength="30"></label>
+                    <label data-method="FREQ_SEV"><span id="lLabel" th:text="#{cms.risk.col.likelihood}">가능성</span>
+                        <select data-field="likelihood" id="lSel"></select></label>
+                    <label data-method="FREQ_SEV"><span id="sLabel" th:text="#{cms.risk.col.severity}">중대성</span>
+                        <select data-field="severity" id="sSel"></select></label>
+                    <label data-method="THREE_STEP" hidden><span th:text="#{cms.risk.col.level}">위험성</span>
+                        <select data-field="riskLevel" data-hb="select" data-code="CMS_RISK_LEVEL" data-blank="select"></select></label>
+                    <p id="levelPreview" class="hb-muted hb-wide" role="status"></p>
+                    <label class="hb-wide"><span th:text="#{cms.risk.col.plan}">개선 대책</span><input data-field="planMeasure" maxlength="500"></label>
+                    <label><span th:text="#{cms.risk.col.owner}">담당</span><select data-field="ownerLoginId" id="ownerSel"></select></label>
+                    <label><span th:text="#{cms.risk.col.due}">기한</span><input type="date" data-field="dueDate"></label>
+                </form>
+                <div class="hb-toolbar">
+                    <button type="button" id="saveItemBtn" class="hb-btn-secondary" th:text="#{cms.risk.saveItem}">요인 저장</button>
+                    <button type="button" id="newItemBtn" class="hb-btn-ghost" th:text="#{cms.risk.newItem}">새 요인</button>
+                </div>
+                <div class="hb-toolbar">
+                    <button type="button" id="deleteItemBtn" class="hb-btn-danger-outline" hidden th:text="#{cms.risk.deleteItem}">삭제</button>
+                </div>
+            </div>
+            <div id="progressBox" hidden>
+                <h3 id="progressMode" class="hb-muted"></h3>
+                <form id="progressForm" class="hb-form" autocomplete="off">
+                    <label class="hb-wide"><span th:text="#{cms.risk.col.done}">완료일</span><input type="date" data-field="doneDate"></label>
+                    <label data-method="FREQ_SEV"><span th:text="#{cms.risk.col.residualL}">개선 후 가능성</span><select data-field="residualL" id="rlSel"></select></label>
+                    <label data-method="FREQ_SEV"><span th:text="#{cms.risk.col.residualS}">개선 후 중대성</span><select data-field="residualS" id="rsSel"></select></label>
+                    <label data-method="THREE_STEP" hidden><span th:text="#{cms.risk.col.residual}">개선 후 위험성</span>
+                        <select data-field="residualLevel" data-hb="select" data-code="CMS_RISK_LEVEL" data-blank="select"></select></label>
+                </form>
+                <div class="hb-toolbar">
+                    <button type="button" id="progressBtn" class="hb-btn-secondary" th:text="#{cms.risk.saveProgress}">개선 진행 저장</button>
+                </div>
+            </div>
+            <div id="evidenceBox" hidden>
+                <h3 id="evidenceMode" class="hb-muted"></h3>
+                <ul id="evidence" class="hb-files"></ul>
+                <input type="file" id="evidenceInput" th:if="${actions.contains('SAVE')}" th:aria-label="#{cms.risk.evidence}" data-help-key="cms-risk.evidence">
+            </div>
+        </section>
+
+        <section class="hb-sub" id="memberSection" hidden>
+            <h2 th:text="#{cms.risk.members}">참여·주지</h2>
+            <table class="hb-cmp-table hb-plant-table" id="members">
+                <thead><tr>
+                    <th th:text="#{cms.risk.col.memberNm}">이름</th>
+                    <th th:text="#{cms.risk.col.role}">역할</th>
+                    <th th:text="#{cms.risk.col.participated}">참여일</th>
+                    <th th:text="#{cms.risk.col.notified}">주지일</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <div id="memberBox">
+                <form id="memberForm" class="hb-form" autocomplete="off">
+                    <label><span th:text="#{cms.risk.col.user}">사용자</span><select data-field="loginId" id="memberUserSel"></select></label>
+                    <label><span th:text="#{cms.risk.col.worker}">작업자</span><select data-field="workerCd" id="memberWorkerSel"
+                            data-help-key="cms-risk.worker"></select></label>
+                    <label><span th:text="#{cms.risk.col.memberNm}">이름(사용자 아님)</span><input data-field="memberNm" maxlength="100"></label>
+                    <label><span th:text="#{cms.risk.col.role}">역할</span>
+                        <select data-field="roleCd" data-hb="select" data-code="CMS_RA_ROLE" data-blank="select"></select></label>
+                    <label><span th:text="#{cms.risk.col.participated}">참여일</span><input type="date" data-field="participatedOn"></label>
+                </form>
+                <div class="hb-toolbar">
+                    <button type="button" id="addMemberBtn" class="hb-btn-secondary" th:text="#{cms.risk.addMember}">참여자 추가</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="releaseSection" hidden>
+            <h2 th:text="#{cms.risk.release}">확정</h2>
+            <div id="approverBox">
+                <form id="releaseForm" class="hb-form" autocomplete="off">
+                    <label class="hb-wide"><span th:text="#{cms.risk.approver}">결재자</span><select id="approverSel"></select></label>
+                </form>
+            </div>
+            <div class="hb-toolbar">
+                <button type="button" id="releaseBtn" th:text="#{cms.risk.releaseBtn}">확정 요청</button>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/risk-mgt.js}"></script>
+</body>
+</html>

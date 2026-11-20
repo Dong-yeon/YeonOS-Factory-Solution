@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  협력사 반품 출고 (wms-rtn-issue) — SRM 2부 R4-4 (docs/30 12.14 · docs/31 4.12.7). 반품 번호 스캔 → 지시·후보 재고 칸 → 칸마다 출고 수량 → 확정 1회.
+  사용성 체크(docs/11 4.3): 주 사용자 = 창고 담당(WEB, 키보드 웨지 스캐너). 반품 지시는 SRM 화면에서 확정한 것만 보인다.
+  직접 치는 값 = 칸별 출고 수량(지시 수량 채우기 버튼이 위 칸부터 채움)·비고·발생 시각(늦게 입력할 때만). 품목·LOT·공장·지시 수량은 서버가 지시에서.
+  예외 = 지시 수량과 합이 다름(409 — 나눠 출고 없음), 그 사이 재고가 줄어 부족(409), 이미 나간 반품, 교체 요구인데 그 LOT 입고 없음.
+  정정 = 수불 원장 화면 역분개(한 행이면 그 출고 전체, SRM 반품은 확정으로·교체 요구 입고 다시).
+-->
+<body data-table-menu="" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">반품 출고</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="findForm" class="hb-search" autocomplete="off">
+    <label class="hb-wide"><span th:text="#{wmsRtn.returnNo}">반품 번호</span>
+        <input id="returnNo" maxlength="40" th:placeholder="#{wmsRtn.returnNoPlaceholder}" data-help-key="wms-rtn-issue.returnNo"></label>
+    <div class="hb-sp-actions">
+        <button type="submit" id="findBtn" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<p id="offMsg" class="hb-msg" hidden th:text="#{wmsRtn.unavailable}">SRM 이 없는 설치본입니다 — 반품 지시가 없습니다.</p>
+
+<section id="entry" hidden>
+    <dl class="hb-info" id="summary">
+        <dt th:text="#{wmsRtn.returnNo}">반품 번호</dt><dd data-v="returnNo"></dd>
+        <dt th:text="#{wmsRtn.status}">상태</dt><dd data-v="status"></dd>
+        <dt th:text="#{wmsRtn.item}">품목</dt><dd data-v="item"></dd>
+        <dt th:text="#{wmsRtn.lotNo}">LOT</dt><dd data-v="lotNo"></dd>
+        <dt th:text="#{wmsRtn.qty}">지시 수량</dt><dd data-v="qty"></dd>
+        <dt th:text="#{wmsRtn.replace}">교체 요구</dt><dd data-v="replace"></dd>
+        <dt th:text="#{wmsRtn.plant}">공장</dt><dd data-v="plantCd"></dd>
+    </dl>
+    <div class="hb-replace-host">
+        <table class="hb-cmp-table" id="stockTbl">
+            <thead><tr>
+                <th th:text="#{wmsTrx.col.path}">위치</th>
+                <th th:text="#{wmsRtn.stockStatus}">재고 상태</th>
+                <th class="hb-num" th:text="#{wmsRtn.onHand}">재고</th>
+                <th class="hb-num" th:text="#{wmsRtn.issueQty}">출고 수량</th>
+            </tr></thead>
+            <tbody></tbody>
+            <tfoot><tr>
+                <th colspan="3" th:text="#{wmsRtn.total}">합계 / 지시</th>
+                <td class="hb-num" id="totalCell"></td>
+            </tr></tfoot>
+        </table>
+    </div>
+    <p id="emptyMsg" class="hb-msg" hidden th:text="#{wmsRtn.noStock}">이 공장에 출고할 재고가 없습니다.</p>
+    <form id="extraForm" class="hb-form" autocomplete="off">
+        <label><span th:text="#{wmsMove.occurredAt}">발생 시각</span>
+            <input data-field="occurredAt" type="datetime-local" data-help-key="wms-rtn-issue.occurredAt"></label>
+        <label><span th:text="#{wmsMove.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+    </form>
+    <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+        <button type="button" id="fillBtn" class="hb-btn-secondary" th:text="#{wmsRtn.fill}">지시 수량 채우기</button>
+        <button type="button" id="saveBtn" th:text="#{wmsRtn.save}">출고 확정</button>
+    </div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/wms/rtn-issue.js}"></script>
+</body>
+</html>

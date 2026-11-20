@@ -1,0 +1,23 @@
+/*
+ * 창고 PDA 화면 전용 (B7-1, docs/30 12.12) — POP 셸(pop.css)을 그대로 쓰고 창고 화면 자리만. 값은 tokens.css 의미 토큰만.
+ */
+.wpda-menu { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--hb-space-4); padding: var(--hb-space-6) 0; }
+.wpda-menu button { min-height: 120px; font-size: var(--hb-fs-2xl); }
+.wpda-steps { list-style: none; margin: 0 0 var(--hb-space-4); padding: 0; display: grid; gap: var(--hb-space-2); }
+.wpda-steps li { display: flex; gap: var(--hb-space-3); padding: var(--hb-space-2) var(--hb-space-3); border: 1px solid var(--hb-border-subtle);
+    border-radius: var(--hb-radius-md); background: var(--hb-bg-surface); }
+.wpda-steps li > span { min-width: 6em; color: var(--hb-text-muted); }
+.wpda-steps li[aria-current="step"] { border-color: var(--hb-brand-accent); box-shadow: inset 0 0 0 1px var(--hb-brand-accent); }
+.wpda-pick { width: 100%; min-height: 56px; text-align: left; font-size: var(--hb-fs-lg); }
+.wpda-pick[aria-pressed="true"] { border-color: var(--hb-brand-accent); box-shadow: inset 0 0 0 2px var(--hb-brand-accent); }
+.wpda-done { color: var(--hb-status-success-fg); }
+/* pop.css 의 목록·키패드는 display: grid 라 hidden 속성이 안 먹는다 — 이 화면에서 숨기는 목록(실사 목록·재고 고르기)·반품 키패드만 */
+.hb-pop .hb-pop-list[hidden], .hb-pop .hb-pop-keypad[hidden] { display: none; }
+/* 정위치 점검 판정 줄(docs/55) — 색 + 굵은 판정 글자(색만으로 구분하지 않음) */
+.wpda-lc { padding: var(--hb-space-2) 0; }
+.wpda-lc-ok b { color: var(--hb-status-success-fg); }
+.wpda-lc-misplaced b { color: var(--hb-status-warning-fg); }
+.wpda-lc-missing b, .wpda-lc-unknown b { color: var(--hb-status-danger-fg); }
+/* 출하 특이사항(docs/56) — 확인 필수 미확인은 노랑 테두리 */
+.wpda-note { padding: var(--hb-space-2); border: 1px solid var(--hb-status-info-line); border-radius: var(--hb-radius-md); }
+.wpda-note-open { border-color: var(--hb-status-warning-line); background: var(--hb-status-warning-bg); }

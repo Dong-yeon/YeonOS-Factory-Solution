@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  출하 운송 정보 (docs/58). 회사 조건은 RLS. 지시 1 : 운송 0..1(PK = ship_id).
+  동시성: 서비스가 머리(wms_ship)를 FOR UPDATE 로 잡은 뒤 읽고 쓴다 — 머리 row_ver 는 올리지 않는다(피킹 낙관적 잠금과 겨루지 않음).
+-->
+<mapper namespace="io.smarthappy.module.wms.ship.ShipTransportMapper">
+
+    <select id="shipStatus" resultType="string">
+        select s.status from wms_ship s where s.ship_id = #{shipId}
+    </select>
+
+    <select id="transportRowVer" resultType="java.lang.Integer" flushCache="true">
+        select t.row_ver from wms_ship_transport t where t.ship_id = #{shipId}
+    </select>
+
+    <insert id="insert">
+        insert into wms_ship_transport (ship_id, comp_cd, carrier_nm, vehicle_no, tracking_no, created_by, updated_by)
+        values (#{shipId}, hb_current_comp(), #{carrierNm}, #{vehicleNo}, #{trackingNo}, #{by}, #{by})
+    </insert>
+
+    <update id="update">
+        update wms_ship_transport
+           set carrier_nm = #{carrierNm}, vehicle_no = #{vehicleNo}, tracking_no = #{trackingNo},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ship_id = #{shipId} and row_ver = #{rowVer}
+    </update>
+</mapper>

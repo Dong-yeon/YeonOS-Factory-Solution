@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설비 KPI (cms-kpi) — CMS 2부 C9 (docs/33 11.8, D19·D20·D21). 조회만.
+  공장·기간(공장 현지 날짜, 지금에서 자름) → 공장 합계 + 라인 합계 + 설비별. 합계는 합한 분자 ÷ 합한 분모(평균의 평균이 아님).
+  수집 없는 설비는 시간 지표 빈칸(D19), 표준 사이클 없는 실적이 있으면 성능·OEE 빈칸(D21).
+-->
+<body data-table-menu="excelBtn" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설비 KPI</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.kpi.plant}">공장</span><select name="plantCd" id="plantSel" required></select></label>
+    <label><span th:text="#{cms.kpi.from}">시작일</span><input name="from" id="fromIn" type="date" required></label>
+    <label><span th:text="#{cms.kpi.to}">종료일</span><input name="to" id="toIn" type="date" required></label>
+    <label><span th:text="#{cms.kpi.keyword}">설비</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{cms.kpi.basis}">생산 수 기준</span>
+        <select name="basis" data-help-key="cms-kpi.basis">
+            <option value="RESULT" th:text="#{cms.kpi.basis.RESULT}">확정 실적</option>
+            <option value="COUNT" th:text="#{cms.kpi.basis.COUNT}">수집 카운트</option>
+        </select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-toolbar">
+    <span id="period" class="hb-muted"></span>
+    <button type="button" id="excelBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" th:text="#{cms.kpi.excel}">엑셀 내려받기</button>
+</div>
+<div class="hb-replace-host">
+    <table class="hb-cmp-table" id="kpi">
+        <thead><tr>
+            <th th:text="#{cms.kpi.col.target}">대상</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.planned}" data-help-key="cms-kpi.planned">계획(h)</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.run}">가동(h)</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.availability}">가용률</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.performance}" data-help-key="cms-kpi.performance">성능</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.quality}">품질</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.oee}" data-help-key="cms-kpi.oee">OEE</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.failures}">고장</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.mtbf}">MTBF(h)</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.mttr}">MTTR(분)</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.unknown}" data-help-key="cms-kpi.unknown">끊김·미수집(h)</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.pm}">PM 준수</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.woFailures}" data-help-key="cms-kpi.wo">고장(작업지시)</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.woMtbf}">MTBF(작업지시, h)</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.woMttr}">MTTR(작업지시, 분)</th>
+            <th class="hb-num" th:text="#{cms.kpi.col.mtta}" data-help-key="cms-kpi.mtta">평균 반응(분)</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+</div>
+
+<section class="hb-sub" aria-labelledby="trendTitle">
+    <div class="hb-toolbar">
+        <h2 id="trendTitle" th:text="#{cms.kpi.trend}">일별 추이</h2>
+        <label><span th:text="#{cms.kpi.trendTarget}">대상</span>
+            <select id="trendTarget" data-help-key="cms-kpi.trend"></select></label>
+    </div>
+    <div class="hb-replace-host">
+        <table class="hb-cmp-table" id="trend">
+            <thead><tr>
+                <th th:text="#{cms.kpi.col.day}">날짜</th>
+                <th class="hb-num" th:text="#{cms.kpi.col.planned}">계획(h)</th>
+                <th class="hb-num" th:text="#{cms.kpi.col.run}">가동(h)</th>
+                <th class="hb-num" th:text="#{cms.kpi.col.availability}">가용률</th>
+                <th class="hb-num" th:text="#{cms.kpi.col.performance}">성능</th>
+                <th class="hb-num" th:text="#{cms.kpi.col.quality}">품질</th>
+                <th class="hb-num" th:text="#{cms.kpi.col.oee}">OEE</th>
+                <th class="hb-num" th:text="#{cms.kpi.col.failures}">고장</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/kpi.js}"></script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  홈 카드 집계 (docs/37 17.3). 회사 조건은 RLS. 기한 판정은 시정조치 목록(CapaMapper where 의 due_state)과 같은 식 —
+  종결·취소 제외 → 종결 기한 지남(CLOSE_OVERDUE) → OPEN 이고 봉쇄 기한 지남(CONTAIN_OVERDUE). 두 식이 갈라지면
+  HomeModuleCardTest 의 "카드 숫자 = 목록 건수" 가 깨진다. ix_qms_capa_status (comp_cd, status, close_due).
+-->
+<mapper namespace="io.smarthappy.module.qms.QmsHomeMapper">
+
+    <select id="capaDueSummary" resultType="io.smarthappy.module.qms.QmsHomeMapper$CapaDueSummary">
+        select count(*) filter (where cast(#{today} as date) &gt; c.close_due) as close_overdue_cnt,
+               count(*) filter (where cast(#{today} as date) &lt;= c.close_due and c.status = 'OPEN'
+                                  and cast(#{today} as date) &gt; c.contain_due) as contain_overdue_cnt
+          from qms_capa c
+         where c.status not in ('CLOSED', 'CANCELLED')
+    </select>
+
+    <select id="capaOverdueTop" resultType="io.smarthappy.module.qms.QmsHomeMapper$CapaDueRow">
+        select c.capa_no, c.title, c.close_due
+          from qms_capa c
+         where c.status not in ('CLOSED', 'CANCELLED')
+           and cast(#{today} as date) &gt; c.close_due
+         order by c.close_due, c.capa_no
+         limit #{limit}
+    </select>
+
+    <!-- ===== 6단계 (docs/37 18.1) — 조건은 각 목록 쿼리와 같은 식 ===== -->
+
+    <!-- 검사: InspMapper.findPage 의 status = 'OPEN' -->
+    <select id="inspOpenSummary" resultType="io.smarthappy.module.qms.QmsHomeMapper$InspOpenSummary">
+        select count(*) as open_cnt,
+               count(*) filter (where h.insp_type = 'RECEIVE') as receive_cnt,
+               count(*) filter (where h.occurred_at &lt; #{waitedBefore}) as long_wait_cnt
+          from qms_insp h
+         where h.status = 'OPEN'
+    </select>
+
+    <select id="inspOpenTop" resultType="io.smarthappy.module.qms.QmsHomeMapper$InspOpenRow">
+        select h.insp_no, h.insp_type, i.item_cd, l.lot_no, h.occurred_at
+          from qms_insp h
+          join mst_item i on i.item_id = h.item_id
+          join lot_master l on l.lot_id = h.lot_id
+         where h.status = 'OPEN'
+         order by h.occurred_at, h.insp_id
+         limit #{limit}
+    </select>
+
+    <!-- 부적합: 끝나지 않은 것 = OPEN·PENDING(특채 결재 중) -->
+    <select id="ncrOpenSummary" resultType="io.smarthappy.module.qms.QmsHomeMapper$NcrOpenSummary">
+        select count(*) as open_cnt,
+               count(*) filter (where n.status = 'PENDING') as pending_cnt,
+               count(*) filter (where n.hold_yn = 'Y') as hold_cnt,
+               count(*) filter (where n.defect_id is null) as no_defect_cnt
+          from qms_ncr n
+         where n.status in ('OPEN', 'PENDING')
+    </select>
+
+    <select id="ncrOpenTop" resultType="io.smarthappy.module.qms.QmsHomeMapper$NcrOpenRow">
+        select n.ncr_no, n.status, i.item_cd, l.lot_no, n.occurred_at
+          from qms_ncr n
+          join mst_item i on i.item_id = n.item_id
+          join lot_master l on l.lot_id = n.lot_id
+         where n.status in ('OPEN', 'PENDING')
+         order by n.occurred_at, n.ncr_id
+         limit #{limit}
+    </select>
+
+    <!-- 봉쇄: OPEN + 아직 풀리지 않은 봉쇄 LOT -->
+    <select id="containOpenSummary" resultType="io.smarthappy.module.qms.QmsHomeMapper$ContainOpenSummary">
+        select count(*) as open_cnt,
+               coalesce(sum((select count(*) from qms_contain_lot cl where cl.contain_id = c.contain_id and cl.released_at is null)), 0)
+                   as held_lot_cnt
+          from qms_contain c
+         where c.status = 'OPEN'
+    </select>
+
+    <select id="containOpenTop" resultType="io.smarthappy.module.qms.QmsHomeMapper$ContainOpenRow">
+        select c.contain_no, i.item_cd, c.reason,
+               (select count(*) from qms_contain_lot cl where cl.contain_id = c.contain_id and cl.released_at is null) as held_lot_cnt,
+               c.created_at
+          from qms_contain c
+          join mst_item i on i.item_id = c.item_id
+         where c.status = 'OPEN'
+         order by c.created_at, c.contain_id
+         limit #{limit}
+    </select>
+
+    <!-- 미처리 SPC 위반(docs/29_P3 19장) — SpcEventMapper 의 상태 파생과 같은 조건: CLOSE·VOID 처리 없음 = OPEN·ACKED, 처리 없음 = OPEN -->
+    <select id="spcOpenTop" resultType="io.smarthappy.module.qms.QmsHomeMapper$SpcOpenRow">
+        select h.insp_no, e.rule_cd, i.item_cd, c.char_no, s.status = 'ACKED' as acked, s.occurred_at
+          from qms_spc_event_state s
+          join qms_spc_event e on e.event_id = s.event_id
+          join qms_insp h on h.insp_id = e.insp_id
+          join mst_item i on i.item_id = e.item_id
+          join qms_char c on c.char_id = e.char_id
+         where s.status in ('OPEN', 'ACKED')
+         order by s.occurred_at desc, s.event_id desc
+         limit #{limit}
+    </select>
+</mapper>

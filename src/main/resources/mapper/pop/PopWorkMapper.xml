@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- POP 착수·실적·투입 (P2 5b, docs/25 4.7). 회사 조건은 RLS — 요청 범위(단말 회사) 안에서만 부른다 -->
+<mapper namespace="io.smarthappy.module.pop.PopWorkMapper">
+
+    <!-- ================================================================ 공정 -->
+
+    <select id="findProc" resultType="io.smarthappy.module.pop.PopWorkDtos$ProcRow" flushCache="true" useCache="false">
+        select wp.wo_proc_id, w.wo_id, w.wo_no, w.status as wo_status, w.plant_cd, w.item_id, i.item_cd, i.item_nm,
+               trim_scale(w.plan_qty)::text as plan_qty, w.unit_cd, w.released_at, wp.op_seq, wp.proc_id, wp.proc_cd, wp.proc_nm,
+               wp.status, wp.equip_id, e.equip_cd, e.equip_nm, h.node_cd
+          from prd_wo_proc wp
+          join prd_wo w on w.wo_id = wp.wo_id
+          join mst_item i on i.item_id = w.item_id
+          left join mst_equip e on e.equip_id = wp.equip_id
+          left join mst_equip_hier h on h.node_id = wp.node_id
+         where wp.wo_proc_id = #{id} and w.plant_cd = #{plantCd} and w.status in ('RELEASED', 'IN_PROGRESS')
+           <if test="nodeId != null">
+           and (wp.node_id = #{nodeId} or wp.node_id in (select c.node_id from mst_equip_hier c where c.parent_id = #{nodeId}))
+           </if>
+        <if test="lock">for update of wp</if>
+    </select>
+
+    <select id="params" resultType="io.smarthappy.module.pop.PopWorkDtos$ParamRow">
+        select p.wo_param_id, p.param_cd, p.param_nm, p.unit_nm, trim_scale(p.target_val)::text as target_val,
+               trim_scale(p.lsl)::text as lsl, trim_scale(p.usl)::text as usl,
+               a.actual_id as last_actual_id, trim_scale(a.value)::text as last_value, a.judge as last_judge
+          from prd_wo_param p
+          left join lateral (
+                select x.actual_id, x.value, x.judge from prd_param_actual x
+                 where x.wo_param_id = p.wo_param_id and x.reversal_of_id is null
+                   and not exists (select 1 from prd_param_actual r where r.reversal_of_id = x.actual_id)
+                 order by x.occurred_at desc, x.actual_id desc limit 1) a on true
+         where p.wo_proc_id = #{woProcId}
+         order by p.sort_no, p.param_cd
+    </select>
+
+    <select id="findParam" resultType="io.smarthappy.module.pop.PopWorkDtos$ParamRow">
+        select p.wo_param_id, p.param_cd, p.param_nm, p.unit_nm, trim_scale(p.target_val)::text as target_val,
+               trim_scale(p.lsl)::text as lsl, trim_scale(p.usl)::text as usl
+          from prd_wo_param p where p.wo_proc_id = #{woProcId} and p.param_cd = #{paramCd}
+    </select>
+
+    <select id="bom" resultType="io.smarthappy.module.pop.PopWorkDtos$BomRow">
+        select i.item_cd, i.item_nm, trim_scale(b.req_qty)::text as req_qty, b.unit_cd
+          from prd_wo_bom b join mst_item i on i.item_id = b.item_id
+         where b.wo_id = #{woId} and b.line_type = 'NORMAL' and (b.op_seq = #{opSeq} or b.op_seq is null)
+         order by b.seq
+    </select>
+
+    <select id="defectOptions" resultType="io.smarthappy.module.pop.PopWorkDtos$DefectOption">
+        select defect_id, defect_cd, defect_nm, cat_cd from qms_defect where use_yn = 'Y' order by sort_no, defect_cd
+    </select>
+
+    <select id="defectIdByCd" resultType="long">
+        select defect_id from qms_defect where defect_cd = #{defectCd} and use_yn = 'Y'
+    </select>
+
+    <!-- ================================================================ 이벤트 -->
+
+    <select id="insertEvent" resultType="long" flushCache="true">
+        insert into prd_wo_proc_event (comp_cd, wo_id, wo_proc_id, event_cd, reason_cd, gate_mode, gate_detail, equip_id, terminal_id,
+                                       work_day, shift_cd, client_req_id, occurred_at, entry_method, recorded_by, performed_by)
+        values (hb_current_comp(), #{f.woId}, #{f.woProcId}, #{f.eventCd}, #{f.reasonCd}, #{f.gateMode}, #{f.gateDetail}, #{f.equipId},
+                #{f.terminalId}, #{f.workDay}, #{f.shiftCd}, #{f.clientReqId}, #{f.occurredAt}, #{f.entryMethod}, #{by},
+                #{f.performedBy})
+        returning event_id
+    </select>
+
+    <update id="updateProcStatus">
+        update prd_wo_proc set status = #{to}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_proc_id = #{id} and status = #{from}
+    </update>
+
+    <update id="woInProgress">
+        update prd_wo set status = 'IN_PROGRESS', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where wo_id = #{woId} and status = 'RELEASED'
+    </update>
+
+    <select id="findEventByReq" resultType="io.smarthappy.module.pop.PopWorkDtos$EventRow" flushCache="true" useCache="false">
+        select event_id, wo_proc_id, event_cd, gate_mode from prd_wo_proc_event where client_req_id = #{req}
+    </select>
+
+    <select id="procStatus" resultType="string" flushCache="true" useCache="false">
+        select status from prd_wo_proc where wo_proc_id = #{id}
+    </select>
+
+    <!-- ================================================================ 실적 -->
+
+    <select id="insertResult" resultType="long" flushCache="true">
+        insert into prd_result (comp_cd, wo_id, wo_proc_id, lot_id, equip_id, terminal_id, good_qty, scrap_qty, rework_qty, repair_qty,
+                                unit_cd, work_day, shift_cd, client_req_id, reason, occurred_at, entry_method, recorded_by,
+                                performed_by, reversal_of_id)
+        values (hb_current_comp(), #{f.woId}, #{f.woProcId}, #{f.lotId}, #{f.equipId}, #{f.terminalId}, #{f.goodQty}, #{f.scrapQty},
+                #{f.reworkQty}, #{f.repairQty}, #{f.unitCd}, #{f.workDay}, #{f.shiftCd}, #{f.clientReqId}, #{f.reason},
+                #{f.occurredAt}, #{f.entryMethod}, #{by}, #{f.performedBy}, #{f.reversalOfId})
+        returning result_id
+    </select>
+
+    <insert id="insertDefect">
+        insert into prd_result_defect (comp_cd, result_id, kind, defect_id, qty)
+        values (hb_current_comp(), #{resultId}, #{kind}, #{defectId}, #{qty})
+    </insert>
+
+    <sql id="resultCols">
+        r.result_id, r.wo_id, r.wo_proc_id, r.lot_id, r.equip_id, l.lot_no, trim_scale(r.good_qty)::text as good_qty,
+        trim_scale(r.scrap_qty)::text as scrap_qty, trim_scale(r.rework_qty)::text as rework_qty,
+        trim_scale(r.repair_qty)::text as repair_qty, r.unit_cd, r.work_day, r.shift_cd, r.occurred_at, r.recorded_by, r.performed_by,
+        k.worker_nm, r.reversal_of_id, r.client_req_id,
+        exists (select 1 from prd_result x where x.reversal_of_id = r.result_id) as reversed
+    </sql>
+
+    <sql id="resultFrom">
+        from prd_result r
+        left join lot_master l on l.lot_id = r.lot_id
+        left join mst_worker k on k.worker_id = r.performed_by
+    </sql>
+
+    <select id="findResult" resultType="io.smarthappy.module.pop.PopWorkDtos$ResultRow" flushCache="true" useCache="false">
+        select <include refid="resultCols"/> <include refid="resultFrom"/> where r.result_id = #{id}
+    </select>
+
+    <select id="findResultByReq" resultType="io.smarthappy.module.pop.PopWorkDtos$ResultRow" flushCache="true" useCache="false">
+        select <include refid="resultCols"/> <include refid="resultFrom"/> where r.client_req_id = #{req}
+    </select>
+
+    <select id="defectsOf" resultType="io.smarthappy.module.pop.PopWorkDtos$DefectLineRow">
+        select kind, defect_id, trim_scale(qty)::text as qty from prd_result_defect where result_id = #{resultId} order by result_defect_id
+    </select>
+
+    <!-- 그 작업일의 실적(역분개 행은 빼고, 역분개됐는지 표시) — 최근 먼저 -->
+    <select id="dayResults" resultType="io.smarthappy.module.pop.PopWorkDtos$ResultRow" flushCache="true" useCache="false">
+        select <include refid="resultCols"/> <include refid="resultFrom"/>
+         where r.wo_proc_id = #{woProcId} and r.work_day = #{workDay} and r.reversal_of_id is null
+         order by r.occurred_at desc, r.result_id desc
+         limit 50
+    </select>
+
+    <select id="planQty" resultType="string">
+        select trim_scale(plan_qty)::text from prd_wo where wo_id = #{woId}
+    </select>
+
+    <!-- 그 작업일 양품 합(역분개 포함 — 부호로 상쇄) -->
+    <!-- 수집 COUNT 제안 (docs/25 4.27) — 회사 조건은 RLS. 설비 COUNT 는 ix_cms_equip_count_equip(comp_cd, equip_id, occurred_at) 범위 -->
+    <select id="runningOnEquip" resultType="int" flushCache="true" useCache="false">
+        select count(*) from prd_wo_proc where equip_id = #{equipId} and status in ('RUN', 'PAUSE')
+    </select>
+
+    <select id="countSuggest" resultType="io.smarthappy.module.pop.PopWorkDtos$CountSuggest" flushCache="true" useCache="false">
+        with s as (
+            select greatest(
+                       (select max(e.occurred_at) from prd_wo_proc_event e where e.wo_proc_id = #{woProcId} and e.event_cd = 'START'),
+                       (select max(r.occurred_at) from prd_result r
+                         where r.wo_proc_id = #{woProcId} and r.reversal_of_id is null
+                           and not exists (select 1 from prd_result v where v.reversal_of_id = r.result_id))) as since
+        )
+        select s.since,
+               trim_scale(coalesce(sum(c.qty) filter (where c.metric_cd = 'GOOD'), 0))::text as good_qty,
+               trim_scale(coalesce(sum(c.qty) filter (where c.metric_cd = 'SCRAP'), 0))::text as scrap_qty
+          from s
+          left join cms_equip_count c on c.equip_id = #{equipId} and c.occurred_at &gt; s.since and c.occurred_at &lt;= #{now}
+         group by s.since
+    </select>
+
+    <select id="dayGood" resultType="string" flushCache="true" useCache="false">
+        select trim_scale(coalesce(sum(good_qty), 0))::text from prd_result where wo_proc_id = #{woProcId} and work_day = #{workDay}
+    </select>
+
+    <select id="lastDefect" resultType="string" flushCache="true" useCache="false">
+        select d.defect_nm
+          from prd_result_defect x
+          join prd_result r on r.result_id = x.result_id
+          join qms_defect d on d.defect_id = x.defect_id
+         where r.wo_proc_id = #{woProcId} and r.reversal_of_id is null
+           and not exists (select 1 from prd_result v where v.reversal_of_id = r.result_id)
+         order by r.occurred_at desc, r.result_id desc, x.result_defect_id desc
+         limit 1
+    </select>
+
+    <!-- 되돌림 순서 = 실적 투입과 같은 (품목, LOT) 순 — 재고 칸을 같은 순서로 잡는다(QB-1) -->
+    <select id="inputEdges" resultType="long">
+        select g.gen_id from lot_genealogy g join lot_master m on m.lot_id = g.parent_lot_id
+         where g.child_lot_id = #{lotId} and g.wo_proc_id = #{woProcId} and g.rel_type = 'CONSUME' and g.reversal_of_id is null
+           and not exists (select 1 from lot_genealogy v where v.reversal_of_id = g.gen_id)
+         order by m.item_id, g.parent_lot_id, g.gen_id
+    </select>
+
+    <select id="inputParents" resultType="long">
+        select distinct g.parent_lot_id from lot_genealogy g
+         where g.child_lot_id = #{lotId} and g.wo_proc_id = #{woProcId} and g.rel_type = 'CONSUME' and g.reversal_of_id is null
+           and not exists (select 1 from lot_genealogy v where v.reversal_of_id = g.gen_id)
+         order by g.parent_lot_id
+    </select>
+
+    <!-- ================================================================ 파라미터 -->
+
+    <select id="insertParam" resultType="long" flushCache="true">
+        insert into prd_param_actual (comp_cd, wo_proc_id, wo_param_id, param_cd, value, judge, equip_id, terminal_id, work_day, shift_cd,
+                                      client_req_id, reason, occurred_at, entry_method, recorded_by, performed_by, reversal_of_id)
+        values (hb_current_comp(), #{f.woProcId}, #{f.woParamId}, #{f.paramCd}, #{f.value}, #{f.judge}, #{f.equipId}, #{f.terminalId},
+                #{f.workDay}, #{f.shiftCd}, #{f.clientReqId}, #{f.reason}, #{f.occurredAt}, #{f.entryMethod}, #{by},
+                #{f.performedBy}, #{f.reversalOfId})
+        returning actual_id
+    </select>
+
+    <sql id="actualCols">
+        a.actual_id, a.wo_proc_id, a.wo_param_id, a.param_cd, trim_scale(a.value)::text as value, a.judge, a.reversal_of_id,
+        exists (select 1 from prd_param_actual x where x.reversal_of_id = a.actual_id) as reversed
+    </sql>
+
+    <select id="findParamActual" resultType="io.smarthappy.module.pop.PopWorkDtos$ParamActualRow" flushCache="true" useCache="false">
+        select <include refid="actualCols"/> from prd_param_actual a where a.actual_id = #{id}
+    </select>
+
+    <select id="findParamByReq" resultType="io.smarthappy.module.pop.PopWorkDtos$ParamActualRow" flushCache="true" useCache="false">
+        select <include refid="actualCols"/> from prd_param_actual a where a.client_req_id = #{req}
+    </select>
+    <!-- ================================================================ 고장 신고(docs/25 4.35) -->
+
+    <sql id="breakdownEquipCols">
+        select e.equip_id, e.equip_cd, e.equip_nm, h.node_cd, e.plant_cd, e.node_id, h.parent_id as parent_node_id, e.use_yn
+          from mst_equip e
+          left join mst_equip_hier h on h.node_id = e.node_id
+    </sql>
+
+    <select id="breakdownEquips" resultType="io.smarthappy.module.pop.PopWorkDtos$BreakdownEquip">
+        <include refid="breakdownEquipCols"/>
+         where e.plant_cd = #{plantCd} and e.use_yn = 'Y'
+           <if test="nodeId != null">
+           and (e.node_id = #{nodeId} or h.parent_id = #{nodeId})
+           </if>
+         order by e.equip_cd, e.equip_id
+    </select>
+
+    <select id="findBreakdownEquip" resultType="io.smarthappy.module.pop.PopWorkDtos$BreakdownEquip" flushCache="true" useCache="false">
+        <include refid="breakdownEquipCols"/>
+         where e.equip_id = #{equipId}
+    </select>
+
+    <!-- ================================================================ 감독자 승인(docs/25 4.37) -->
+
+    <select id="insertApproval" resultType="long" flushCache="true">
+        insert into pop_approval (comp_cd, terminal_id, requester_worker_id, approver_worker_id, action_cd, target_id, reversal_id,
+                                  reason, occurred_at, recorded_by)
+        values (hb_current_comp(), #{a.terminalId}, #{a.requesterId}, #{a.approverId}, #{a.action}, #{targetId}, #{reversalId},
+                #{reason}, #{occurredAt}, #{by})
+        returning approval_id
+    </select>
+
+</mapper>

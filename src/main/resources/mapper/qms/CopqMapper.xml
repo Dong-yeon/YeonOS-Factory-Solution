@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- COPQ(품질 비용) — docs/29_P3 29장. 관리용 추정(회계 원장 아님) -->
+<mapper namespace="io.smarthappy.module.qms.CopqMapper">
+
+    <!-- 원장 줄(CQ-5): 종결 NCR 의 처리 행 중 폐기·재작업·선별. 특채(USE_AS_IS)·반품(RETURN)은 비용으로 세지 않는다.
+         출처가 고객 클레임(CLAIM)이면 외부 실패, 그 밖은 내부 실패. 월 = 종결 시각의 회사 날짜.
+         단가 = 종결 시각에 유효했던 표준단가(이력의 그 시각 이전 마지막 행 — CQ-3). 단가 없음 판정은 서비스가.
+         출처 = 고객 반품이 만든 NCR(src_type WMS_CUST_RTN — 38장)이면 RTN_, 그 밖은 NCR_ + 처분(40장).
+         ncr_nos = 그 줄에 묶인 NCR 번호(중복 없이 번호 순, 쉼표) — 화면 펼치기·바로가기(36장) -->
+    <select id="findNcrLines" resultType="io.smarthappy.module.qms.CopqDtos$LineRow">
+        select to_char(n.closed_at at time zone #{zone}, 'YYYY-MM') as month,
+               case when n.source = 'CLAIM' then 'EXTERNAL' else 'INTERNAL' end as category,
+               case when n.src_type = 'WMS_CUST_RTN' then 'RTN_' else 'NCR_' end || d.disp_type as source,
+               n.item_id, i.item_cd, i.item_nm, n.unit_cd,
+               p.std_price, sum(d.qty) as qty, count(*)::int as line_cnt,
+               string_agg(distinct n.ncr_no, ',' order by n.ncr_no) as ncr_nos
+          from qms_ncr n
+          join qms_ncr_disp d on d.ncr_id = n.ncr_id
+          join mst_item i on i.item_id = n.item_id
+          left join lateral (select h.std_price
+                               from mst_item_price_hist h
+                              where h.item_id = n.item_id and h.changed_at &lt;= n.closed_at
+                              order by h.changed_at desc, h.hist_id desc
+                              limit 1) p on true
+         where n.status = 'CLOSED'
+           and n.closed_at &gt;= #{fromAt} and n.closed_at &lt; #{toAt}
+           and d.disp_type in ('SCRAP', 'REWORK', 'SORT')
+         group by 1, 2, 3, n.item_id, i.item_cd, i.item_nm, n.unit_cd, p.std_price
+         order by 1, 2, 3, i.item_cd, p.std_price nulls last
+    </select>
+
+    <!-- 생산 줄 단가(29.4 CQ-9): 계약이 월 합계만 주므로 그 달 말(다음 달 1일 0시, 회사 시간대) 직전에 유효했던 표준단가 -->
+    <select id="findMonthEndPrices" resultType="io.smarthappy.module.qms.CopqDtos$ItemPrice">
+        select i.item_id, i.item_cd, i.item_nm, i.unit_cd, to_char(m.month_start, 'YYYY-MM') as month, p.std_price
+          from mst_item i
+         cross join generate_series(#{from}::date, #{to}::date, interval '1 month') m(month_start)
+          left join lateral (select h.std_price
+                               from mst_item_price_hist h
+                              where h.item_id = i.item_id
+                                and h.changed_at &lt; ((m.month_start + interval '1 month')::timestamp at time zone #{zone})
+                              order by h.changed_at desc, h.hist_id desc
+                              limit 1) p on true
+         where i.item_id in <foreach collection="itemIds" item="x" open="(" separator="," close=")">#{x}</foreach>
+    </select>
+
+    <sql id="costCols">
+        c.cost_id, to_char(c.cost_month, 'YYYY-MM') as cost_month, c.category, c.cost_item, c.amount, c.note, c.row_ver,
+        c.updated_at, c.updated_by
+    </sql>
+
+    <select id="findCosts" resultType="io.smarthappy.module.qms.CopqDtos$CostRow">
+        select <include refid="costCols"/>
+          from qms_copq_cost c
+         where c.cost_month &gt;= #{from} and c.cost_month &lt; #{to}
+         order by c.cost_month, c.category, c.cost_id
+    </select>
+
+    <select id="findCost" resultType="io.smarthappy.module.qms.CopqDtos$CostRow">
+        select <include refid="costCols"/> from qms_copq_cost c where c.cost_id = #{id}
+    </select>
+
+    <select id="insertCost" resultType="long" flushCache="true">
+        insert into qms_copq_cost (comp_cd, cost_month, category, cost_item, amount, note, created_by, updated_by)
+        values (hb_current_comp(), #{f.costMonth}, #{f.category}, #{f.costItem}, #{f.amount}, #{f.note}, #{by}, #{by})
+        returning cost_id
+    </select>
+
+    <update id="updateCost">
+        update qms_copq_cost
+           set cost_month = #{f.costMonth}, category = #{f.category}, cost_item = #{f.costItem}, amount = #{f.amount},
+               note = #{f.note}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cost_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <delete id="deleteCost">
+        delete from qms_copq_cost where cost_id = #{id} and row_ver = #{rowVer}
+    </delete>
+</mapper>

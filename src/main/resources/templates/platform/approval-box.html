@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  내 결재함 (sys-approval) — 시스템관리 3단계 (docs/36 12장). 개인 화면(self_service — 모든 사용자), 결재 권한은 결재선(서버).
+  사용성 체크(docs/11 4.3): 주 사용자 = 결재자·요청자(WEB). 알림 "결재 요청" 을 누르면 여기로.
+  내 차례 / 내가 올린 것 / 결재선에 있던 것. 승인·반려는 내 차례일 때만, 회수는 내가 올린 진행 중 결재만. 처리는 연타·재전송 방지 키와 함께.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/notify.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">내 결재함</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<fieldset class="hb-seg hb-inbox-tabs" id="tabs">
+    <legend th:text="#{sysInbox.view}">보기</legend>
+    <label><input type="radio" name="box" value="TODO" checked><span th:text="#{sysApproval.box.TODO}">내 차례</span><span id="todoCnt" class="hb-inbox-badge" hidden></span></label>
+    <label><input type="radio" name="box" value="REQUESTED"><span th:text="#{sysApproval.box.REQUESTED}">내가 올린 것</span></label>
+    <label><input type="radio" name="box" value="PASSED"><span th:text="#{sysApproval.box.PASSED}">결재선에 있던 것</span></label>
+    <label><input type="radio" name="box" value="DELEG"><span th:text="#{sysApproval.box.DELEG}">위임</span></label>
+</fieldset>
+
+<!-- 결재 위임 (docs/36 14.6) — 내가 위임한 것·받은 것, 새 위임(위임자 본인만), 회수 -->
+<section id="delegView" class="hb-inbox-view" hidden>
+    <p class="hb-muted" th:text="#{sysApproval.deleg.note}">자리를 비울 때 내 결재를 대신 처리할 사람을 정합니다. 기간 동안 그 사람이 승인·반려할 수 있고, 결재 이력에 "대결" 로 남습니다.</p>
+    <form id="delegForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+        <label><span th:text="#{sysApproval.deleg.search}">대리 찾기(아이디·이름)</span>
+            <input id="delegSearch" maxlength="50" spellcheck="false"></label>
+        <label><span th:text="#{sysApproval.deleg.delegate}">대리</span>
+            <select data-field="delegateId" id="delegSel"></select></label>
+        <label><span th:text="#{sysApproval.deleg.docType}">문서 유형</span>
+            <select data-field="docType" id="docTypeSel"></select></label>
+        <label><span th:text="#{sysApproval.deleg.from}">시작</span>
+            <input type="date" data-field="fromDate" required></label>
+        <label><span th:text="#{sysApproval.deleg.to}">끝</span>
+            <input type="date" data-field="toDate" required></label>
+        <label class="hb-wide"><span th:text="#{sysApproval.deleg.reason}">사유</span>
+            <input data-field="reason" maxlength="500" required></label>
+        <div class="hb-toolbar hb-wide">
+            <button type="button" id="delegSaveBtn" th:text="#{sysApproval.deleg.create}">위임 만들기</button>
+        </div>
+    </form>
+    <table class="hb-audit-diff" id="delegTable">
+        <thead><tr><th th:text="#{sysApproval.deleg.delegator}">위임자</th><th th:text="#{sysApproval.deleg.delegate}">대리</th>
+            <th th:text="#{sysApproval.deleg.docType}">문서 유형</th><th th:text="#{sysApproval.deleg.period}">기간</th>
+            <th th:text="#{sysApproval.deleg.state}">상태</th><th></th></tr></thead>
+        <tbody></tbody>
+    </table>
+</section>
+
+<div class="hb-split" id="boxView">
+    <section class="hb-split-main">
+        <ul id="aprList" class="hb-inbox-list"></ul>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="openDocBtn" class="hb-btn-secondary" hidden th:text="#{sysApproval.openDoc}">문서 열기</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="aprEmpty" class="hb-muted" th:text="#{sysApproval.pick}">왼쪽에서 결재를 고르세요.</p>
+        <article id="aprDoc" hidden>
+            <h2 id="aprTitle" class="hb-notice-title"></h2>
+            <p id="aprMeta" class="hb-muted"></p>
+            <table class="hb-audit-diff" id="aprLines">
+                <thead><tr><th>#</th><th th:text="#{sysApproval.col.approver}">결재자</th><th th:text="#{sysApproval.col.lineType}">구분</th>
+                    <th th:text="#{sysApproval.col.status}">상태</th><th th:text="#{sysApproval.col.comment}">의견</th></tr></thead>
+                <tbody></tbody>
+            </table>
+            <section class="hb-sub" id="actBox" hidden>
+                <p id="offlineNote" class="hb-msg hb-msg-error" role="status" hidden th:text="#{sysApproval.offline}">오프라인 — 연결되면 다시 누르세요. 결재는 연결됐을 때만 처리합니다.</p>
+                <label class="hb-field"><span th:text="#{sysApproval.comment}">의견(선택)</span>
+                    <textarea id="aprComment" rows="3" maxlength="1000"></textarea></label>
+                <div class="hb-toolbar">
+                    <button type="button" id="approveBtn" hidden th:if="${actions.contains('SAVE')}" th:text="#{sysApproval.approve}">승인</button>
+                    <button type="button" id="withdrawBtn" class="hb-btn-secondary" hidden th:if="${actions.contains('SAVE')}" th:text="#{sysApproval.withdraw}">회수</button>
+                </div>
+                <!-- 반려는 승인과 떨어진 자리, 외곽선 위험 톤(docs/40 P1 ④) -->
+                <div class="hb-toolbar">
+                    <button type="button" id="rejectBtn" class="hb-btn-danger-outline" hidden th:if="${actions.contains('SAVE')}" th:text="#{sysApproval.reject}">반려</button>
+                </div>
+            </section>
+            <section class="hb-sub">
+                <h2 th:text="#{sysApproval.history}">처리 이력</h2>
+                <ul id="aprHistory" class="hb-files"></ul>
+            </section>
+        </article>
+    </aside>
+</div>
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/common/hb.esign.js}"></script>
+<script th:src="@{/js/views/platform/approval-box.js}"></script>
+</body>
+</html>

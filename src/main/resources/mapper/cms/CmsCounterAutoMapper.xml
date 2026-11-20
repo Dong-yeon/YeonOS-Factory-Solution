@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 2부 C10 — 카운터 자동 입력 (docs/33 11.10). 원장 행 × 카운터 = cms_counter_src 한 행(두 번 세지 않음) -->
+<mapper namespace="io.smarthappy.module.cms.CmsCounterAutoMapper">
+
+    <!--
+      SHOTS·CYCLES ← 실적(원래 행만, 정정된 것 제외) 생산 수 ÷ 사이클당 수량. 설비 카운터 = 그 설비, 자산 카운터 = 실적 시각에 그 설비에 설치된 자산
+      RUN_HOURS   ← 닫힌 PRD 구간(PRD 는 사후 사유로 바뀌지 않는다) 시간 — 카운터를 만든 시각 앞은 자른다. 자산 카운터는 설치 기간으로도 자르고 구간별로 합친다
+    -->
+    <select id="pending" resultType="io.smarthappy.module.cms.CmsCounterAutoMapper$Src">
+        with res as (
+            select r.result_id, r.equip_id, r.occurred_at, r.recorded_at,
+                   round((r.good_qty + r.scrap_qty + r.rework_qty + r.repair_qty) / wp.units_per_cycle, 12) as cycles
+              from prd_result r
+              join prd_wo_proc wp on wp.wo_proc_id = r.wo_proc_id
+             where r.equip_id is not null and r.occurred_at &gt;= #{since}
+               and r.reversal_of_id is null
+               and not exists (select 1 from prd_result v where v.reversal_of_id = r.result_id)
+        ), st as (
+            select s.state_log_id, s.equip_id, s.start_at, s.end_at
+              from cms_equip_state_log s
+             where s.state_cat = 'PRD' and s.end_at is not null and s.start_at &gt;= #{since}
+        ), cand as (
+            select c.counter_id, 'RESULT' as src_kind, res.result_id as src_id, res.cycles as qty
+              from cms_counter c join res on res.equip_id = c.equip_id
+             where c.use_yn = 'Y' and c.target_type = 'EQUIP' and c.counter_kind in ('SHOTS', 'CYCLES') and res.recorded_at &gt;= c.created_at
+            union all
+            select c.counter_id, 'RESULT', res.result_id, res.cycles
+              from cms_counter c
+              join mst_asset_install i on i.asset_id = c.asset_id and i.void_yn = 'N'
+              join res on res.equip_id = i.equip_id and res.occurred_at &gt;= i.installed_at
+                      and (i.removed_at is null or res.occurred_at &lt; i.removed_at)
+             where c.use_yn = 'Y' and c.target_type = 'ASSET' and c.counter_kind in ('SHOTS', 'CYCLES') and res.recorded_at &gt;= c.created_at
+            union all
+            select c.counter_id, 'STATE', st.state_log_id, round(extract(epoch from st.end_at - greatest(st.start_at, c.created_at)) / 3600, 12)
+              from cms_counter c join st on st.equip_id = c.equip_id
+             where c.use_yn = 'Y' and c.target_type = 'EQUIP' and c.counter_kind = 'RUN_HOURS' and st.end_at &gt; c.created_at
+            union all
+            select c.counter_id, 'STATE', st.state_log_id,
+                   round(sum(greatest(0, extract(epoch from least(st.end_at, coalesce(i.removed_at, st.end_at))
+                                                    - greatest(st.start_at, i.installed_at, c.created_at)))) / 3600, 12)
+              from cms_counter c
+              join mst_asset_install i on i.asset_id = c.asset_id and i.void_yn = 'N'
+              join st on st.equip_id = i.equip_id and st.end_at &gt; i.installed_at and (i.removed_at is null or st.start_at &lt; i.removed_at)
+             where c.use_yn = 'Y' and c.target_type = 'ASSET' and c.counter_kind = 'RUN_HOURS' and st.end_at &gt; c.created_at
+             group by c.counter_id, st.state_log_id
+        )
+        select cand.counter_id, cand.src_kind, cand.src_id, cand.qty
+          from cand
+         where not exists (select 1 from cms_counter_src s
+                            where s.counter_id = cand.counter_id and s.src_kind = cand.src_kind and s.src_id = cand.src_id)
+         order by cand.counter_id, cand.src_kind, cand.src_id
+         limit #{limit}
+    </select>
+
+    <select id="insertAutoReading" resultType="long" flushCache="true">
+        insert into cms_counter_reading (comp_cd, counter_id, read_at, gauge_value, delta_qty, reset_yn, source, remark, recorded_by)
+        values (hb_current_comp(), #{counterId}, #{readAt}, null, #{delta}, 'N', 'AUTO', #{remark}, #{by})
+        returning reading_id
+    </select>
+
+    <insert id="insertSrc">
+        insert into cms_counter_src (comp_cd, counter_id, src_kind, src_id, reading_id, qty)
+        values (hb_current_comp(), #{s.counterId}, #{s.srcKind}, #{s.srcId}, #{readingId}, #{s.qty})
+    </insert>
+
+    <select id="scaleOf" resultType="int">
+        select scale from cms_counter where counter_id = #{counterId}
+    </select>
+
+    <select id="srcTotal" resultType="java.math.BigDecimal">
+        select coalesce(sum(qty), 0) from cms_counter_src where counter_id = #{counterId}
+    </select>
+
+    <select id="autoCredited" resultType="java.math.BigDecimal">
+        select coalesce(sum(delta_qty), 0) from cms_counter_reading where counter_id = #{counterId} and source = 'AUTO'
+    </select>
+</mapper>

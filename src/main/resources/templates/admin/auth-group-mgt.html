@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  권한그룹 관리 (sys-auth-group) — 시스템관리 1단계 (docs/36).
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자(WEB). 도입 때 역할(품질·생산·창고 …)을 만들고 화면별 권한을 표로 준다.
+  직접 치는 값 = 그룹 코드·이름. 권한은 표에서 체크(화면이 정의한 액션만 칸이 있다). 구성원은 사용자 관리에서 바꾼다.
+  예외 = 내가 없는 권한 칸·나보다 큰 그룹은 잠김, 관리자 표시는 관리자만 — 판정은 서버.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">권한그룹 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<!-- 건수 적은 목록 = 빠른 찾기 1칸(docs/40 P1 ②) — 서버 grid 검색어(코드·이름) -->
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{sysUi.quickFind}">빠른 찾기</span>
+        <input type="search" name="keyword" maxlength="50" th:placeholder="#{sysUi.quickFindHint}"></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="groupGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{sysAuthGroup.selectOrNew}">왼쪽에서 그룹을 고르거나 신규를 누르세요.</p>
+        <form id="groupForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{sysAuthGroup.col.authGrpCd}">코드</span>
+                <input data-field="authGrpCd" maxlength="30" required spellcheck="false" data-help-key="sys-auth-group.authGrpCd"></label>
+            <label><span th:text="#{sysAuthGroup.col.authGrpNm}">이름</span>
+                <input data-field="authGrpNm" maxlength="100" required></label>
+            <label><span th:text="#{sysAuthGroup.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{sysAuthGroup.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{sysAuthGroup.col.homeProgCd}">홈 화면</span>
+                <select data-field="homeProgCd" id="homeSel" data-help-key="sys-auth-group.homeProgCd">
+                    <option value="" th:text="#{sysAuthGroup.noHome}">(메뉴만)</option>
+                </select></label>
+            <label class="hb-check hb-wide"><input type="checkbox" data-field="adminYn" value="Y" data-help-key="sys-auth-group.adminYn">
+                <span th:text="#{sysAuthGroup.adminLabel}">관리자 그룹 — 모든 화면의 모든 권한(새 화면 포함)</span></label>
+        </form>
+
+        <section class="hb-sub" id="permSection" hidden>
+            <h2 th:text="#{sysAuthGroup.perms}">화면별 권한</h2>
+            <p id="permNote" class="hb-muted"></p>
+            <div class="hb-perm-wrap"><table class="hb-cmp-table hb-perm-table" id="perms"></table></div>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="savePermsBtn" th:text="#{sysAuthGroup.savePerms}">권한 저장</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="memberSection" hidden>
+            <h2 th:text="#{sysAuthGroup.members}">구성원</h2>
+            <ul id="members" class="hb-files"></ul>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/views/admin/auth-group-mgt.js}"></script>
+</body>
+</html>

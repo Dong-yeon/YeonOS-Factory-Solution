@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  받은 의견함 (sys-feedback) — 시스템관리 3단계 (docs/36 12장). 화면마다 "의견 보내기" 로 들어온 자기 회사 의견(RLS).
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자·도입 담당(WEB). 주 1회 훑기.
+  상태: 새 의견 → 확인함 → 처리 완료(끝, 보낸 사람 알림함에 알림). 확인함은 새 의견으로 되돌릴 수 있다. 내용은 고치지 않는다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/notify.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">받은 의견함</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <div data-hb="dateRange" th:data-label="#{sysLog.period}" data-from-name="from" data-to-name="to"
+         data-presets="last7,last30,thisMonth,lastMonth" data-default="last30" data-max="today" data-max-days="92"></div>
+    <label><span th:text="#{sysFeedback.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="FEEDBACK_STATUS" data-blank="all"></select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div id="fbGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="seenBtn" class="hb-btn-secondary" hidden th:if="${actions.contains('SAVE')}" th:text="#{sysFeedback.toSeen}">확인함</button>
+            <button type="button" id="doneBtn" hidden th:if="${actions.contains('SAVE')}" th:text="#{sysFeedback.toDone}">처리 완료</button>
+            <button type="button" id="newBtn" class="hb-btn-secondary" hidden th:if="${actions.contains('SAVE')}" th:text="#{sysFeedback.toNew}">새 의견으로</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="fbEmpty" class="hb-muted" th:text="#{sysFeedback.pick}">왼쪽에서 의견을 고르세요.</p>
+        <article id="fbDoc" hidden>
+            <p id="fbMeta" class="hb-muted"></p>
+            <div id="fbContent" class="hb-notice-body"></div>
+            <p id="fbHandled" class="hb-muted"></p>
+        </article>
+    </aside>
+</div>
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/views/admin/feedback-mgt.js}"></script>
+</body>
+</html>

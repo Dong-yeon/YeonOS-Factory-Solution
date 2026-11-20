@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  장비 시리얼 구성(as-built, docs/77). 회사 조건은 RLS. 수량 응답은 trim_scale 글자.
+  "장착 중" = INSTALL 행 중 그것을 되돌린 REMOVE 행이 없는 것(<sql id="active">).
+-->
+<mapper namespace="io.smarthappy.module.production.SerialMapper">
+
+    <sql id="active">
+        p.ev_type = 'INSTALL' and not exists (select 1 from prd_serial_part r where r.reversal_of_id = p.part_id)
+    </sql>
+
+    <sql id="serialCols">
+        s.serial_id, s.serial_no, s.wo_id, w.wo_no, w.plant_cd, w.status as wo_status, s.item_id, i.item_cd, i.item_nm,
+        trim_scale(w.plan_qty)::text as plan_qty, s.unit_lot_id, l.lot_no as unit_lot_no,
+        (select count(*) from prd_serial_part p where p.serial_id = s.serial_id and <include refid="active"/>) as part_cnt,
+        s.remark, s.row_ver, s.created_at, s.created_by
+    </sql>
+
+    <sql id="serialFrom">
+        from prd_serial s
+        join prd_wo w on w.wo_id = s.wo_id
+        join mst_item i on i.item_id = s.item_id
+        join lot_master l on l.lot_id = s.unit_lot_id
+    </sql>
+
+    <sql id="serialWhere">
+         where true
+           <if test="from != null">and s.created_at &gt;= cast(#{from} as date)::timestamp at time zone #{zone}</if>
+           <if test="to != null">and s.created_at &lt; (cast(#{to} as date) + 1)::timestamp at time zone #{zone}</if>
+           <if test="itemId != null">and s.item_id = #{itemId}</if>
+           <if test="keyword != null">
+           and (s.serial_no like '%' || #{keyword} || '%' escape '\' or w.wo_no like '%' || #{keyword} || '%' escape '\')
+           </if>
+    </sql>
+
+    <!-- 지연 조인(docs/25 4.41 — OffsetLedgerGuardTest): 안쪽 = serial_id 만 거름·정렬·offset, 바깥 = 그 한 쪽에만 장비 LOT 조인·장착 수 계산 -->
+    <select id="findSerialPage" resultType="io.smarthappy.module.production.SerialDtos$SerialRow">
+        select <include refid="serialCols"/>
+          from (
+                select s.serial_id
+                  from prd_serial s
+                  join prd_wo w on w.wo_id = s.wo_id
+                  join mst_item i on i.item_id = s.item_id
+                <include refid="serialWhere"/>
+                 order by
+                 <foreach collection="page.sorts" item="o">
+                    <choose>
+                        <when test="o.key == 'SERIAL_NO'">s.serial_no</when>
+                        <when test="o.key == 'WO_NO'">w.wo_no</when>
+                        <when test="o.key == 'ITEM_CD'">i.item_cd</when>
+                        <otherwise>s.created_at</otherwise>
+                    </choose>
+                    <if test="o.desc"> desc</if>,
+                 </foreach>
+                 s.serial_id desc
+                 limit #{page.size} offset #{page.offset}
+               ) k
+          join prd_serial s on s.serial_id = k.serial_id
+          join prd_wo w on w.wo_id = s.wo_id
+          join mst_item i on i.item_id = s.item_id
+          join lot_master l on l.lot_id = s.unit_lot_id
+         order by
+         <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'SERIAL_NO'">s.serial_no</when>
+                <when test="o.key == 'WO_NO'">w.wo_no</when>
+                <when test="o.key == 'ITEM_CD'">i.item_cd</when>
+                <otherwise>s.created_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+         </foreach>
+         s.serial_id desc
+    </select>
+
+    <select id="countSerials" resultType="long">
+        select count(*)
+          from prd_serial s
+          join prd_wo w on w.wo_id = s.wo_id
+        <include refid="serialWhere"/>
+    </select>
+
+    <select id="findSerial" resultType="io.smarthappy.module.production.SerialDtos$SerialRow" flushCache="true" useCache="false">
+        select <include refid="serialCols"/>
+        <include refid="serialFrom"/>
+         where s.serial_id = #{serialId}
+    </select>
+
+    <select id="findSerialsOfWo" resultType="io.smarthappy.module.production.SerialDtos$SerialRow">
+        select <include refid="serialCols"/>
+        <include refid="serialFrom"/>
+         where s.wo_id = #{woId}
+         order by s.serial_no
+    </select>
+
+    <!-- ================================================================ 등록 -->
+
+    <sql id="woCols">
+        w.wo_id, w.wo_no, w.plant_cd, w.status, w.item_id, i.item_cd, i.item_nm, i.unit_cd, trim_scale(w.plan_qty)::text as plan_qty,
+        (select count(*) from prd_serial s where s.wo_id = w.wo_id) as serial_cnt
+    </sql>
+
+    <select id="findWos" resultType="io.smarthappy.module.production.SerialDtos$SerialWo">
+        select <include refid="woCols"/>
+          from prd_wo w
+          join mst_item i on i.item_id = w.item_id
+         where w.status in ('RELEASED', 'IN_PROGRESS')
+           <if test="woNo != null">and w.wo_no like #{woNo} || '%' escape '\'</if>
+         order by w.plan_start desc, w.wo_id desc
+         limit #{limit}
+    </select>
+
+    <select id="lockWo" resultType="io.smarthappy.module.production.SerialDtos$SerialWo" flushCache="true" useCache="false">
+        select <include refid="woCols"/>
+          from (select * from prd_wo where wo_id = #{woId} for update) w
+          join mst_item i on i.item_id = w.item_id
+    </select>
+
+    <select id="insertSerial" resultType="long" flushCache="true">
+        insert into prd_serial (comp_cd, serial_no, wo_id, item_id, unit_lot_id, remark, created_by, updated_by)
+        values (hb_current_comp(), #{serialNo}, #{woId}, #{itemId}, #{unitLotId}, #{remark}, #{by}, #{by})
+        returning serial_id
+    </select>
+
+    <select id="lotNoExists" resultType="boolean" flushCache="true" useCache="false">
+        select exists (select 1 from lot_master where lot_no = #{lotNo}) or exists (select 1 from prd_serial where serial_no = #{lotNo})
+    </select>
+
+    <!-- ================================================================ 장착 -->
+
+    <select id="lockSerial" resultType="io.smarthappy.module.production.SerialDtos$LockedSerial" flushCache="true" useCache="false">
+        select s.serial_id, s.serial_no, s.wo_id, w.plant_cd, s.unit_lot_id, s.row_ver
+          from (select * from prd_serial where serial_id = #{serialId} for update) s
+          join prd_wo w on w.wo_id = s.wo_id
+    </select>
+
+    <update id="bumpSerial">
+        update prd_serial set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where serial_id = #{serialId} and row_ver = #{rowVer}
+    </update>
+
+    <select id="findItem" resultType="io.smarthappy.module.production.SerialDtos$PartItem">
+        select item_id, item_cd, item_nm, unit_cd, lot_ctrl_yn, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="findLotId" resultType="long">
+        select lot_id from lot_master where lot_no = #{lotNo} and item_id = #{itemId}
+    </select>
+
+    <select id="findWoProc" resultType="long">
+        select wo_proc_id from prd_wo_proc where wo_id = #{woId} and op_seq = #{opSeq}
+    </select>
+
+    <select id="findWorker" resultType="long">
+        select worker_id from mst_worker where worker_cd = #{workerCd} and use_yn = 'Y'
+    </select>
+
+    <select id="activeSerialOf" resultType="string" flushCache="true" useCache="false">
+        select s.serial_no
+          from prd_serial_part p
+          join prd_serial s on s.serial_id = p.serial_id
+         where p.part_item_id = #{itemId} and p.part_serial_no = #{partSerialNo} and <include refid="active"/>
+         limit 1
+    </select>
+
+    <!-- 트리거(hb_guard_prd_serial_part)와 같은 키 — 같은 트랜잭션에서 다시 잡아도 된다(재진입) -->
+    <select id="lockPartSerial" resultType="string" flushCache="true" useCache="false">
+        select pg_advisory_xact_lock(hashtextextended('prd_serial_part:' || hb_current_comp() || ':' || #{itemId} || ':' || #{partSerialNo}, 0))::text
+    </select>
+
+    <select id="insertPart" resultType="long" flushCache="true">
+        insert into prd_serial_part (comp_cd, serial_id, ev_type, part_item_id, part_lot_id, part_serial_no, qty, unit_cd, wo_proc_id,
+                                     gen_id, reason, occurred_at, entry_method, recorded_by, performed_by, reversal_of_id)
+        values (hb_current_comp(), #{serialId}, #{evType}, #{itemId}, #{lotId}, #{partSerialNo}, #{qty}, #{unitCd}, #{woProcId},
+                #{genId}, #{reason}, #{occurredAt}, #{entryMethod}, #{by}, #{workerId}, #{reversalOfId})
+        returning part_id
+    </select>
+
+    <sql id="partCols">
+        p.part_id, p.serial_id, p.ev_type, p.part_item_id, i.item_cd as part_item_cd, i.item_nm as part_item_nm, p.part_lot_id,
+        l.lot_no as part_lot_no, p.part_serial_no, trim_scale(p.qty)::text as qty, p.unit_cd, p.wo_proc_id, wp.op_seq, wp.proc_nm,
+        p.gen_id, p.reason, p.occurred_at, p.recorded_at, p.entry_method, p.recorded_by, k.worker_cd, k.worker_nm, p.reversal_of_id,
+        r.part_id is not null as removed, r.occurred_at as removed_at
+    </sql>
+
+    <sql id="partFrom">
+        from prd_serial_part p
+        join mst_item i on i.item_id = p.part_item_id
+        left join lot_master l on l.lot_id = p.part_lot_id
+        left join prd_wo_proc wp on wp.wo_proc_id = p.wo_proc_id
+        left join mst_worker k on k.worker_id = p.performed_by
+        left join prd_serial_part r on r.reversal_of_id = p.part_id
+    </sql>
+
+    <select id="findPart" resultType="io.smarthappy.module.production.SerialDtos$PartRow" flushCache="true" useCache="false">
+        select <include refid="partCols"/>
+        <include refid="partFrom"/>
+         where p.part_id = #{partId}
+    </select>
+
+    <select id="partsOf" resultType="io.smarthappy.module.production.SerialDtos$PartRow" flushCache="true" useCache="false">
+        select <include refid="partCols"/>
+        <include refid="partFrom"/>
+         where p.serial_id = #{serialId}
+         order by p.part_id
+    </select>
+
+    <!-- ================================================================ BOM 대비 -->
+
+    <select id="woBom" resultType="io.smarthappy.module.production.SerialDtos$WoBomLine">
+        select b.item_id, i.item_cd, i.item_nm, b.unit_cd, b.req_qty, b.op_seq, b.alt_grp, b.alt_priority, b.scrap_pct, b.src_bom_id
+          from prd_wo_bom b
+          join mst_item i on i.item_id = b.item_id
+         where b.wo_id = #{woId} and b.line_type = 'NORMAL'
+         order by b.seq
+    </select>
+
+    <select id="altCands" resultType="io.smarthappy.module.production.SerialDtos$AltCand">
+        select l.bom_id, l.alt_grp, l.item_id, i.item_cd, i.item_nm, l.alt_priority
+          from mst_bom_line l
+          join mst_item i on i.item_id = l.item_id
+         where l.alt_grp is not null
+           and l.bom_id in <foreach collection="bomIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+         order by l.bom_id, l.alt_grp, l.alt_priority, l.line_no
+    </select>
+
+    <select id="installed" resultType="io.smarthappy.module.production.SerialDtos$Installed" flushCache="true" useCache="false">
+        select s.serial_id, s.serial_no, p.part_item_id as item_id, i.item_cd, i.item_nm, p.unit_cd, sum(p.qty) as qty
+          from prd_serial_part p
+          join prd_serial s on s.serial_id = p.serial_id
+          join mst_item i on i.item_id = p.part_item_id
+         where <include refid="active"/>
+           <if test="serialId != null">and p.serial_id = #{serialId}</if>
+           <if test="woId != null">and s.wo_id = #{woId}</if>
+         group by s.serial_id, s.serial_no, p.part_item_id, i.item_cd, i.item_nm, p.unit_cd
+         order by s.serial_no, i.item_cd
+    </select>
+
+    <!-- ================================================================ 완료판정 경고 -->
+
+    <select id="opSeqOf" resultType="int">
+        select op_seq from prd_wo_proc where wo_proc_id = #{woProcId}
+    </select>
+
+    <select id="lastOpSeq" resultType="int">
+        select max(op_seq) from prd_wo_proc where wo_id = #{woId}
+    </select>
+
+    <!-- ================================================================ 역추적 -->
+
+    <select id="findLotIdByNo" resultType="long">
+        select lot_id from lot_master where lot_no = #{lotNo}
+    </select>
+
+    <sql id="traceCols">
+        p.part_id, s.serial_id, s.serial_no, w.wo_no, si.item_cd, si.item_nm, pi.item_cd as part_item_cd, pi.item_nm as part_item_nm,
+        pl.lot_no as part_lot_no, p.part_serial_no, trim_scale(p.qty)::text as qty, p.unit_cd, p.occurred_at,
+        r.part_id is not null as removed, r.occurred_at as removed_at
+    </sql>
+
+    <sql id="traceFrom">
+          join prd_serial s on s.serial_id = p.serial_id
+          join prd_wo w on w.wo_id = s.wo_id
+          join mst_item si on si.item_id = s.item_id
+          join mst_item pi on pi.item_id = p.part_item_id
+          left join lot_master pl on pl.lot_id = p.part_lot_id
+          left join prd_serial_part r on r.reversal_of_id = p.part_id
+    </sql>
+
+    <!--
+      부품 LOT → 장비 시리얼. d = 시작 LOT + 계보로 나간 자식 LOT(살아 있는 연결 — 원래 행이고 되돌려지지 않은 것, 순환 차단·깊이 상한).
+      줄 = d 의 LOT 을 부품 LOT 으로 쓴 장착 행(탈거된 것 포함 — 리콜 범위는 "한때 들어 있던 장비"도).
+      via = 시작 LOT 이면 비움, 아니면 거쳐 온(장착된) LOT 번호
+    -->
+    <select id="traceLot" resultType="io.smarthappy.module.production.SerialDtos$TraceRow">
+        with recursive d (lot_id, lvl, path) as (
+            select #{lotId}::bigint, 0, array[#{lotId}::bigint]
+            union
+            select g.child_lot_id, d.lvl + 1, d.path || g.child_lot_id
+              from d
+              join lot_genealogy g on g.parent_lot_id = d.lot_id
+             where d.lvl &lt; #{depth} and not g.child_lot_id = any(d.path)
+               and g.reversal_of_id is null and not exists (select 1 from lot_genealogy x where x.reversal_of_id = g.gen_id)
+        ),
+        lots as (select lot_id, min(lvl) as lvl from d group by lot_id)
+        select <include refid="traceCols"/>,
+               case when lots.lvl = 0 then null else pl.lot_no end as via
+          from lots
+          join prd_serial_part p on p.part_lot_id = lots.lot_id and p.ev_type = 'INSTALL'
+        <include refid="traceFrom"/>
+         order by s.serial_no, p.part_id
+         limit #{limit}
+    </select>
+
+    <select id="traceSerial" resultType="io.smarthappy.module.production.SerialDtos$TraceRow">
+        select <include refid="traceCols"/>, null as via
+          from prd_serial_part p
+        <include refid="traceFrom"/>
+         where p.part_item_id = #{itemId} and p.part_serial_no = #{partSerialNo} and p.ev_type = 'INSTALL'
+         order by s.serial_no, p.part_id
+         limit #{limit}
+    </select>
+</mapper>

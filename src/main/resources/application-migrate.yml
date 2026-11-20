@@ -1,0 +1,20 @@
+# 마이그레이션 전용 실행 모드 (01 7.1) — 배포 때 같은 jar 로 1회:
+#   java -jar smarthappy.jar --spring.profiles.active=migrate
+# DB 소유자 자격증명은 이 프로세스에만 준다(DB_URL, DB_OWNER_USER, DB_OWNER_PASSWORD). 웹 서버·작업·기동 가드는 돌지 않고,
+# Flyway 를 적용한 뒤 끝난다. 운영 앱(prod)은 소유자 자격증명 없이 기동하고 버전 일치만 확인한다.
+spring:
+  main:
+    web-application-type: none
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_OWNER_USER}
+    password: ${DB_OWNER_PASSWORD}
+  flyway:
+    enabled: true
+    url: ${DB_URL}
+    user: ${DB_OWNER_USER}
+    password: ${DB_OWNER_PASSWORD}
+
+happyboot:
+  scheduling:
+    enabled: false

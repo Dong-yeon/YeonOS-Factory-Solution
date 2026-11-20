@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<body class="hb-page" th:data-prog="${prog.progCd}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">내 정보</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<dl class="hb-info">
+    <dt th:text="#{myInfo.company}">회사</dt>
+    <dd id="compCd" data-help-key="sys-my-info.compCd">-</dd>
+    <dt th:text="#{myInfo.loginId}">아이디</dt>
+    <dd id="loginId" data-help-key="sys-my-info.loginId">-</dd>
+    <dt th:text="#{myInfo.userNm}">이름</dt>
+    <dd id="userNm" data-help-key="sys-my-info.userNm">-</dd>
+</dl>
+
+<label class="hb-field">
+    <span th:text="#{myInfo.locale}">화면 언어</span>
+    <select id="localeCd" data-help-key="sys-my-info.localeCd">
+        <option value="ko" th:text="#{myInfo.locale.ko}">한국어</option>
+        <option value="en" th:text="#{myInfo.locale.en}">English</option>
+    </select>
+</label>
+
+<!-- 버튼 노출은 편의일 뿐. 판정은 API 의 @ProgAuth(SAVE) -->
+<button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+<p id="msg" class="hb-msg" role="status"></p>
+
+<section th:if="${actions.contains('SAVE')}" class="hb-section">
+    <h2 th:text="#{myInfo.password}">비밀번호 변경</h2>
+    <label class="hb-field">
+        <span th:text="#{myInfo.password.current}">현재 비밀번호</span>
+        <input type="password" id="currentPassword" maxlength="72" autocomplete="current-password"
+               data-help-key="sys-my-info.currentPassword">
+    </label>
+    <label class="hb-field">
+        <span th:text="#{myInfo.password.new}">새 비밀번호</span>
+        <input type="password" id="newPassword" maxlength="72" autocomplete="new-password"
+               data-help-key="sys-my-info.newPassword">
+    </label>
+    <label class="hb-field">
+        <span th:text="#{myInfo.password.confirm}">새 비밀번호 확인</span>
+        <input type="password" id="confirmPassword" maxlength="72" autocomplete="new-password"
+               data-help-key="sys-my-info.confirmPassword">
+    </label>
+    <button type="button" id="pwdBtn" th:text="#{myInfo.password.submit}">비밀번호 변경</button>
+    <ul id="pwdMsg" class="hb-msg" role="status"></ul>
+</section>
+
+<!-- 2단계 인증 상태·복구 코드 다시 만들기 (docs/36 14장). 등록은 로그인 때(강제 대상) 화면에서 -->
+<section class="hb-section" id="mfaSection">
+    <h2 th:text="#{mfa.title}">2단계 인증</h2>
+    <p id="mfaStatus" class="hb-muted"></p>
+    <a id="mfaEnrollLink" class="hb-btn-secondary hb-link-btn" th:href="@{/mfa(self=1)}" th:text="#{mfa.enroll.self}" hidden>2단계 인증 등록</a>
+    <div id="mfaRegen" hidden>
+        <label class="hb-field">
+            <span th:text="#{mfa.code}">인증 코드</span>
+            <input id="mfaCode" maxlength="6" autocomplete="one-time-code" inputmode="numeric" spellcheck="false">
+        </label>
+        <button type="button" id="mfaRegenBtn" class="hb-btn-secondary" th:text="#{mfa.recovery.regen}">복구 코드 새로 만들기</button>
+        <ul id="mfaCodes" class="hb-files"></ul>
+    </div>
+</section>
+
+<!-- 이 기기로 알림 받기 — Web Push (docs/45 9장 N3). 등록한 기기에 새 알림함 알림이 간다(본문은 알림 종류만) -->
+<section class="hb-section" id="pushSection" hidden>
+    <h2 th:text="#{myInfo.push}">이 기기로 알림 받기</h2>
+    <p id="pushStatus" class="hb-muted"></p>
+    <button type="button" id="pushOnBtn" hidden data-help-key="sys-my-info.push" th:text="#{myInfo.push.on}">이 기기에서 알림 받기</button>
+    <button type="button" id="pushOffBtn" class="hb-btn-secondary" hidden th:text="#{myInfo.push.off}">이 기기 알림 끄기</button>
+    <h3 th:text="#{myInfo.push.devices}">알림을 받는 기기</h3>
+    <ul id="pushDevices" class="hb-files"></ul>
+</section>
+
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/platform/my-info.js}"></script>
+</body>
+</html>

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="#{pdaWh.title}">창고</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/css/pop.css}">
+    <link rel="stylesheet" th:href="@{/css/views/wms-pda.css}">
+</head>
+<!--
+  창고 PDA 홈 (B7-1, docs/30 12.12) — 창고 단말(PDA)만. 배지(+PIN) → 메뉴 → 이동(출발 위치 스캔 → 재고 고르기 → 수량 → 도착 위치 스캔 → 확정)
+  / 실사 센 수량(세는 중 실사 → 위치 스캔 → 줄 → 수량 → 저장) / 피킹(B7-2b: 출하 지시 → 줄 → 제안 칸 또는 다른 칸 스캔 → 수량 → 피킹).
+  / 반품 출고(B7-3: 반품 라벨 스캔 → 후보 칸 누름·위치 스캔 → 수량 → 칸 추가 → 반품 출고, 지시 수량 전부 한 번에).
+  / 입고(docs/30 12.12.15: 품목·GS1 라벨 또는 ASN 납품서 스캔 → ASN 행·발주 행 고르기(또는 발주 없이) → 위치 후보 누름·위치 스캔 → 수량 → 입고).
+  / 정위치 점검(docs/55: 위치 스캔 → 물건 스캔 판정 → 전수 확인 완료, 보정은 사무 화면).
+  이동은 오프라인 대기열, 실사·피킹·반품·입고·정위치 점검은 온라인만(D-B21·D-B25·docs/55). 셸·공통 JS 는 MES POP(hb.pop).
+-->
+<body class="hb-pop" data-surface="pop" data-login-url="/pop/activate">
+<header class="hb-pop-head">
+    <span class="hb-pop-where" id="where"></span>
+    <span class="hb-pop-grow"></span>
+    <span id="worker"></span>
+    <button type="button" id="switchBtn" hidden th:text="#{pop.switchWorker}">작업자 바꾸기</button>
+    <button type="button" id="langBtn" th:text="#{pop.otherLang}">English</button>
+    <span class="hb-pop-net" id="net" data-online="true" th:text="#{pop.online}">온라인</span>
+    <span class="hb-pop-pending" id="pending" hidden></span>
+    <button type="button" class="hb-pop-rejected" id="rejectedBtn" hidden></button>
+</header>
+<main class="hb-pop-main">
+    <p id="feedback" class="hb-pop-feedback" role="status" aria-live="assertive"></p>
+    <input id="scan" class="hb-pop-scan" inputmode="none" autocomplete="off" th:aria-label="#{pdaWh.scanLabel}">
+
+    <section id="badgePanel" class="hb-pop-panel" hidden>
+        <p class="hb-pop-big" th:text="#{pop.scanBadge}">배지를 스캔하세요</p>
+        <p class="hb-pop-sub" th:text="#{pop.scanGuide}">스캐너로 작업자 배지를 읽으면 바로 바뀝니다.</p>
+    </section>
+
+    <section id="pinPanel" class="hb-pop-panel" hidden>
+        <p class="hb-pop-big" id="pinWho"></p>
+        <p th:text="#{pop.enterPin}">PIN 을 누르세요</p>
+        <div class="hb-pop-dots" id="pinDots" aria-hidden="true"></div>
+        <div class="hb-pop-keypad" id="keypad"></div>
+        <button type="button" id="pinCancel" th:text="#{pop.cancel}">취소</button>
+    </section>
+
+    <section id="menuPanel" hidden>
+        <div class="wpda-menu">
+            <button type="button" class="hb-pop-primary" id="goRcv" th:text="#{pdaWh.rcv}">입고</button>
+            <button type="button" class="hb-pop-primary" id="goMove" th:text="#{pdaWh.move}">이동</button>
+            <button type="button" class="hb-pop-primary" id="goCount" th:text="#{pdaWh.count}">실사</button>
+            <button type="button" class="hb-pop-primary" id="goPick" th:text="#{pdaWh.pick}">피킹</button>
+            <button type="button" class="hb-pop-primary" id="goReturn" hidden th:text="#{pdaWh.return}">반품 출고</button>
+            <button type="button" class="hb-pop-primary" id="goLocCheck" th:text="#{pdaWh.locCheck}">정위치 점검</button>
+        </div>
+    </section>
+
+    <!-- 입고: 온라인만(D-B25) — 품목·라벨·ASN 스캔 → 발주 행 → 위치 → 수량 → 입고 -->
+    <section id="rcvPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" class="wpda-back" th:text="#{pdaWh.back}">← 메뉴</button>
+            <h2 th:text="#{pdaWh.rcv}">입고</h2>
+        </div>
+        <ol class="wpda-steps">
+            <li><span th:text="#{pdaWh.what}">품목·LOT</span> <b id="rcWhat"></b></li>
+            <li><span th:text="#{pdaWh.rcvPo}">발주</span> <b id="rcPo"></b></li>
+            <li><span th:text="#{pdaWh.to}">도착 위치</span> <b id="rcTo"></b></li>
+            <li><span th:text="#{pdaWh.qty}">수량</span> <b id="rcQty"></b></li>
+        </ol>
+        <p id="rcGuide" class="hb-pop-big"></p>
+        <ul class="hb-pop-list" id="rcList"></ul>
+        <div id="rcQtyBox" hidden>
+            <p id="rcHint" class="hb-pop-sub"></p>
+            <div class="hb-pop-keypad" id="rcPad"></div>
+        </div>
+        <div class="hb-pop-actions">
+            <button type="button" id="rcReset" th:text="#{pdaWh.reset}">처음부터</button>
+            <button type="button" class="hb-pop-primary" id="rcConfirm" disabled th:text="#{pdaWh.confirmRcv}">입고</button>
+        </div>
+    </section>
+
+    <!-- 이동: 단계마다 스캔이 다음 칸을 채운다 -->
+    <section id="movePanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" class="wpda-back" th:text="#{pdaWh.back}">← 메뉴</button>
+            <h2 th:text="#{pdaWh.move}">이동</h2>
+        </div>
+        <ol class="wpda-steps">
+            <li><span th:text="#{pdaWh.from}">출발 위치</span> <b id="mvFrom"></b></li>
+            <li><span th:text="#{pdaWh.what}">품목·LOT</span> <b id="mvWhat"></b></li>
+            <li><span th:text="#{pdaWh.qty}">수량</span> <b id="mvQty"></b></li>
+            <li><span th:text="#{pdaWh.to}">도착 위치</span> <b id="mvTo"></b></li>
+        </ol>
+        <p id="mvGuide" class="hb-pop-big"></p>
+        <ul class="hb-pop-list" id="mvStock"></ul>
+        <div id="mvQtyBox" hidden>
+            <div class="hb-pop-keypad" id="mvPad"></div>
+        </div>
+        <div class="hb-pop-actions">
+            <button type="button" id="mvReset" th:text="#{pdaWh.reset}">처음부터</button>
+            <button type="button" class="hb-pop-primary" id="mvConfirm" disabled th:text="#{pdaWh.confirmMove}">이동 확정</button>
+        </div>
+    </section>
+
+    <!-- 실사 센 수량: 온라인만 -->
+    <section id="countPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" class="wpda-back" th:text="#{pdaWh.back}">← 메뉴</button>
+            <h2 id="ctTitle" th:text="#{pdaWh.count}">실사</h2>
+        </div>
+        <ul class="hb-pop-list" id="ctList"></ul>
+        <div id="ctBody" hidden>
+            <p id="ctGuide" class="hb-pop-big"></p>
+            <ul class="hb-pop-list" id="ctLines"></ul>
+            <div id="ctQtyBox" hidden>
+                <p id="ctLineInfo" class="hb-pop-sub"></p>
+                <p class="hb-pop-big" id="ctQty"></p>
+                <div class="hb-pop-keypad" id="ctPad"></div>
+                <div class="hb-pop-actions">
+                    <button type="button" class="hb-pop-primary" id="ctSave" disabled th:text="#{pdaWh.saveCount}">센 수량 저장</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 피킹: 온라인만(D-B25) — 출하 지시 → 줄 → 출발 칸(제안 또는 스캔) → 수량 → 피킹(대기 칸으로) -->
+    <section id="pickPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" class="wpda-back" th:text="#{pdaWh.back}">← 메뉴</button>
+            <h2 id="pkTitle" th:text="#{pdaWh.pick}">피킹</h2>
+        </div>
+        <ul class="hb-pop-list" id="pkList"></ul>
+        <div id="pkBody" hidden>
+            <p id="pkGuide" class="hb-pop-big"></p>
+            <ul class="hb-pop-list" id="pkNotes" hidden></ul>
+            <ul class="hb-pop-list" id="pkLines"></ul>
+            <div id="pkLineBox" hidden>
+                <p id="pkLineInfo" class="hb-pop-sub"></p>
+                <ul class="hb-pop-list" id="pkSuggest"></ul>
+                <p id="pkFrom" class="hb-pop-sub"></p>
+                <p class="hb-pop-big" id="pkQty"></p>
+                <div class="hb-pop-keypad" id="pkPad"></div>
+                <div class="hb-pop-actions">
+                    <button type="button" id="pkLinesBtn" th:text="#{pdaWh.pickLines}">줄 목록</button>
+                    <button type="button" class="hb-pop-primary" id="pkConfirm" disabled th:text="#{pdaWh.confirmPick}">피킹</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 반품 출고: 온라인만 — 반품 라벨 → 칸·수량(여러 칸 가능) → 합 = 지시 수량이면 확정 -->
+    <section id="returnPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" class="wpda-back" th:text="#{pdaWh.back}">← 메뉴</button>
+            <h2 id="rtTitle" th:text="#{pdaWh.return}">반품 출고</h2>
+        </div>
+        <p id="rtGuide" class="hb-pop-big"></p>
+        <div id="rtBody" hidden>
+            <p id="rtInfo" class="hb-pop-sub"></p>
+            <ul class="hb-pop-list" id="rtStock"></ul>
+            <ul class="hb-pop-list" id="rtRows"></ul>
+            <p id="rtCur" class="hb-pop-sub"></p>
+            <p class="hb-pop-big" id="rtQty"></p>
+            <div class="hb-pop-keypad" id="rtPad"></div>
+            <div class="hb-pop-actions">
+                <button type="button" id="rtAdd" disabled th:text="#{pdaWh.addBin}">칸 추가</button>
+                <button type="button" class="hb-pop-primary" id="rtConfirm" disabled th:text="#{pdaWh.confirmReturn}">반품 출고</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- 정위치 점검(docs/55): 온라인만 — 위치 스캔 → 물건 스캔(판정) → 전수 확인 완료. 보정은 사무 화면 -->
+    <section id="loccheckPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" class="wpda-back" th:text="#{pdaWh.back}">← 메뉴</button>
+            <h2 th:text="#{pdaWh.locCheck}">정위치 점검</h2>
+        </div>
+        <p id="lcOffline" class="hb-pop-feedback" data-kind="error" hidden th:text="#{pdaWh.lcOfflineNote}">연결됐을 때만 점검합니다.</p>
+        <p id="lcGuide" class="hb-pop-big"></p>
+        <p id="lcHead" class="hb-pop-sub"></p>
+        <ul class="hb-pop-list" id="lcLines"></ul>
+        <div class="hb-pop-actions">
+            <button type="button" id="lcNext" th:text="#{pdaWh.lcNext}">다른 위치</button>
+            <button type="button" class="hb-pop-primary" id="lcDone" disabled th:text="#{pdaWh.lcDoneBtn}">전수 확인 완료</button>
+        </div>
+    </section>
+
+    <section id="rejectedPanel" hidden>
+        <div class="hb-pop-toolbar">
+            <button type="button" class="wpda-back" th:text="#{pdaWh.back}">← 메뉴</button>
+            <h2 th:text="#{pdaWh.rejected}">보내지 못한 이동</h2>
+        </div>
+        <p class="hb-pop-sub" th:text="#{pdaWh.rejectedGuide}">서버가 받지 않은 이동입니다(재고 부족·마감 등). 사유를 보고 다시 보내거나 버리세요.</p>
+        <ul class="hb-pop-list" id="rejectedList"></ul>
+    </section>
+</main>
+<script th:src="@{/js/common/hb.js}"></script>
+<script th:src="@{/js/common/hb.scan.js}"></script>
+<script th:src="@{/js/common/hb.text.js}"></script>
+<script th:src="@{/js/common/hb.dialog.js}"></script>
+<script th:src="@{/js/common/hb.pop.js}"></script>
+<script th:src="@{/js/views/wms/pda-loccheck.js}"></script>
+<script th:src="@{/js/views/wms/pda-home.js}"></script>
+</body>
+</html>

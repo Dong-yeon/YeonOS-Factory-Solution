@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 현장 단말 검사 (docs/29_P3 53장). MES 표(sys_terminal·mst_worker·prd_wo·prd_wo_proc·prd_result·lot_master)는 읽기만, 잠금 없음 -->
+<mapper namespace="io.smarthappy.module.qms.FloorInspMapper">
+
+    <select id="findTerminal" resultType="io.smarthappy.module.qms.FloorInspMapper$Terminal">
+        select t.terminal_id, t.terminal_cd, t.plant_cd from sys_terminal t where t.terminal_id = #{terminalId} and t.revoked_at is null
+    </select>
+
+    <select id="workerActive" resultType="boolean">
+        select exists (select 1 from mst_worker w where w.worker_id = #{workerId} and w.use_yn = 'Y')
+    </select>
+
+    <select id="findWoProc" resultType="io.smarthappy.module.qms.FloorInspMapper$WoProc">
+        select wp.wo_proc_id, wp.wo_id, wp.proc_id, p.proc_cd, w.item_id, i.item_class_id, w.plant_cd
+          from prd_wo_proc wp
+          join prd_wo w on w.wo_id = wp.wo_id
+          join mst_proc p on p.proc_id = wp.proc_id
+          join mst_item i on i.item_id = w.item_id
+         where wp.wo_proc_id = #{woProcId}
+    </select>
+
+    <!-- 정정된 실적(역분개 행이 가리키는 원래 행)과 역분개 행은 뺀다 -->
+    <select id="suggestedLot" resultType="string">
+        select l.lot_no
+          from prd_result r join lot_master l on l.lot_id = r.lot_id
+         where r.wo_proc_id = #{woProcId} and r.reversal_of_id is null
+           and not exists (select 1 from prd_result x where x.reversal_of_id = r.result_id)
+         order by
+         <choose>
+             <when test="first">r.occurred_at, r.result_id</when>
+             <otherwise>r.occurred_at desc, r.result_id desc</otherwise>
+         </choose>
+         limit 1
+    </select>
+
+    <select id="lotOfWo" resultType="long">
+        select l.lot_id from lot_master l where l.lot_no = #{lotNo} and l.wo_id = #{woId}
+    </select>
+
+    <select id="findOpen" resultType="io.smarthappy.module.qms.FloorInspMapper$InspRef">
+        select h.insp_id, h.insp_no, h.result, h.judged_at
+          from qms_insp h join lot_master l on l.lot_id = h.lot_id
+         where h.insp_type = #{type} and l.lot_no = #{lotNo} and h.proc_id is not distinct from #{procId}::bigint and h.status = 'OPEN'
+         order by h.insp_id desc
+         limit 1
+    </select>
+
+    <select id="findLastJudged" resultType="io.smarthappy.module.qms.FloorInspMapper$InspRef">
+        select h.insp_id, h.insp_no, h.result, h.judged_at
+          from qms_insp h join lot_master l on l.lot_id = h.lot_id
+         where h.insp_type = #{type} and l.wo_id = #{woId} and h.proc_id is not distinct from #{procId}::bigint and h.status = 'JUDGED'
+         order by h.judged_at desc, h.insp_id desc
+         limit 1
+    </select>
+
+    <select id="findByOpenReq" resultType="io.smarthappy.module.qms.FloorInspMapper$InspRef">
+        select h.insp_id, h.insp_no, h.result, h.judged_at from qms_insp h where h.open_req_id = #{req}
+    </select>
+
+    <select id="findHead" resultType="io.smarthappy.module.qms.FloorInspMapper$FloorHead">
+        select h.insp_id, h.insp_no, h.insp_type, h.status, h.result, l.lot_no, i.item_cd, i.item_nm, p.proc_cd, w.plant_cd
+          from qms_insp h
+          join lot_master l on l.lot_id = h.lot_id
+          join mst_item i on i.item_id = h.item_id
+          left join mst_proc p on p.proc_id = h.proc_id
+          left join prd_wo w on w.wo_id = l.wo_id
+         where h.insp_id = #{inspId}
+    </select>
+</mapper>

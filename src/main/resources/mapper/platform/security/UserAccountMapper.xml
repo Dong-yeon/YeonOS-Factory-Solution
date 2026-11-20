@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  로그인·세션 확인. RLS 가 회사를 거르지만, 의도를 드러내기 위해 comp_cd 조건도 명시한다(이중 방어).
+  로그인 기록(실패 횟수·잠금·마지막 로그인)은 시스템 필드라 row_ver 를 올리지 않는다 — 관리자 편집과 충돌하지 않게.
+
+  잠금 규칙 (V004)
+  - 유효한 잠금 = lock_yn = 'Y' 이고 (locked_until 이 NULL[관리자 수동] 이거나 아직 미래[실패 잠금])
+  - 실패 잠금은 locked_until 이 지나면 자동 해제 → 실패 횟수는 1부터 다시 센다
+-->
+<mapper namespace="io.smarthappy.platform.security.UserAccountMapper">
+
+    <sql id="effectiveLockYn">
+        case when u.lock_yn = 'Y' and (u.locked_until is null or u.locked_until &gt; now()) then 'Y' else 'N' end
+    </sql>
+
+    <select id="findForLogin" resultType="io.smarthappy.platform.security.LoginAccount">
+        select u.user_id,
+               u.comp_cd,
+               u.login_id,
+               u.user_nm,
+               u.pwd_hash,
+               u.locale_cd,
+               <include refid="effectiveLockYn"/> as lock_yn,
+               u.pwd_change_req_yn,
+               u.use_yn,
+               c.status_cd as comp_status_cd,
+               c.use_yn    as comp_use_yn,
+               u.user_type,
+               u.cust_id,
+               (select mc.use_yn from mst_cust mc where mc.cust_id = u.cust_id) as cust_use_yn
+          from sys_user u
+          join sys_comp c on c.comp_cd = u.comp_cd
+         where u.comp_cd = #{compCd}
+           and lower(u.login_id) = lower(#{loginId})
+    </select>
+
+    <!-- 지금 유효한 잠금인지 (실패 기록 직후 잠금이 걸렸는지 보안 로그에 남기기 위해) -->
+    <select id="findLockYn" resultType="string">
+        select <include refid="effectiveLockYn"/> from sys_user u where u.user_id = #{userId}
+    </select>
+
+    <!-- 유효한 잠금 상태에서는 호출하지 않는다(where 로도 막음). 만료된 실패 잠금이면 횟수를 0 에서 다시 센다 -->
+    <update id="recordLoginFailure">
+        with cur as (
+            select u.user_id,
+                   (case when u.lock_yn = 'Y' then 0 else u.login_fail_cnt end) + 1 as next_cnt
+              from sys_user u
+             where u.user_id = #{userId}
+               and <include refid="effectiveLockYn"/> = 'N'
+        )
+        update sys_user s
+           set login_fail_cnt = cur.next_cnt,
+               lock_yn        = case when cur.next_cnt &gt;= #{maxLoginFail} then 'Y' else 'N' end,
+               locked_until   = case when cur.next_cnt &gt;= #{maxLoginFail}
+                                     then now() + make_interval(mins =&gt; #{lockMinutes}) else null end,
+               updated_at     = now(),
+               updated_by     = 'LOGIN'
+          from cur
+         where s.user_id = cur.user_id
+    </update>
+
+    <update id="recordLoginSuccess">
+        update sys_user
+           set login_fail_cnt = 0,
+               lock_yn        = 'N',
+               locked_until   = null,
+               last_login_at  = now()
+         where user_id = #{userId}
+    </update>
+
+    <!--
+      매 요청 세션 유효성. 실패 잠금(locked_until 있음)은 기존 세션을 끊지 않는다 —
+      남이 비밀번호를 틀려 잠근 것으로 정상 사용자의 작업이 끊기면 안 되므로. 관리자 수동 잠금만 끊는다.
+      관리자 비밀번호 초기화(session_not_before) 전에 로그인한 세션도 끊는다 (docs/36 D4).
+      협력사 포털 사용자는 소속 거래처가 사용 중이어야 한다 — 거래처를 사용 중지하면 이미 로그인한 세션도 끊긴다 (docs/42 3장).
+    -->
+    <select id="countActive" resultType="int">
+        select count(*)
+          from sys_user u
+          join sys_comp c on c.comp_cd = u.comp_cd
+         where u.user_id = #{userId}
+           and u.use_yn = 'Y'
+           and not (u.lock_yn = 'Y' and u.locked_until is null)
+           <if test="loginAt != null">and (u.session_not_before is null or u.session_not_before &lt;= #{loginAt})</if>
+           and c.status_cd = 'ACTIVE'
+           and c.use_yn = 'Y'
+           and (u.user_type = 'INTERNAL'
+                or exists (select 1 from mst_cust mc where mc.cust_id = u.cust_id and mc.use_yn = 'Y'))
+    </select>
+
+    <select id="findPasswordState" resultType="io.smarthappy.platform.security.LoginAccount">
+        select u.user_id, u.comp_cd, u.login_id, u.pwd_hash, <include refid="effectiveLockYn"/> as lock_yn, u.use_yn
+          from sys_user u
+         where u.user_id = #{userId}
+    </select>
+
+    <update id="updatePassword">
+        update sys_user
+           set pwd_hash          = #{pwdHash},
+               pwd_changed_at    = now(),
+               pwd_change_req_yn = 'N',
+               login_fail_cnt    = 0,
+               updated_at        = now(),
+               updated_by        = 'SELF'
+         where user_id = #{userId}
+    </update>
+</mapper>

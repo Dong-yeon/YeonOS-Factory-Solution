@@ -1,0 +1,57 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "io.smarthappy.yeonos.terminal"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "io.smarthappy.yeonos.terminal"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // 서버 release.json 의 version 과 같게 올린다(semver 숫자 셋). minVersion 비교 대상(docs/50 V2)
+        versionCode 1
+        versionName "0.1.0"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    // 서명 키는 저장소 밖(docs/50 F6·S7) — 빌드 머신 환경 변수로만. 없으면 release 는 서명 없이(설치 불가) 만들어진다
+    signingConfigs {
+        release {
+            if (System.getenv('YEONOS_KEYSTORE')) {
+                storeFile file(System.getenv('YEONOS_KEYSTORE'))
+                storePassword System.getenv('YEONOS_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('YEONOS_KEY_ALIAS')
+                keyPassword System.getenv('YEONOS_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (System.getenv('YEONOS_KEYSTORE')) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+

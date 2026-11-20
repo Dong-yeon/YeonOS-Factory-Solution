@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  생산 입고 (prd-receipt) — MES P2 7a (docs/25 4.9). 지시(진행·완료) → 마지막 공정 양품 LOT(만든 양·입고됨·남음) → 창고·로케이션·수량 → 입고.
+  입고 이력 + 정정(역분개, 사유). 재고 수량은 세지 않는다 — P4 WMS 가 이 원장을 첫 소스로 옮긴다(docs/30 D2).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">생산 입고</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{prdRcv.plant}">공장</span><select name="plantCd" id="plantSel" required></select></label>
+    <label><span th:text="#{prdRcv.status}">지시 상태</span>
+        <select name="status">
+            <option value="" th:text="#{prdRcv.statusOpen}">진행·완료</option>
+            <option value="IN_PROGRESS" th:text="#{code.WO_STATUS.IN_PROGRESS}">진행 중</option>
+            <option value="DONE" th:text="#{code.WO_STATUS.DONE}">완료</option>
+            <option value="CLOSED" th:text="#{code.WO_STATUS.CLOSED}">마감</option>
+        </select></label>
+    <label><span th:text="#{prdRcv.keyword}">지시 번호·품목 코드</span><input name="keyword" maxlength="60"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div id="woGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="woInfo" class="hb-muted" th:text="#{prdRcv.select}">왼쪽에서 지시를 고르세요.</p>
+
+        <section class="hb-sub" id="lotSection" hidden>
+            <h2 th:text="#{prdRcv.lots}">입고할 LOT (마지막 공정 양품)</h2>
+            <div class="hb-replace-host hb-rcv-table">
+            <table class="hb-cmp-table" id="lots">
+                <thead><tr>
+                    <th th:text="#{prdRcv.col.lotNo}">LOT 번호</th>
+                    <th class="hb-num" th:text="#{prdRcv.col.made}">만든 양</th>
+                    <th class="hb-num" th:text="#{prdRcv.col.received}">입고</th>
+                    <th class="hb-num" th:text="#{prdRcv.col.remain}">남음</th>
+                    <th th:text="#{prdRcv.col.state}">상태</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            </div>
+            <form id="rcvForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{prdRcv.col.lotNo}">LOT 번호</span>
+                    <select data-field="lotId" id="lotSel"></select></label>
+                <label><span th:text="#{prdRcv.col.loc}">창고·로케이션</span>
+                    <select data-field="nodeId" id="locSel" data-help-key="prd-receipt.loc"></select></label>
+                <label><span th:text="#{prdRcv.col.qty}">입고 수량</span>
+                    <input data-field="qty" inputmode="decimal" maxlength="30" data-help-key="prd-receipt.qty"></label>
+                <div class="hb-toolbar hb-wide">
+                    <button type="button" id="rcvBtn" th:text="#{prdRcv.receive}">입고</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="hb-sub" id="histSection" hidden>
+            <h2 th:text="#{prdRcv.history}">입고 이력</h2>
+            <div class="hb-replace-host hb-rcv-table">
+            <table class="hb-cmp-table" id="history">
+                <thead><tr>
+                    <th th:text="#{prdRcv.col.at}">시각</th>
+                    <th th:text="#{prdRcv.col.lotNo}">LOT 번호</th>
+                    <th th:text="#{prdRcv.col.loc}">창고·로케이션</th>
+                    <th class="hb-num" th:text="#{prdRcv.col.qty}">수량</th>
+                    <th th:text="#{prdRcv.col.by}">입력</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/mes/mes-ui.js}"></script>
+<script th:src="@{/js/views/production/receipt-mgt.js}"></script>
+</body>
+</html>

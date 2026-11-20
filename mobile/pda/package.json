@@ -1,0 +1,18 @@
+{
+  "name": "yeonos-pda",
+  "version": "0.1.0",
+  "private": true,
+  "description": "YeonOS 현장 단말 껍데기(POP·PDA 공용 APK) — 서버의 /pop 웹을 감싼다. docs/50",
+  "license": "UNLICENSED",
+  "scripts": {
+    "sync": "cap sync android",
+    "licenses": "node scripts/licenses.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.2",
+    "@capacitor/core": "8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.2"
+  }
+}

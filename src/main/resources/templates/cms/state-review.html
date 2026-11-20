@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  비가동 사유 검토 (cms-state-review) — CMS 2부 C7 (docs/33 11.2, D18·D24). MES 상태 구간 원장은 읽기만.
+  구간에 사후 사유(닫힌 구간, 같은 분류 — 비계획 ↔ 계획 정지 재분류만 예외)를 달고, 비계획 정지 구간을 고장 작업지시에 연결한다.
+  둘 다 추가 + 무효만(무효 뒤 다시). MES cms-state 타임라인 화면은 그대로 둔다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">비가동 사유 검토</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.stateReview.plant}">공장</span>
+        <select name="plantCd" id="plantSel" required></select></label>
+    <label><span th:text="#{cms.stateReview.from}">시작일</span><input name="from" id="fromIn" type="date" required></label>
+    <label><span th:text="#{cms.stateReview.to}">종료일</span><input name="to" id="toIn" type="date" required></label>
+    <label><span th:text="#{cms.stateReview.keyword}">설비</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{cms.stateReview.effCat}">분류(실효)</span>
+        <select name="effCat" id="catSearch" data-help-key="cms-state-review.effCat"><option value="" th:text="#{common.all}">전체</option></select></label>
+    <label><span th:text="#{cms.stateReview.reasonCd}">사유 코드</span>
+        <input name="reasonCd" maxlength="30" data-help-key="cms-state-review.searchReasonCd"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.stateReview.scope}">범위</legend>
+        <label><input type="radio" name="pending" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="pending" value="Y"><span th:text="#{cms.stateReview.pendingOnly}">사유 없음만</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+        </div>
+        <div id="reviewGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.stateReview.select}">왼쪽에서 구간을 고르세요.</p>
+        <dl id="ivInfo" class="hb-info" hidden></dl>
+
+        <section class="hb-sub" id="noteSection" hidden>
+            <h2 th:text="#{cms.stateReview.note}">사후 사유</h2>
+            <p id="noteHint" class="hb-muted"></p>
+            <form id="noteForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{cms.stateReview.reason}">사유</span>
+                    <select data-field="reasonCd" data-help-key="cms-state-review.reasonCd"></select></label>
+                <label class="hb-wide"><span th:text="#{cms.stateReview.noteText}">메모</span>
+                    <input data-field="noteText" maxlength="500"></label>
+            </form>
+            <div class="hb-toolbar">
+                <button type="button" id="noteBtn" th:if="${actions.contains('SAVE')}" th:text="#{cms.stateReview.addNote}">사유 지정</button>
+            </div>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="notes">
+                    <thead><tr>
+                        <th th:text="#{cms.stateReview.col.reason}">사유</th>
+                        <th th:text="#{cms.stateReview.noteText}">메모</th>
+                        <th th:text="#{cms.stateReview.col.recorded}">기록</th>
+                        <th th:text="#{cms.stateReview.col.state}">상태</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="linkSection" hidden>
+            <h2 th:text="#{cms.stateReview.link}">고장 작업지시 연결</h2>
+            <p id="linkHint" class="hb-muted"></p>
+            <form id="linkForm" class="hb-form" autocomplete="off">
+                <label class="hb-wide"><span th:text="#{cms.stateReview.mwo}">작업지시</span>
+                    <select data-field="mwoId" data-help-key="cms-state-review.mwoId"></select></label>
+            </form>
+            <div class="hb-toolbar">
+                <button type="button" id="linkBtn" th:if="${actions.contains('SAVE')}" th:text="#{cms.stateReview.addLink}">연결</button>
+            </div>
+            <div class="hb-replace-host">
+                <table class="hb-cmp-table" id="links">
+                    <thead><tr>
+                        <th th:text="#{cms.stateReview.col.mwo}">고장 작업지시</th>
+                        <th th:text="#{cms.stateReview.col.manualDown}">수기 정지 구간</th>
+                        <th th:text="#{cms.stateReview.col.recorded}">기록</th>
+                        <th th:text="#{cms.stateReview.col.state}">상태</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/state-review.js}"></script>
+</body>
+</html>

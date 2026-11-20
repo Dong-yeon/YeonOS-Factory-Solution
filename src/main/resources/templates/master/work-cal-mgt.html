@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  공장 휴일 달력 (mst-work-cal) — docs/25 4.15. 근무조 위의 휴일·특근 예외만 저장한다(주간 쉬는 날은 정책 WEEKLY_OFF).
+  공장(또는 회사 공통) × 달 → 달력(쉬는 날 회색, 예외는 사유) + 그 달 예외 목록(hb.grid, UI 단계 3 ①) + 오른쪽 폼. 날짜를 누르면 그날 예외를 고르거나 새로 쓴다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/work-cal.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">공장 휴일 달력</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<div class="hb-split">
+    <section class="hb-split-main wcal-main">
+        <div class="hb-toolbar">
+            <label class="hb-inline"><span th:text="#{workCal.plant}">공장</span>
+                <select id="plantSel" data-help-key="mst-work-cal.plant">
+                    <option value="" th:text="#{workCal.company}">회사 공통</option>
+                </select></label>
+            <button type="button" id="prevBtn" class="hb-btn-secondary" th:aria-label="#{workCal.prev}">‹</button>
+            <label class="hb-inline"><span th:text="#{workCal.month}">달</span>
+                <input type="month" id="monthIn" min="2000-01" max="2999-12"></label>
+            <button type="button" id="nextBtn" class="hb-btn-secondary" th:aria-label="#{workCal.next}">›</button>
+            <span id="weeklyInfo" class="hb-muted" data-help-key="mst-work-cal.weekly"></span>
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{import.button}">엑셀 올리기</button>
+        </div>
+        <div class="hb-replace-host">
+            <table class="wcal" id="cal">
+                <thead><tr>
+                    <th th:text="#{workCal.dow.1}">월</th><th th:text="#{workCal.dow.2}">화</th><th th:text="#{workCal.dow.3}">수</th>
+                    <th th:text="#{workCal.dow.4}">목</th><th th:text="#{workCal.dow.5}">금</th><th th:text="#{workCal.dow.6}">토</th>
+                    <th th:text="#{workCal.dow.7}">일</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <section class="hb-sub">
+            <h2 th:text="#{workCal.rows}">이 달 예외</h2>
+            <div id="rowsGrid" class="hb-grid-host wcal-rows"></div>
+        </section>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{workCal.selectOrNew}">달력의 날짜나 아래 예외를 고르세요.</p>
+        <form id="calForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{workCal.col.calDate}">날짜</span>
+                <input type="date" data-field="calDate" required min="2000-01-01" max="2999-12-31" data-help-key="mst-work-cal.calDate"></label>
+            <label><span th:text="#{workCal.col.shift}">근무조</span>
+                <select data-field="shiftCd" data-help-key="mst-work-cal.shiftCd"></select></label>
+            <label><span th:text="#{workCal.col.dayType}">구분</span>
+                <select data-field="dayType">
+                    <option value="OFF" th:text="#{workCal.type.OFF}">쉼(휴일)</option>
+                    <option value="WORK" th:text="#{workCal.type.WORK}">일함(특근·대체 근무)</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{workCal.col.reason}">사유</span>
+                <input data-field="reason" maxlength="200" required></label>
+        </form>
+        <!-- 되돌리기 어려운 동작은 외곽선 위험 톤 + 저장과 떨어진 자리(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="disableBtn" class="hb-btn-danger-outline" th:text="#{workCal.disable}">사용 중지</button>
+        </div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/mes/mes-ui.js}"></script>
+<script th:src="@{/js/views/master/work-cal-mgt.js}"></script>
+</body>
+</html>

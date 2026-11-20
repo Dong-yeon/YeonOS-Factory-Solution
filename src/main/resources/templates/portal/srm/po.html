@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{portal/layout :: head(#{portal.srm.menu.po})}"></head>
+<!--
+  협력사 포털 — 발주·납기 회신 (docs/42 7장 3, docs/31 4.13 P-1). 내 발행된 발주만(서버가 로그인 소속으로 거름).
+  회신 = 행마다 약속 납기·수량(나눠 회신 가능) 또는 거절(사유) → 출처 PORTAL 로 저장, 검사는 우리 회사 대리 입력과 같다.
+  거래 정지면 조회만(서버 409). 문구는 js.portalSrm.* (hb.t), 화면 글자는 portal.srm.*.
+-->
+<body data-table-menu="" class="pt-page sp-page">
+<header th:replace="~{portal/layout :: header}"></header>
+<div class="pt-body">
+    <nav th:replace="~{portal/layout :: nav}"></nav>
+    <main class="pt-main">
+        <link rel="stylesheet" th:href="@{/css/views/srm-portal.css}">
+        <h1 th:text="#{portal.srm.menu.po}">발주·납기 회신</h1>
+        <p class="pt-muted" th:text="#{portal.srm.po.sub}">거래 회사가 보낸 발주를 보고, 행마다 납품할 수 있는 날짜·수량을 회신합니다.</p>
+
+        <form id="search" class="sp-search" autocomplete="off">
+            <label><span th:text="#{portal.srm.from}">발주일 시작</span><input type="date" name="from" required></label>
+            <label><span th:text="#{portal.srm.to}">발주일 끝</span><input type="date" name="to" required></label>
+            <label><span th:text="#{portal.srm.po.state}">보기</span>
+                <select name="state">
+                    <option value="OPEN" th:text="#{portal.srm.po.state.open}">진행 중</option>
+                    <option value="ALL" th:text="#{portal.srm.po.state.all}">전체</option>
+                </select></label>
+            <label><span th:text="#{portal.srm.po.keyword}">발주 번호</span><input name="keyword" maxlength="100"></label>
+            <button type="submit" th:text="#{common.search}">조회</button>
+        </form>
+        <p id="listMsg" class="sp-msg" role="alert" hidden></p>
+        <div class="sp-scroll">
+            <table class="sp-table" id="poTable">
+                <thead><tr>
+                    <th th:text="#{portal.srm.po.col.poNo}">발주 번호</th>
+                    <th th:text="#{portal.srm.po.col.rev}">개정</th>
+                    <th th:text="#{portal.srm.po.col.poDate}">발주일</th>
+                    <th th:text="#{portal.srm.col.plant}">공장</th>
+                    <th th:text="#{portal.srm.col.status}">상태</th>
+                    <th th:text="#{portal.srm.po.col.ack}">회신</th>
+                    <th th:text="#{portal.srm.po.col.ackDue}">회신 기한</th>
+                    <th th:text="#{portal.srm.po.col.amt}">금액</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <section id="detail" class="sp-detail" hidden>
+            <h2 id="detailTitle">발주</h2>
+            <p id="detailInfo" class="pt-muted"></p>
+            <div class="sp-scroll">
+                <table class="sp-table" id="lineTable">
+                    <thead><tr>
+                        <th th:text="#{portal.srm.col.lineNo}">행</th>
+                        <th th:text="#{portal.srm.col.item}">품목</th>
+                        <th th:text="#{portal.srm.po.col.qty}">발주 수량</th>
+                        <th th:text="#{portal.srm.po.col.open}">남은 수량</th>
+                        <th th:text="#{portal.srm.po.col.price}">단가</th>
+                        <th th:text="#{portal.srm.po.col.lineAmt}">금액</th>
+                        <th th:text="#{portal.srm.po.col.due}">요구 납기</th>
+                        <th th:text="#{portal.srm.po.col.promised}">약속(유효 회신)</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <h2 th:text="#{portal.srm.ack.history}">회신 이력</h2>
+            <ul id="ackHistory" class="sp-history"></ul>
+
+            <div id="ackBox" class="sp-box">
+                <h2 th:text="#{portal.srm.ack.title}">납기 회신</h2>
+                <form id="ackForm" autocomplete="off">
+                    <div class="sp-fields">
+                        <label><span th:text="#{portal.srm.ack.byNm}">회신자 이름</span><input data-field="ackByNm" maxlength="100"></label>
+                        <label><span th:text="#{portal.srm.ack.on}">회신일(비우면 오늘)</span><input type="date" data-field="ackOn"></label>
+                        <label class="sp-check"><input type="checkbox" id="rejectChk"> <span th:text="#{portal.srm.ack.reject}">이 발주를 받을 수 없음(거절)</span></label>
+                        <label class="sp-span" id="reasonBox" hidden><span th:text="#{portal.srm.ack.rejectReason}">거절 사유</span>
+                            <input data-field="rejectReason" maxlength="500"></label>
+                        <label class="sp-span"><span th:text="#{portal.srm.ack.remark}">메모</span><input data-field="remark" maxlength="500"></label>
+                    </div>
+                    <div id="promiseBox" class="sp-scroll">
+                        <table class="sp-table" id="promiseTable">
+                            <thead><tr>
+                                <th th:text="#{portal.srm.col.lineNo}">행</th>
+                                <th th:text="#{portal.srm.col.item}">품목</th>
+                                <th th:text="#{portal.srm.ack.promisedDate}">약속 납기</th>
+                                <th th:text="#{portal.srm.ack.promisedQty}">약속 수량</th>
+                                <th th:text="#{portal.srm.ack.lineRemark}">메모</th>
+                                <th></th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <ul id="ackMsg" class="sp-msg" role="alert" hidden></ul>
+                    <p id="ackOk" class="sp-ok" role="status" hidden th:text="#{portal.srm.ack.saved}">회신을 보냈습니다.</p>
+                    <div class="sp-actions"><button type="submit" id="ackBtn" th:text="#{portal.srm.ack.submit}">회신 보내기</button></div>
+                </form>
+            </div>
+            <p id="ackClosed" class="pt-muted" hidden th:text="#{portal.srm.ack.closed}">이 발주는 지금 회신할 수 없습니다(입고 중·마감·취소·개정 중).</p>
+        </section>
+    </main>
+</div>
+<th:block th:replace="~{portal/layout :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/views/srm/portal-po.js}"></script>
+</body>
+</html>

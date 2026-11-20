@@ -1,0 +1,7 @@
+* text=auto
+*.sh text eol=lf
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
+# vendor 는 npm 원본 바이트 그대로 (SHA256SUMS 대조 — 줄바꿈 변환 금지)
+src/main/resources/static/vendor/** -text

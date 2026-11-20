@@ -1,0 +1,10 @@
+/*
+ * SRM 화면 전용 (docs/31) — 공통 page.css 를 고치지 않는다(docs/29 6장).
+ * srmTableScroll: 칸이 많은 조회 표는 좁은 화면(390)에서 페이지 대신 표만 가로로 스크롤한다.
+ */
+.srm-table-scroll { max-width: 100%; overflow-x: auto; }
+.srm-table-scroll .hb-cmp-table { min-width: 720px; }
+/* 납품서 인쇄의 스캔 키(ASN:{번호}) — 바코드 그림 전 글자로 크게 */
+.srm-scan-key { font-family: var(--hb-font-mono, monospace); font-size: 1.6rem; font-weight: 700; letter-spacing: .05em; }
+/* 스크롤 화면(통지 이력·진행 현황)의 hb.grid — 쪽 전체가 스크롤이라 그리드에 높이를 준다(그리드 안에서 행이 스크롤, 머리·쪽 넘김은 고정) */
+.srm-grid-page { height: min(70vh, 640px); min-height: 280px; }

@@ -1,0 +1,337 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- PMS 3단계 산출물·게이트 심사 (docs/32 PM3). 회사 범위는 RLS — 조건에 comp_cd 를 쓰지 않는다 -->
+<mapper namespace="io.smarthappy.module.pms.GateMapper">
+
+    <!-- ================================================================ 템플릿 산출물 칸·점검 문구 -->
+
+    <sql id="tiCols">ti_id, tt_id, kind, seq, item_nm, required_yn, form_doc_no</sql>
+
+    <select id="findTemplateItems" resultType="io.smarthappy.module.pms.GateDtos$TemplateItemRow">
+        select <include refid="tiCols"/> from pms_template_item where tmpl_id = #{tmplId} order by tt_id, kind, seq
+    </select>
+
+    <select id="findTemplateItem" resultType="io.smarthappy.module.pms.GateDtos$TemplateItemRow">
+        select <include refid="tiCols"/> from pms_template_item where ti_id = #{id}
+    </select>
+
+    <select id="findTemplateItemTmplId" resultType="long">
+        select tmpl_id from pms_template_item where ti_id = #{id}
+    </select>
+
+    <!-- 순번 = 같은 작업·종류 안 마지막 + 10 (템플릿 머리 잠금 안에서 부른다) -->
+    <select id="insertTemplateItem" resultType="long" flushCache="true">
+        insert into pms_template_item (comp_cd, tmpl_id, tt_id, kind, seq, item_nm, required_yn, form_doc_no, created_by)
+        values (hb_current_comp(), #{tmplId}, #{ttId}, #{kind},
+                (select coalesce(max(seq), 0) + 10 from pms_template_item where tt_id = #{ttId} and kind = #{kind}),
+                #{itemNm}, #{requiredYn}, #{formDocNo}, #{by})
+        returning ti_id
+    </select>
+
+    <delete id="deleteTemplateItem">
+        delete from pms_template_item where ti_id = #{id}
+    </delete>
+
+    <delete id="deleteTemplateItemsOfTask">
+        delete from pms_template_item where tt_id = #{ttId}
+    </delete>
+
+    <!-- ================================================================ 게이트 점검 문구(프로젝트) -->
+
+    <insert id="insertTaskCheck">
+        insert into pms_task_check (comp_cd, proj_id, task_id, seq, check_nm, created_by)
+        values (hb_current_comp(), #{projId}, #{taskId}, #{seq}, #{checkNm}, #{by})
+    </insert>
+
+    <select id="findTaskChecks" resultType="string">
+        select check_nm from pms_task_check where task_id = #{taskId} order by seq
+    </select>
+
+    <delete id="deleteTaskChecks">
+        delete from pms_task_check where task_id = #{taskId}
+    </delete>
+
+    <!-- ================================================================ 산출물 -->
+
+    <sql id="delivCols">
+        d.deliv_id, d.proj_id, d.task_id, d.seq, d.deliv_nm, d.required_yn, d.form_doc_no, d.owner_user_id, u.login_id as owner_login_id,
+        u.user_nm as owner_nm, d.due_date, d.status, d.ref_type, d.ref_id, f.orig_name as file_name, d.waive_reason,
+        d.decision_note, d.decided_by, d.decided_at, d.submitted_by, d.submitted_at, d.sub_cnt, d.row_ver,
+        t.task_nm, t.task_type, t.owner_user_id as task_owner_user_id, t.plan_end as task_plan_end,
+        coalesce(d.due_date, t.plan_end) as due
+    </sql>
+
+    <sql id="delivFrom">
+        from pms_deliverable d
+        join pms_task t on t.task_id = d.task_id
+        left join sys_user u on u.user_id = d.owner_user_id
+        left join sys_file f on d.ref_type = 'FILE' and f.file_id = d.ref_id
+    </sql>
+
+    <select id="findDeliverables" resultType="io.smarthappy.module.pms.GateDtos$DelivRow">
+        select <include refid="delivCols"/> <include refid="delivFrom"/>
+         where d.proj_id = #{projId}
+         order by d.task_id, d.seq
+    </select>
+
+    <select id="findDeliverable" resultType="io.smarthappy.module.pms.GateDtos$DelivRow">
+        select <include refid="delivCols"/> <include refid="delivFrom"/>
+         where d.deliv_id = #{id}
+    </select>
+
+    <select id="findDeliverableProjId" resultType="long">
+        select proj_id from pms_deliverable where deliv_id = #{id}
+    </select>
+
+    <select id="findDeliverableProjStatus" resultType="string">
+        select p.status from pms_deliverable d join pms_project p on p.proj_id = d.proj_id
+         where d.deliv_id = #{id} and d.ref_type is distinct from 'QMS_DOC_REV'
+    </select>
+
+    <!-- 제출한 파일은 근거로 굳힌다(공통 sys_file.locked_yn — 한 방향, 공통 트리거가 삭제·변경을 막는다) -->
+    <update id="lockFile">
+        update sys_file set locked_yn = 'Y', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where file_id = #{fileId} and target_type = 'pms-deliverable' and locked_yn = 'N'
+    </update>
+
+    <select id="insertDeliverable" resultType="long" flushCache="true">
+        insert into pms_deliverable (comp_cd, proj_id, task_id, seq, deliv_nm, required_yn, form_doc_no, owner_user_id, due_date,
+                                     created_by, updated_by)
+        values (hb_current_comp(), #{projId}, #{taskId},
+                (select coalesce(max(seq), 0) + 10 from pms_deliverable where task_id = #{taskId}),
+                #{delivNm}, #{requiredYn}, #{formDocNo}, #{ownerUserId}, #{dueDate}, #{by}, #{by})
+        returning deliv_id
+    </select>
+
+    <update id="updateDeliverable">
+        update pms_deliverable
+           set deliv_nm = #{delivNm}, required_yn = #{requiredYn}, form_doc_no = #{formDocNo}, owner_user_id = #{ownerUserId},
+               due_date = #{dueDate}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where deliv_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <!-- 새 제출: 결정 칸은 비운다(이전 결정은 이력에 남아 있다) -->
+    <update id="submitDeliverable">
+        update pms_deliverable
+           set status = 'SUBMITTED', ref_type = 'FILE', ref_id = #{fileId}, sub_cnt = sub_cnt + 1,
+               submitted_by = #{by}, submitted_at = now(), decided_by = null, decided_at = null, decision_note = null,
+               waive_reason = null, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where deliv_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="linkDeliverableDoc">
+        update pms_deliverable
+           set status = 'SUBMITTED', ref_type = #{refType}, ref_id = #{refId}, sub_cnt = sub_cnt + 1,
+               submitted_by = #{by}, submitted_at = now(), decided_by = null, decided_at = null, decision_note = null,
+               waive_reason = null, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where deliv_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <update id="approveFromDoc">
+        update pms_deliverable
+           set status = 'APPROVED', decision_note = #{note}, decided_by = #{by}, decided_at = now(),
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where deliv_id = #{id} and status = 'SUBMITTED' and ref_type in ('QMS_DOC_REV', 'PLM_PPAP', 'APQP_FMEA', 'APQP_CP')
+    </update>
+
+    <select id="countPpapLinked" resultType="int">
+        select count(*) from pms_deliverable where proj_id = #{projId} and ref_type = 'PLM_PPAP'
+    </select>
+
+    <select id="findProjectEcoId" resultType="long">
+        select eco_id from pms_project where proj_id = #{projId}
+    </select>
+
+    <select id="findDocPending" resultType="io.smarthappy.module.pms.GateDtos$DelivRow">
+        select <include refid="delivCols"/> <include refid="delivFrom"/>
+         where d.proj_id = #{projId} and d.ref_type in ('QMS_DOC_REV', 'PLM_PPAP', 'APQP_FMEA', 'APQP_CP') and d.status = 'SUBMITTED'
+         order by d.deliv_id
+    </select>
+
+    <update id="decideDeliverable">
+        update pms_deliverable
+           set status = #{status},
+               waive_reason = case when #{status} = 'WAIVED' then #{note} else null end,
+               decision_note = case when #{status} in ('APPROVED', 'REJECTED') then #{note} else null end,
+               decided_by = case when #{status} = 'NONE' then null else #{by} end,
+               decided_at = case when #{status} = 'NONE' then null else now() end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where deliv_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <delete id="deleteDeliverable">
+        delete from pms_deliverable where deliv_id = #{id}
+    </delete>
+
+    <select id="countDeliverableHist" resultType="int">
+        select count(*) from pms_deliverable_hist where deliv_id = #{id}
+    </select>
+
+    <insert id="insertHist">
+        insert into pms_deliverable_hist (comp_cd, proj_id, deliv_id, action, file_id, note, created_by)
+        values (hb_current_comp(), #{projId}, #{delivId}, #{action}, #{fileId}, #{note}, #{by})
+    </insert>
+
+    <insert id="insertHistDoc">
+        insert into pms_deliverable_hist (comp_cd, proj_id, deliv_id, action, doc_rev_id, ppap_id, fmea_id, cp_id, note, created_by)
+        values (hb_current_comp(), #{projId}, #{delivId}, 'LINK', #{docRevId}, #{ppapId}, #{fmeaId}, #{cpId}, #{note}, #{by})
+    </insert>
+
+    <select id="findHist" resultType="io.smarthappy.module.pms.GateDtos$HistRow">
+        select h.dh_id, h.action, h.file_id, f.orig_name as file_name, h.doc_rev_id, h.ppap_id, h.fmea_id, h.cp_id, h.note, h.created_at,
+               h.created_by
+          from pms_deliverable_hist h left join sys_file f on f.file_id = h.file_id
+         where h.deliv_id = #{delivId}
+         order by h.dh_id desc
+    </select>
+
+    <select id="countDeliverablesWithHist" resultType="int">
+        select count(*) from pms_deliverable d
+         where d.task_id = #{taskId}
+           and (d.status &lt;&gt; 'NONE' or d.sub_cnt > 0 or exists (select 1 from pms_deliverable_hist h where h.deliv_id = d.deliv_id))
+    </select>
+
+    <delete id="deleteDeliverablesOfTask">
+        delete from pms_deliverable where task_id = #{taskId}
+    </delete>
+
+    <select id="countReviewsOfTask" resultType="int">
+        select count(*) from pms_gate_review where gate_task_id = #{taskId}
+    </select>
+
+    <select id="countIssuesOfTask" resultType="int">
+        select count(*) from pms_issue where task_id = #{taskId}
+    </select>
+
+    <select id="countOpenRequired" resultType="int">
+        select count(*) from pms_deliverable
+         where proj_id = #{projId} and required_yn = 'Y' and status not in ('APPROVED', 'WAIVED')
+    </select>
+
+    <select id="countOpenIssues" resultType="int">
+        select count(*) from pms_issue where proj_id = #{projId} and status &lt;&gt; 'CLOSED'
+    </select>
+
+    <!-- ================================================================ 게이트 심사 -->
+
+    <sql id="reviewCols">
+        r.review_id, r.proj_id, r.gate_task_id, r.review_no, r.review_date, r.decision, r.status, r.summary, r.req_cnt, r.ready_cnt,
+        r.apr_id, a.status as apr_status, a.requester_id as apr_requester_id, r.decided_at, r.decided_by, r.row_ver,
+        r.created_at, r.created_by
+    </sql>
+
+    <select id="findReviewsOfProject" resultType="io.smarthappy.module.pms.GateDtos$ReviewRow">
+        select <include refid="reviewCols"/>
+          from pms_gate_review r left join apr_request a on a.apr_id = r.apr_id
+         where r.proj_id = #{projId}
+         order by r.gate_task_id, r.review_no desc
+    </select>
+
+    <select id="findReview" resultType="io.smarthappy.module.pms.GateDtos$ReviewRow">
+        select <include refid="reviewCols"/>
+          from pms_gate_review r left join apr_request a on a.apr_id = r.apr_id
+         where r.review_id = #{id}
+    </select>
+
+    <select id="lockReview" resultType="string" flushCache="true">
+        select status from pms_gate_review where review_id = #{id} for update
+    </select>
+
+    <select id="nextReviewNo" resultType="int">
+        select coalesce(max(review_no), 0) + 1 from pms_gate_review where gate_task_id = #{gateTaskId}
+    </select>
+
+    <select id="insertReview" resultType="long" flushCache="true">
+        insert into pms_gate_review (comp_cd, proj_id, gate_task_id, review_no, review_date, created_by, updated_by)
+        values (hb_current_comp(), #{projId}, #{gateTaskId}, #{no}, #{reviewDate}, #{by}, #{by})
+        returning review_id
+    </select>
+
+    <update id="updateReview">
+        update pms_gate_review
+           set review_date = #{reviewDate}, decision = #{decision}, summary = #{summary},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where review_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="toApproval">
+        update pms_gate_review
+           set status = 'IN_APPROVAL', req_cnt = #{reqCnt}, ready_cnt = #{readyCnt}, apr_id = null,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where review_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="setAprId">
+        update pms_gate_review set apr_id = #{aprId} where review_id = #{id}
+    </update>
+
+    <update id="backToDraft">
+        update pms_gate_review
+           set status = 'DRAFT', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where review_id = #{id} and status = 'IN_APPROVAL'
+    </update>
+
+    <update id="decideReview">
+        update pms_gate_review
+           set status = 'DECIDED', req_cnt = #{reqCnt}, ready_cnt = #{readyCnt}, decided_at = now(), decided_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where review_id = #{id} and status in ('DRAFT', 'IN_APPROVAL')
+    </update>
+
+    <update id="cancelReview">
+        update pms_gate_review
+           set status = 'CANCELLED', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where review_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <select id="findChecks" resultType="io.smarthappy.module.pms.GateDtos$CheckRow">
+        select gc_id, seq, check_nm, result, note from pms_gate_check where review_id = #{reviewId} order by seq
+    </select>
+
+    <delete id="deleteChecks">
+        delete from pms_gate_check where review_id = #{reviewId}
+    </delete>
+
+    <insert id="insertCheck">
+        insert into pms_gate_check (comp_cd, review_id, seq, check_nm, result, note)
+        values (hb_current_comp(), #{reviewId}, #{seq}, #{checkNm}, #{result}, #{note})
+    </insert>
+
+    <select id="findConds" resultType="io.smarthappy.module.pms.GateDtos$CondRow">
+        select c.cond_id, c.seq, c.title, c.owner_user_id, u.login_id as owner_login_id, u.user_nm as owner_nm, c.due_date,
+               c.issue_id, i.issue_no
+          from pms_gate_cond c
+          left join sys_user u on u.user_id = c.owner_user_id
+          left join pms_issue i on i.issue_id = c.issue_id
+         where c.review_id = #{reviewId} order by c.seq
+    </select>
+
+    <delete id="deleteConds">
+        delete from pms_gate_cond where review_id = #{reviewId}
+    </delete>
+
+    <insert id="insertCond">
+        insert into pms_gate_cond (comp_cd, review_id, seq, title, owner_user_id, due_date)
+        values (hb_current_comp(), #{reviewId}, #{seq}, #{title}, #{ownerUserId}, #{dueDate})
+    </insert>
+
+    <update id="setCondIssue">
+        update pms_gate_cond set issue_id = #{issueId} where cond_id = #{condId} and issue_id is null
+    </update>
+
+    <select id="findAprLines" resultType="io.smarthappy.module.pms.GateDtos$AprLineRow">
+        select l.seq, l.approver_id, u.user_nm as approver_nm, l.line_type, l.status, l.acted_at, l.comment
+          from apr_line l join sys_user u on u.user_id = l.approver_id
+         where l.apr_id = #{aprId} order by l.seq
+    </select>
+
+    <!-- ================================================================ 이슈(조건부 통과 조건) -->
+
+    <select id="insertGateIssue" resultType="long" flushCache="true">
+        insert into pms_issue (comp_cd, issue_no, proj_id, task_id, title, severity, owner_user_id, due_date, source, gate_review_id,
+                               issue_type, created_by, updated_by)
+        values (hb_current_comp(), #{issueNo}, #{projId}, #{taskId}, #{title}, 'MID', #{ownerUserId}, #{dueDate}, 'GATE', #{reviewId},
+                'RISK', #{by}, #{by})
+        returning issue_id
+    </select>
+</mapper>

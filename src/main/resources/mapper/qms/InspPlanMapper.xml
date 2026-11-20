@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 검사계획 (P3 QMS Q1, docs/29). 대상 키의 NULL 칸은 coalesce(…, 0) 로 비교 — 유일 인덱스·배제 제약과 같은 식 -->
+<mapper namespace="io.smarthappy.module.qms.InspPlanMapper">
+
+    <!-- ================================================================ 머리 -->
+
+    <!-- 확정본 행 중 지금 특성 규격과 스냅샷이 다른 행 -->
+    <sql id="specDiff">
+        (l.nominal, l.lsl, l.usl, l.unit_nm, l.scale, l.special_cls, l.data_type)
+            is distinct from (ch.nominal, ch.lsl, ch.usl, ch.unit_nm, ch.scale, ch.special_cls, ch.data_type)
+    </sql>
+
+    <sql id="headCols">
+        p.insp_plan_id, p.insp_type, p.item_id, i.item_cd, i.item_nm, i.use_yn as item_use_yn,
+        p.item_class_id, c.class_cd, c.class_nm, c.use_yn as class_use_yn,
+        p.proc_id, pr.proc_cd, pr.proc_nm, pr.use_yn as proc_use_yn,
+        coalesce(i.item_cd, c.class_cd) as target_cd, coalesce(i.item_nm, c.class_nm) as target_nm,
+        p.alt_no, p.rev, p.status, p.valid_from, p.valid_to, p.change_no, p.change_reason, p.remark, p.released_at, p.released_by,
+        p.row_ver, p.updated_at, p.updated_by,
+        p.doc_rev_id,
+        (select d.doc_no || ' / ' || r.rev from mst_doc_rev r join mst_doc d on d.doc_id = r.doc_id where r.doc_rev_id = p.doc_rev_id) as doc_label,
+        (select r.status from mst_doc_rev r where r.doc_rev_id = p.doc_rev_id) as doc_rev_status,
+        (select count(*) from qms_insp_plan_line l where l.insp_plan_id = p.insp_plan_id) as line_cnt,
+        case when p.status = 'RELEASED' then
+            (select count(*) from qms_insp_plan_line l join qms_char ch on ch.char_id = l.char_id
+              where l.insp_plan_id = p.insp_plan_id and <include refid="specDiff"/>)
+        else 0 end as spec_changed_cnt
+    </sql>
+
+    <sql id="from">
+        from qms_insp_plan p
+        left join mst_item i on i.item_id = p.item_id
+        left join mst_item_class c on c.class_id = p.item_class_id
+        left join mst_proc pr on pr.proc_id = p.proc_id
+    </sql>
+
+    <sql id="where">
+        <include refid="from"/>
+        <where>
+            <if test="q.inspType != null">and p.insp_type = #{q.inspType}</if>
+            <if test="q.targetLike != null">and (coalesce(i.item_cd, c.class_cd) ilike #{q.targetLike} escape '\'
+                or coalesce(i.item_nm, c.class_nm) ilike #{q.targetLike} escape '\')</if>
+            <if test="q.procCd != null">and pr.proc_cd = #{q.procCd}</if>
+            <if test="q.status != null">and p.status = #{q.status}</if>
+            <if test="q.status == null and !q.withObsolete">and p.status &lt;&gt; 'OBSOLETE'</if>
+            <if test="q.specChangedOnly">and p.status = 'RELEASED' and exists (
+                select 1 from qms_insp_plan_line l join qms_char ch on ch.char_id = l.char_id
+                 where l.insp_plan_id = p.insp_plan_id and <include refid="specDiff"/>)</if>
+        </where>
+    </sql>
+
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'INSP_TYPE'">p.insp_type</when>
+                <when test="o.key == 'TARGET_CD'">coalesce(i.item_cd, c.class_cd)</when>
+                <when test="o.key == 'PROC_CD'">pr.proc_cd</when>
+                <when test="o.key == 'REV'">p.rev</when>
+                <when test="o.key == 'STATUS'">p.status</when>
+                <when test="o.key == 'VALID_FROM'">p.valid_from</when>
+                <otherwise>p.updated_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        p.insp_plan_id
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.QmsDtos$PlanRow">
+        select <include refid="headCols"/> <include refid="where"/> <include refid="orderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.qms.QmsDtos$PlanRow" fetchSize="1000">
+        select <include refid="headCols"/> <include refid="where"/> <include refid="orderBy"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.QmsDtos$PlanRow">
+        select <include refid="headCols"/> <include refid="from"/> where p.insp_plan_id = #{id}
+    </select>
+
+    <sql id="keyMatch">
+        p.insp_type = #{k.inspType}
+        and coalesce(p.item_id, 0) = coalesce(cast(#{k.itemId} as bigint), 0)
+        and coalesce(p.item_class_id, 0) = coalesce(cast(#{k.itemClassId} as bigint), 0)
+        and coalesce(p.proc_id, 0) = coalesce(cast(#{k.procId} as bigint), 0)
+        and p.alt_no = #{k.altNo}
+    </sql>
+
+    <select id="findRevs" resultType="string">
+        select p.rev from qms_insp_plan p where <include refid="keyMatch"/>
+    </select>
+
+    <select id="findDraftId" resultType="long">
+        select p.insp_plan_id from qms_insp_plan p where <include refid="keyMatch"/> and p.status = 'DRAFT'
+    </select>
+
+    <select id="insertHeader" resultType="long" flushCache="true">
+        insert into qms_insp_plan (comp_cd, insp_type, item_id, item_class_id, proc_id, alt_no, rev, valid_from, change_no,
+                                   change_reason, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.inspType}, #{f.itemId}, #{f.itemClassId}, #{f.procId}, #{f.altNo}, #{f.rev}, #{f.validFrom},
+                #{f.changeNo}, #{f.changeReason}, #{f.remark}, #{by}, #{by})
+        returning insp_plan_id
+    </select>
+
+    <update id="updateHeader">
+        update qms_insp_plan
+           set rev = #{f.rev}, valid_from = #{f.validFrom}, change_no = #{f.changeNo}, change_reason = #{f.changeReason},
+               remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_plan_id = #{id} and status = 'DRAFT' and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- 검사기준서 연결(작성 중만) — 같은 회사·검사기준서·폐기본 아님은 트리거 hb_check_qms_insp_plan_doc -->
+    <update id="linkDoc">
+        update qms_insp_plan set doc_rev_id = #{docRevId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_plan_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <!-- 새 리비전: 원본의 검사기준서 연결을 이어받되 그사이 폐기된 리비전이면 비운다 -->
+    <update id="copyDoc">
+        update qms_insp_plan t
+           set doc_rev_id = (select s.doc_rev_id from qms_insp_plan s join mst_doc_rev r on r.doc_rev_id = s.doc_rev_id
+                              where s.insp_plan_id = #{fromId} and r.status &lt;&gt; 'OBSOLETE')
+         where t.insp_plan_id = #{toId} and t.status = 'DRAFT'
+    </update>
+
+    <!-- 연결할 수 있는 검사기준서 리비전(작성 중·결재 중·배포본) -->
+    <select id="docChoices" resultType="io.smarthappy.module.qms.QmsDtos$DocChoice">
+        select r.doc_rev_id, d.doc_no, d.doc_nm, r.rev, r.status
+          from mst_doc_rev r join mst_doc d on d.doc_id = r.doc_id
+         where d.doc_type = 'INSP_STD' and d.use_yn = 'Y' and r.status &lt;&gt; 'OBSOLETE'
+         order by d.doc_no, r.doc_rev_id desc
+         limit 1000
+    </select>
+
+    <update id="touch">
+        update qms_insp_plan set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_plan_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <select id="findReleasedOverlaps" resultType="io.smarthappy.module.qms.QmsDtos$PlanRow">
+        select <include refid="headCols"/> <include refid="from"/>
+         where <include refid="keyMatch"/> and p.status = 'RELEASED' and p.insp_plan_id &lt;&gt; #{exceptId}
+           and daterange(p.valid_from, p.valid_to, '[)') &amp;&amp; daterange(cast(#{from} as date), null, '[)')
+         order by p.valid_from
+    </select>
+
+    <update id="closeValidTo">
+        update qms_insp_plan set valid_to = #{validTo}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_plan_id = #{id} and status = 'RELEASED'
+    </update>
+
+    <!-- 확정 순간의 특성 규격 스냅샷은 머리 트리거(hb_guard_qms_insp_plan)가 행에 복사한다 -->
+    <update id="release">
+        update qms_insp_plan set status = 'RELEASED', released_at = now(), released_by = #{by},
+                                 row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_plan_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="obsolete">
+        update qms_insp_plan set status = 'OBSOLETE', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where insp_plan_id = #{id} and status in ('DRAFT', 'RELEASED') and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 행 -->
+
+    <!-- 보이는 규격: 작성 중 = 지금 특성, 확정·폐기 = 스냅샷. 확정본만 "지금 특성과 다름" 표시 -->
+    <select id="findLines" resultType="io.smarthappy.module.qms.QmsDtos$LineRow">
+        select l.line_id, l.insp_plan_id, l.line_no, l.char_id, ch.char_type, ch.char_no, ch.char_nm, ch.use_yn as char_use_yn,
+               ci.item_cd as char_item_cd, cp.proc_cd as char_proc_cd,
+               l.method_nm, l.gauge_class, l.sampling_plan_id, s.plan_cd as sampling_plan_cd, s.plan_nm as sampling_plan_nm,
+               s.use_yn as sampling_use_yn, l.freq_type, l.freq_n, l.reaction_plan, l.remark, l.grp_nm, l.evidence_req,
+               case when p.status = 'DRAFT' then ch.nominal else l.nominal end as nominal,
+               case when p.status = 'DRAFT' then ch.lsl else l.lsl end as lsl,
+               case when p.status = 'DRAFT' then ch.usl else l.usl end as usl,
+               case when p.status = 'DRAFT' then ch.unit_nm else l.unit_nm end as unit_nm,
+               case when p.status = 'DRAFT' then ch.scale else l.scale end as scale,
+               case when p.status = 'DRAFT' then ch.special_cls else l.special_cls end as special_cls,
+               case when p.status = 'DRAFT' then ch.data_type else l.data_type end as data_type,
+               (p.status = 'RELEASED' and <include refid="specDiff"/>) as spec_changed,
+               ch.nominal as cur_nominal, ch.lsl as cur_lsl, ch.usl as cur_usl, ch.unit_nm as cur_unit_nm, ch.scale as cur_scale,
+               ch.data_type as cur_data_type, l.row_ver
+          from qms_insp_plan_line l
+          join qms_insp_plan p on p.insp_plan_id = l.insp_plan_id
+          join qms_char ch on ch.char_id = l.char_id
+          left join mst_item ci on ci.item_id = ch.item_id
+          left join mst_proc cp on cp.proc_id = ch.proc_id
+          join qms_sampling_plan s on s.sampling_plan_id = l.sampling_plan_id
+         where l.insp_plan_id = #{planId}
+         order by l.line_no, l.line_id
+    </select>
+
+    <select id="insertLine" resultType="long" flushCache="true">
+        insert into qms_insp_plan_line (comp_cd, insp_plan_id, line_no, char_id, method_nm, gauge_class, sampling_plan_id, freq_type,
+                                        freq_n, reaction_plan, remark, grp_nm, evidence_req, created_by, updated_by)
+        values (hb_current_comp(), #{planId}, #{l.lineNo}, #{l.charId}, #{l.methodNm}, #{l.gaugeClass}, #{l.samplingPlanId},
+                #{l.freqType}, #{l.freqN}, #{l.reactionPlan}, #{l.remark}, #{l.grpNm}, #{l.evidenceReq}, #{by}, #{by})
+        returning line_id
+    </select>
+
+    <update id="updateLine">
+        update qms_insp_plan_line
+           set line_no = #{l.lineNo}, char_id = #{l.charId}, method_nm = #{l.methodNm}, gauge_class = #{l.gaugeClass},
+               sampling_plan_id = #{l.samplingPlanId}, freq_type = #{l.freqType}, freq_n = #{l.freqN},
+               reaction_plan = #{l.reactionPlan}, remark = #{l.remark}, grp_nm = #{l.grpNm}, evidence_req = #{l.evidenceReq},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where line_id = #{l.lineId} and insp_plan_id = #{planId}
+    </update>
+
+    <delete id="deleteLine">
+        delete from qms_insp_plan_line where line_id = #{lineId} and insp_plan_id = #{planId}
+    </delete>
+
+    <insert id="copyLines">
+        insert into qms_insp_plan_line (comp_cd, insp_plan_id, line_no, char_id, method_nm, gauge_class, sampling_plan_id, freq_type,
+                                        freq_n, reaction_plan, remark, grp_nm, evidence_req, created_by, updated_by)
+        select comp_cd, #{toId}, line_no, char_id, method_nm, gauge_class, sampling_plan_id, freq_type, freq_n, reaction_plan, remark,
+               grp_nm, evidence_req, #{by}, #{by}
+          from qms_insp_plan_line where insp_plan_id = #{fromId}
+         order by line_no
+    </insert>
+
+    <!-- ================================================================ 찾기 -->
+
+    <select id="findItemByCd" resultType="io.smarthappy.module.qms.QmsDtos$ItemLookup">
+        select item_id, item_cd, item_nm, item_class_id, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="findClassByCd" resultType="io.smarthappy.module.qms.QmsDtos$TargetLookup">
+        select class_id as id, class_cd as cd, class_nm as nm, use_yn from mst_item_class where class_cd = #{classCd}
+    </select>
+
+    <select id="findProcByCd" resultType="io.smarthappy.module.qms.QmsDtos$TargetLookup">
+        select proc_id as id, proc_cd as cd, proc_nm as nm, use_yn from mst_proc where proc_cd = #{procCd}
+    </select>
+
+    <select id="findClasses" resultType="io.smarthappy.module.qms.QmsDtos$TargetLookup">
+        select class_id as id, class_cd as cd, class_nm as nm, use_yn from mst_item_class where use_yn = 'Y'
+         order by sort_no, class_cd
+    </select>
+
+    <select id="findProcs" resultType="io.smarthappy.module.qms.QmsDtos$TargetLookup">
+        select proc_id as id, proc_cd as cd, proc_nm as nm, use_yn from mst_proc where use_yn = 'Y' order by sort_no, proc_cd
+    </select>
+
+    <sql id="charCols">
+        ch.char_id, ch.char_type, ch.item_id, ch.proc_id, ch.char_no, ch.char_nm, i.item_cd, pr.proc_cd, ch.data_type, ch.unit_nm,
+        ch.scale, ch.nominal, ch.lsl, ch.usl, ch.special_cls, ch.use_yn
+    </sql>
+
+    <select id="findCharChoices" resultType="io.smarthappy.module.qms.QmsDtos$CharChoice">
+        select <include refid="charCols"/>
+          from qms_char ch
+          left join mst_item i on i.item_id = ch.item_id
+          left join mst_proc pr on pr.proc_id = ch.proc_id
+         where ch.use_yn = 'Y'
+           and ((ch.item_id is not null and ch.item_id = cast(#{itemId} as bigint))
+                or (ch.item_id is null and (cast(#{procId} as bigint) is null or ch.proc_id = cast(#{procId} as bigint))))
+         order by case when ch.item_id is not null then 0 else 1 end, pr.proc_cd nulls first, ch.sort_no, ch.char_no
+    </select>
+
+    <select id="findChar" resultType="io.smarthappy.module.qms.QmsDtos$CharChoice">
+        select <include refid="charCols"/>
+          from qms_char ch
+          left join mst_item i on i.item_id = ch.item_id
+          left join mst_proc pr on pr.proc_id = ch.proc_id
+         where ch.char_id = #{charId}
+    </select>
+
+    <select id="findCandidates" resultType="io.smarthappy.module.qms.QmsDtos$CandidateRow">
+        select insp_plan_id, insp_type, item_id, item_class_id, proc_id, alt_no, rev, status, valid_from, valid_to
+          from qms_insp_plan
+         where status = 'RELEASED' and insp_type = #{inspType}
+           and (item_id = #{itemId} or item_class_id = cast(#{classId} as bigint))
+    </select>
+</mapper>

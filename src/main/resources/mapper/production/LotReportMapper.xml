@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- LOT 역추적 보고서 (P2 7b, docs/25 4.10). 원장을 읽기만 한다 — 회사 조건은 RLS, 절마다 limit 은 서비스가 상한 + 1 -->
+<mapper namespace="io.smarthappy.module.production.LotReportMapper">
+
+    <select id="production" resultType="io.smarthappy.module.production.LotReportDtos$ProdRow">
+        select * from (
+            select 'RESULT' as kind, r.result_id as id, l.lot_no, w.wo_no, p.op_seq, p.proc_cd, p.proc_nm,
+                   trim_scale(r.good_qty)::text as good_qty, trim_scale(r.scrap_qty)::text as scrap_qty,
+                   trim_scale(r.rework_qty)::text as rework_qty, trim_scale(r.repair_qty)::text as repair_qty, r.unit_cd,
+                   k.worker_cd, k.worker_nm, t.terminal_cd, e.equip_cd, r.work_day::text as work_day, r.shift_cd, r.entry_method,
+                   r.reversal_of_id, exists (select 1 from prd_result x where x.reversal_of_id = r.result_id) as reversed, r.reason,
+                   r.occurred_at, r.recorded_by
+              from prd_result r
+              join prd_wo w on w.wo_id = r.wo_id
+              join prd_wo_proc p on p.wo_proc_id = r.wo_proc_id
+              left join lot_master l on l.lot_id = r.lot_id
+              left join mst_worker k on k.worker_id = r.performed_by
+              left join sys_terminal t on t.terminal_id = r.terminal_id
+              left join mst_equip e on e.equip_id = r.equip_id
+             where r.lot_id in <foreach collection="lotIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+            union all
+            select d.kind, d.rework_id, l.lot_no, w.wo_no, p.op_seq, p.proc_cd, p.proc_nm,
+                   trim_scale(d.good_qty)::text, trim_scale(d.scrap_qty)::text, null, null, d.unit_cd,
+                   k.worker_cd, k.worker_nm, null, null, null, null, d.entry_method, null, false, d.reason, d.occurred_at, d.recorded_by
+              from prd_rework d
+              join prd_wo w on w.wo_id = d.wo_id
+              join prd_wo_proc p on p.wo_proc_id = d.wo_proc_id
+              left join lot_master l on l.lot_id = d.lot_id
+              left join mst_worker k on k.worker_id = d.performed_by
+             where d.lot_id in <foreach collection="lotIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+        ) x
+         order by x.occurred_at, x.id
+         limit #{limit}
+    </select>
+
+    <select id="procIds" resultType="long">
+        select distinct wo_proc_id from prd_result
+         where lot_id in <foreach collection="lotIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+        union
+        select distinct wo_proc_id from prd_rework
+         where lot_id in <foreach collection="lotIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="woIds" resultType="long">
+        select distinct wo_id from lot_master
+         where wo_id is not null and lot_id in <foreach collection="lotIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="params" resultType="io.smarthappy.module.production.LotReportDtos$ParamRow">
+        select a.actual_id, w.wo_no, p.op_seq, p.proc_cd, a.param_cd, m.param_nm, trim_scale(a.value)::text as value,
+               trim_scale(m.lsl)::text as lsl, trim_scale(m.usl)::text as usl, m.unit_nm, a.judge, a.source, a.entry_method,
+               a.reversal_of_id, exists (select 1 from prd_param_actual x where x.reversal_of_id = a.actual_id) as reversed,
+               e.equip_cd, a.occurred_at
+          from prd_param_actual a
+          join prd_wo_proc p on p.wo_proc_id = a.wo_proc_id
+          join prd_wo w on w.wo_id = p.wo_id
+          join prd_wo_param m on m.wo_param_id = a.wo_param_id
+          left join mst_equip e on e.equip_id = a.equip_id
+         where a.wo_proc_id in <foreach collection="procIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+         order by p.op_seq, a.occurred_at, a.actual_id
+         limit #{limit}
+    </select>
+
+    <select id="closes" resultType="io.smarthappy.module.production.LotReportDtos$CloseRow">
+        select w.wo_no, p.op_seq, p.proc_cd, p.proc_nm, trim_scale(c.input_qty)::text as input_qty, trim_scale(c.good_qty)::text as good_qty,
+               trim_scale(c.scrap_qty)::text as scrap_qty, trim_scale(c.rework_qty)::text as rework_qty,
+               trim_scale(c.repair_qty)::text as repair_qty, trim_scale(c.eff_good_qty)::text as eff_good_qty,
+               trim_scale(c.diff_qty)::text as diff_qty, c.tol_pct, c.first_op_yn, c.occurred_at, c.recorded_by
+          from prd_wo_proc_close c
+          join prd_wo w on w.wo_id = c.wo_id
+          join prd_wo_proc p on p.wo_proc_id = c.wo_proc_id
+         where c.wo_id in <foreach collection="woIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+         order by w.wo_no, p.op_seq
+         limit #{limit}
+    </select>
+
+    <select id="states" resultType="io.smarthappy.module.production.LotReportDtos$StateRow">
+        select w.wo_no, e.equip_cd, s.state_cat, r.reason_cd, r.reason_nm, s.start_at, s.end_at
+          from cms_equip_state_log s
+          join prd_wo w on w.wo_id = s.wo_id
+          join mst_equip e on e.equip_id = s.equip_id
+          left join cms_state_reason r on r.reason_id = s.reason_id
+         where s.wo_id in <foreach collection="woIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+         order by s.start_at, s.state_log_id
+         limit #{limit}
+    </select>
+
+    <select id="receipts" resultType="io.smarthappy.module.production.LotReportDtos$RcvRow">
+        select r.receipt_id, h.node_cd, trim_scale(r.qty)::text as qty, r.unit_cd, r.entry_method, r.reversal_of_id, r.reason,
+               r.occurred_at, r.recorded_by
+          from prd_receipt r
+          join mst_equip_hier h on h.node_id = r.node_id
+         where r.lot_id = #{lotId}
+         order by r.occurred_at, r.receipt_id
+         limit #{limit}
+    </select>
+</mapper>

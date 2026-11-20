@@ -1,0 +1,25 @@
+# 의존성 알림 (docs/05 #7, docs/52 Y10)
+# - github-actions: 워크플로의 고정 SHA 를 새 판으로 올리는 PR(주 1회). 줄 끝 "# vX.Y.Z" 주석도 Dependabot 이 같이 고친다.
+# - gradle: 버전 올리기 PR 은 열지 않는다(open-pull-requests-limit 0). 잠금(gradle.lockfile)·체크섬(verification-metadata.xml)은
+#   사람이 갱신하고 차이를 검토한다(CLAUDE.md 명령어). 취약점 알림·보안 업데이트는 저장소 설정의 Dependabot alerts 로 받는다.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: 'CI 액션'
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

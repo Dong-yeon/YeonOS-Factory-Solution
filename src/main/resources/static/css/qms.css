@@ -1,0 +1,197 @@
+/*
+ * QMS 화면 전용 (P3 Q1 — qms-sampling, qms-insp-plan). 공통 page.css 는 P2 병행 중 건드리지 않는다(docs/29 6장) —
+ * 병합 뒤 공통으로 옮길 만한 규칙은 page.css 로. 색·크기는 의미 토큰만(DesignTokenGuardTest).
+ */
+
+/* display 를 가진 블록에도 hidden 이 이기게 (보기 전환·방식별 칸) */
+.hb-split[hidden], .hb-search[hidden], .hb-qms-aql[hidden], .hb-form label.hb-qms-m[hidden], .hb-qms-badge[hidden] { display: none; }
+
+/* 보기 전환(샘플링 계획 / AQL 표) */
+.hb-qms-views { margin: 0 0 var(--hb-space-4); }
+
+/* AQL 표 보기 — 페이지가 높이 고정(flex)이라 이 영역만 스크롤 */
+.hb-qms-aql { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--hb-space-4); }
+.hb-qms-aql-tables { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: var(--hb-space-5); align-items: start; }
+.hb-qms-aql-tables h3 { margin: 0 0 var(--hb-space-3); font-size: var(--hb-fs-md); }
+@container detail (max-width: 560px) {
+    .hb-qms-aql-tables { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 899px) {
+    .hb-qms-aql-tables { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 판정 미리보기 */
+.hb-qms-preview { display: flex; flex-wrap: wrap; gap: var(--hb-space-3); align-items: end; }
+.hb-qms-preview label span { display: block; margin-bottom: var(--hb-space-1); color: var(--hb-text-muted); font-size: var(--hb-fs-sm); }
+.hb-qms-preview input { width: 120px; min-height: var(--hb-ctl-h); padding: var(--hb-ctl-pad); border: 1px solid var(--hb-border-control);
+    border-radius: var(--hb-radius-md); font: inherit; background: var(--hb-bg-surface); }
+.hb-qms-result { margin: var(--hb-space-3) 0 0; }
+
+/* 검사계획 행: 1줄 = 순번·특성·샘플링·계측기·더보기·삭제, 2줄 = 규격(+ 다름 배지), 펼침 = 주기·방법·이탈 시 조치·비고 */
+.hb-qms-line-main { display: grid; grid-template-columns: 64px minmax(0, 1.8fr) minmax(0, 1.1fr) minmax(0, 1fr) auto auto;
+    gap: var(--hb-space-3); align-items: center; }
+.hb-qms-line-main input, .hb-qms-line-main select { width: 100%; min-height: var(--hb-ctl-h); padding: var(--hb-ctl-pad);
+    border: 1px solid var(--hb-border-control); border-radius: var(--hb-radius-md); font: inherit; background: var(--hb-bg-surface); }
+.hb-qms-line-main input[readonly] { background: var(--hb-bg-subtle); }
+.hb-qms-spec { margin: var(--hb-space-2) 0 0; color: var(--hb-text-muted); font-size: var(--hb-fs-sm); overflow-wrap: anywhere; }
+.hb-qms-badge { display: inline-block; margin-left: var(--hb-space-2); padding: 0 var(--hb-space-2); border: 1px solid var(--hb-status-warning-line);
+    border-radius: var(--hb-radius-md); background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); font-size: var(--hb-fs-sm); }
+.hb-qms-target { display: flex; flex-direction: column; gap: var(--hb-space-1); }
+@container detail (max-width: 560px) {
+    .hb-qms-line-main { grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+/* 계측기 교정 (Q2a) — 상태 한 줄(판정별 색), 이력 표 행 누르기, 좁은 상세에서 표만 가로 스크롤 */
+.hb-qms-status[hidden], .hb-form[hidden] { display: none; }
+.hb-qms-status { margin: 0 0 var(--hb-space-3); padding: var(--hb-space-2) var(--hb-space-3); border: 1px solid var(--hb-status-info-line);
+    border-radius: var(--hb-radius-md); background: var(--hb-status-info-bg); color: var(--hb-status-info-fg); }
+.hb-qms-status[data-status="OK"] { border-color: var(--hb-status-info-line); background: var(--hb-status-success-bg); color: var(--hb-status-success-fg); }
+.hb-qms-status[data-status="DUE_SOON"] { border-color: var(--hb-status-warning-line); background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); }
+.hb-qms-status[data-status="OVERDUE"], .hb-qms-status[data-status="NG"], .hb-qms-status[data-status="NO_RECORD"] {
+    border-color: var(--hb-status-danger-line); background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+.hb-qms-click { cursor: pointer; }
+.hb-qms-table-wrap { overflow-x: auto; margin-bottom: var(--hb-space-4); }
+
+/* GRR 연구 (Q2b) — 원자료 표(행 = 측정자 × 반복, 열 = 부품)는 칸이 많아 좁은 숫자 칸, 붙여넣기 상자 */
+.hb-qms-msa-grid input { width: 72px; min-height: var(--hb-ctl-h); padding: var(--hb-ctl-pad); border: 1px solid var(--hb-border-control);
+    border-radius: var(--hb-radius-md); font: inherit; text-align: right; background: var(--hb-bg-surface); }
+.hb-qms-msa-grid input[readonly] { background: var(--hb-bg-subtle); }
+.hb-qms-msa-grid th { white-space: nowrap; }
+.hb-qms-paste { display: flex; flex-wrap: wrap; gap: var(--hb-space-3); align-items: end; margin-top: var(--hb-space-3); }
+.hb-qms-paste label { flex: 1 1 240px; }
+.hb-qms-paste label span { display: block; margin-bottom: var(--hb-space-1); color: var(--hb-text-muted); font-size: var(--hb-fs-sm); }
+.hb-qms-paste textarea { width: 100%; padding: var(--hb-ctl-pad); border: 1px solid var(--hb-border-control); border-radius: var(--hb-radius-md);
+    font: inherit; background: var(--hb-bg-surface); }
+.hb-qms-status[data-status="ACCEPT"] { border-color: var(--hb-status-info-line); background: var(--hb-status-success-bg); color: var(--hb-status-success-fg); }
+.hb-qms-status[data-status="CONDITIONAL"] { border-color: var(--hb-status-warning-line); background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); }
+.hb-qms-status[data-status="REJECT"] { border-color: var(--hb-status-danger-line); background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+.hb-sub[hidden], .hb-qms-paste[hidden], #basisBox[hidden], #sigmaBox[hidden] { display: none; }
+
+/* 관리문서 (Q3) — 선택한 리비전 행, 결재선 입력 줄 */
+.hb-qms-sel td { background: var(--hb-status-info-bg); }
+.hb-qms-inline { display: flex; flex-wrap: wrap; gap: var(--hb-space-3); align-items: end; margin: var(--hb-space-3) 0; }
+.hb-qms-inline[hidden] { display: none; }
+.hb-qms-inline label span { display: block; margin-bottom: var(--hb-space-1); color: var(--hb-text-muted); font-size: var(--hb-fs-sm); }
+.hb-qms-inline select, .hb-qms-inline input { min-height: var(--hb-ctl-h); padding: var(--hb-ctl-pad); border: 1px solid var(--hb-border-control);
+    border-radius: var(--hb-radius-md); font: inherit; background: var(--hb-bg-surface); }
+.hb-qms-grow { flex: 1 1 200px; }
+.hb-qms-grow input { width: 100%; }
+#targetTable select, #targetTable input { min-height: var(--hb-ctl-h); padding: var(--hb-ctl-pad); border: 1px solid var(--hb-border-control);
+    border-radius: var(--hb-radius-md); font: inherit; background: var(--hb-bg-surface); }
+#fileBox[hidden], #approvalBox[hidden], #uploadBox[hidden] { display: none; }
+
+/* 정합 점검 — 결과 표 영역만 스크롤 */
+.hb-qms-cons { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+/* 시정조치 8D·CSR (Q4) — 기한 판정 색, 수평전개·CSR 대상 표 입력, CSR 목록(표 한 장)은 이 영역만 스크롤 */
+.hb-qms-status[data-status="CONTAIN_OVERDUE"], .hb-qms-status[data-status="CLOSE_OVERDUE"], .hb-qms-status[data-status="CANCELLED"] {
+    border-color: var(--hb-status-danger-line); background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+.hb-qms-status[data-status="CLOSED"] { border-color: var(--hb-status-info-line); background: var(--hb-status-success-bg); color: var(--hb-status-success-fg); }
+#spreadTable select, #spreadTable input { min-height: var(--hb-ctl-h); padding: var(--hb-ctl-pad); border: 1px solid var(--hb-border-control);
+    border-radius: var(--hb-radius-md); font: inherit; background: var(--hb-bg-surface); }
+#spreadTable input[data-col="targetCd"] { width: 120px; }
+.hb-qms-scroll { overflow: auto; }
+
+/* 4M 변경 (2부 Q5) — 4M 유형 체크 묶음, 상신 막힘 미리보기 목록, 영향 행 표 입력 */
+.hb-qms-m4 { border: 0; padding: 0; margin: 0; }
+.hb-qms-m4 legend { margin-bottom: var(--hb-space-1); color: var(--hb-text-muted); font-size: var(--hb-fs-sm); }
+.hb-qms-checks { display: flex; flex-wrap: wrap; gap: var(--hb-space-2) var(--hb-space-4); }
+.hb-form .hb-qms-checks label { display: inline-flex; flex-direction: row; gap: var(--hb-space-1); align-items: center; white-space: nowrap; }
+.hb-form .hb-qms-checks input { width: auto; min-height: 0; margin: 0; }
+.hb-qms-m4[aria-invalid="true"] .hb-qms-checks { outline: 1px solid var(--hb-status-danger-line); outline-offset: var(--hb-space-1); }
+.hb-qms-issues { margin: 0 0 var(--hb-space-3); padding: var(--hb-space-2) var(--hb-space-3) var(--hb-space-2) var(--hb-space-6);
+    border: 1px solid var(--hb-status-warning-line); border-radius: var(--hb-radius-md); background: var(--hb-status-warning-bg);
+    color: var(--hb-status-warning-fg); }
+.hb-qms-issues[hidden], #changeForm[hidden] { display: none; }
+#charTable select, #charTable input { min-height: var(--hb-ctl-h); padding: var(--hb-ctl-pad); border: 1px solid var(--hb-border-control);
+    border-radius: var(--hb-radius-md); font: inherit; background: var(--hb-bg-surface); max-width: 100%; }
+
+/* 검사 실행 (2부 Q6) — 행 카드, 판정 배지, 샘플 칩, 붙여넣기 줄 */
+.hb-qms-line { margin: 0 0 var(--hb-space-4); padding: var(--hb-space-3); border: 1px solid var(--hb-border-subtle); border-radius: var(--hb-radius-md); }
+.hb-qms-line h3 { margin: 0 0 var(--hb-space-2); font-size: var(--hb-fs-md); display: flex; flex-wrap: wrap; gap: var(--hb-space-2); align-items: center; }
+.hb-qms-verdict { padding: 0 var(--hb-space-2); border: 1px solid var(--hb-status-info-line); border-radius: var(--hb-radius-md);
+    background: var(--hb-status-info-bg); color: var(--hb-status-info-fg); font-size: var(--hb-fs-sm); }
+.hb-qms-verdict[data-v="OK"] { background: var(--hb-status-success-bg); color: var(--hb-status-success-fg); }
+.hb-qms-verdict[data-v="NG"] { border-color: var(--hb-status-danger-line); background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+.hb-qms-samples { display: flex; flex-wrap: wrap; gap: var(--hb-space-1); margin: var(--hb-space-2) 0; padding: 0; list-style: none; }
+.hb-qms-samples li { display: inline-flex; gap: var(--hb-space-1); align-items: center; padding: 0 var(--hb-space-2); border: 1px solid var(--hb-border-subtle);
+    border-radius: var(--hb-radius-md); font-size: var(--hb-fs-sm); }
+.hb-qms-samples li[data-bad="true"] { border-color: var(--hb-status-danger-line); background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+.hb-qms-samples button { min-height: 0; padding: 0 var(--hb-space-1); }
+.hb-qms-line textarea { width: 100%; min-height: calc(var(--hb-ctl-h) * 2); padding: var(--hb-ctl-pad); border: 1px solid var(--hb-border-control);
+    border-radius: var(--hb-radius-md); font: inherit; background: var(--hb-bg-surface); }
+.hb-qms-status[data-status="NG"] { border-color: var(--hb-status-danger-line); background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+#newForm input[data-field="lotQty"] { width: 110px; }
+
+/* 초품 확인 (2부 Q7) — 목록 위 소제목 */
+.hb-qms-sub-h { margin: var(--hb-space-4) 0 var(--hb-space-2); font-size: var(--hb-fs-md); }
+
+/* SPC 관리도 (P3 QMS 2부 Q10) — SVG 는 상자 폭에 맞춰 줄어든다 */
+.hb-spc-chart { width: 100%; margin-bottom: var(--hb-space-3); border: 1px solid var(--hb-border); background: var(--hb-surface); }
+.hb-spc-svg { display: block; width: 100%; height: auto; }
+.hb-spc-limit { fill: none; stroke: var(--hb-status-danger-fg); stroke-width: 1; stroke-dasharray: 4 3; }
+.hb-spc-center { fill: none; stroke: var(--hb-status-success-fg); stroke-width: 1; }
+.hb-spc-line { fill: none; stroke: var(--hb-text-muted); stroke-width: 1; }
+.hb-spc-pt { fill: var(--hb-text); }
+.hb-spc-alarm { fill: var(--hb-status-danger-fg); }
+.hb-spc-label { font-size: var(--hb-fs-xs); fill: var(--hb-text-muted); }
+.hb-spc-row-alarm td { color: var(--hb-status-danger-fg); }
+/* SPC 위반 원장 (docs/29_P3 19장) — 보기 전환, 이벤트가 남은 점은 테두리 */
+.hb-spc-view { margin: 0 0 var(--hb-space-3); }
+.hb-spc-event { stroke: var(--hb-text); stroke-width: 2; }
+.hb-search #statusField[hidden], #unitGrid[hidden], #eventGrid[hidden] { display: none; }
+.hb-qms-rules { display: inline-flex; flex-wrap: wrap; gap: var(--hb-space-2); align-items: center; border: 0; padding: 0; margin: 0; }
+.hb-qms-rules legend { float: left; margin-right: var(--hb-space-2); }
+.hb-qms-rules label { display: inline-flex; align-items: center; gap: 2px; }
+a.hb-btn-secondary[hidden] { display: none; }
+/* 부적합 처분 표 (P3 QMS 2부 Q8a) — 좁은 화면에서 칸이 글자 단위로 접히지 않게, 넘치면 표 상자 안에서만 가로 스크롤 */
+.hb-ncr-disp select { min-width: 8.5em; }
+.hb-ncr-disp input { min-width: 5em; }
+
+/* 위험 동작(취소·폐기·무효)은 도구줄 오른쪽 끝 — 저장과 떨어진 자리(docs/40 P1 ④, UI 단계 3) */
+.hb-qms-danger-zone {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--hb-space-3);
+    margin-left: auto;
+}
+/* 링크 버튼(a.hb-link-btn)의 작은 크기 — page.css 의 hb-btn-small 은 button 만 */
+.hb-page a.hb-link-btn.hb-btn-small { min-height: 0; padding: 3px var(--hb-space-4); font-size: var(--hb-fs-sm); }
+/* SPC 위반 조치 — OCAP 표준 조치 체크 목록(docs/29_P3 26장) */
+.hb-qms-ocap { flex-basis: 100%; border: 1px solid var(--hb-border-subtle); border-radius: var(--hb-radius-md); padding: var(--hb-space-2) var(--hb-space-3); margin: 0 0 var(--hb-space-3); }
+.hb-qms-ocap #ocapList { display: flex; flex-direction: column; gap: var(--hb-space-1); }
+/* 초품·종품 나란히(docs/29_P3 27장) — 넓으면 두 칸, 좁으면 한 칸 */
+.hb-qms-offpair-box { border-top: 1px solid var(--hb-border-subtle); margin-top: var(--hb-space-3); padding-top: var(--hb-space-2); }
+.hb-qms-offpair { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: var(--hb-space-3); }
+.hb-qms-offpair ul { list-style: none; margin: var(--hb-space-1) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--hb-space-1); }
+.hb-qms-offpair li { overflow-wrap: anywhere; }
+
+/* COPQ 품질 비용(docs/29_P3 29장) — 좁은 폭에서 표만 가로로 밀고 페이지는 넘치지 않게 */
+.hb-qms-copq-scroll { overflow-x: auto; max-width: 100%; }
+.hb-qms-copq-scroll .hb-table { min-width: 36rem; }
+.hb-qms-copq-scroll th, .hb-qms-copq-scroll td { white-space: nowrap; }
+.hb-qms-copq-note { margin: var(--hb-space-2) 0; padding: var(--hb-space-2) var(--hb-space-3); border: 1px solid var(--hb-border); border-radius: var(--hb-radius-md); }
+.hb-qms-copq-sum td { font-weight: 600; }
+
+/* 출하 추적(docs/57) — 표만 가로로 밀고 페이지는 넘치지 않게 */
+.hb-qms-scroll { overflow-x: auto; max-width: 100%; }
+.hb-qms-scroll .hb-table { min-width: 36rem; }
+.hb-qms-scroll th, .hb-qms-scroll td { white-space: nowrap; }
+.hb-qms-trace-form textarea { width: 100%; font-family: inherit; }
+/* 출하 추적 LOT 의 QMS 일 배지(37장) — 이미 열린 NCR·걸린 봉쇄 */
+.hb-qms-lotwork { display: inline-block; padding: 0 .4em; border: 1px solid var(--hb-status-warning-line); border-radius: 3px;
+    background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); font-size: .85em; white-space: normal; }
+.hb-qms-lotwork a { color: inherit; }
+
+/* 출하 전 검수(docs/78) — 판정 카드·양식 항목 행·사진 목록 */
+.hb-qms-preship-card { border: 1px solid var(--hb-border-subtle); border-radius: var(--hb-radius-md); padding: var(--hb-space-2) var(--hb-space-3);
+    margin: 0 0 var(--hb-space-3); display: flex; flex-direction: column; gap: var(--hb-space-2); }
+.hb-qms-preship-card > p { margin: 0; overflow-wrap: anywhere; }
+.hb-qms-preship-card .hb-toolbar { margin: 0; }
+.hb-qms-preship-card label.hb-wide { display: flex; flex-direction: column; gap: var(--hb-space-1); }
+.hb-qms-preship-card label.hb-wide input { width: 100%; }
+.hb-qms-preship-item { margin: var(--hb-space-4) 0 var(--hb-space-2); font-size: var(--hb-fs-md); }
+.hb-qms-preship-line { border: 1px solid var(--hb-border-subtle); border-radius: var(--hb-radius-md); padding: var(--hb-space-2) var(--hb-space-3);
+    margin: 0 0 var(--hb-space-3); }
+.hb-qms-preship-photos ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--hb-space-1); }
+.hb-qms-preship-photos li { overflow-wrap: anywhere; }

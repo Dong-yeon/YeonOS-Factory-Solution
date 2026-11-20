@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 계측기 교정 (P3 QMS Q2a, docs/29). 목록·건수·엑셀·상세는 같은 판정 조각 — 규칙은 GaugeStatus 와 같다(시험이 맞춰 봄) -->
+<mapper namespace="io.smarthappy.module.qms.GaugeMapper">
+
+    <!-- 게이지 + 최근 유효 교정(교정일 → id 순 마지막) + 판정 -->
+    <sql id="base">
+        (select a.asset_id, a.asset_cd, a.asset_nm, a.serial_no, a.gauge_class, a.calib_cycle_days, a.last_calib_date, a.use_yn,
+                a.row_ver, a.updated_at, lc.calib_id as last_calib_id, lc.result as last_result, lc.limit_note as last_limit_note,
+                lc.next_due_date,
+                (select count(*) from qms_gauge_calib c where c.asset_id = a.asset_id and c.void_yn = 'N') as calib_cnt,
+                lc.next_due_date - cast(#{q.today} as date) as days_left,
+                case when a.use_yn &lt;&gt; 'Y' then 'INACTIVE'
+                     when lc.calib_id is null then 'NO_RECORD'
+                     when lc.result = 'NG' then 'NG'
+                     when lc.next_due_date &lt; cast(#{q.today} as date) then 'OVERDUE'
+                     when lc.next_due_date &lt;= cast(#{q.today} as date) + #{q.dueSoonDays} then 'DUE_SOON'
+                     else 'OK' end as status
+           from mst_phys_asset a
+           left join lateral (
+                select c.calib_id, c.result, c.limit_note, c.next_due_date
+                  from qms_gauge_calib c
+                 where c.asset_id = a.asset_id and c.void_yn = 'N'
+                 order by c.calib_date desc, c.calib_id desc
+                 limit 1) lc on true
+          where a.asset_type = 'GAUGE') g
+    </sql>
+
+    <sql id="cols">
+        g.asset_id, g.asset_cd, g.asset_nm, g.serial_no, g.gauge_class, g.calib_cycle_days, g.last_calib_date, g.use_yn, g.row_ver,
+        g.updated_at, g.last_calib_id, g.last_result, g.last_limit_note, g.next_due_date, g.calib_cnt,
+        case when g.status = 'NO_RECORD' then null else g.days_left end as days_left, g.status
+    </sql>
+
+    <sql id="where">
+        from <include refid="base"/>
+        <where>
+            <if test="q.keywordLike != null">and (g.asset_cd ilike #{q.keywordLike} escape '\' or g.asset_nm ilike #{q.keywordLike} escape '\'
+                or g.serial_no ilike #{q.keywordLike} escape '\')</if>
+            <if test="q.gaugeClass != null">and g.gauge_class = #{q.gaugeClass}</if>
+            <if test="q.status != null">and g.status = #{q.status}</if>
+            <if test="!q.withUnused">and g.use_yn = 'Y'</if>
+        </where>
+    </sql>
+
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'ASSET_CD'">g.asset_cd</when>
+                <when test="o.key == 'ASSET_NM'">g.asset_nm</when>
+                <when test="o.key == 'GAUGE_CLASS'">g.gauge_class</when>
+                <when test="o.key == 'LAST_CALIB_DATE'">g.last_calib_date</when>
+                <otherwise>g.next_due_date</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        g.asset_id
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.GaugeDtos$GaugeRow">
+        select <include refid="cols"/> <include refid="where"/> <include refid="orderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.qms.GaugeDtos$GaugeRow" fetchSize="1000">
+        select <include refid="cols"/> <include refid="where"/> <include refid="orderBy"/>
+    </select>
+
+    <select id="findGauge" resultType="io.smarthappy.module.qms.GaugeDtos$GaugeRow">
+        select <include refid="cols"/> from <include refid="base"/> where g.asset_id = #{assetId}
+    </select>
+
+    <sql id="calibCols">
+        c.calib_id, c.asset_id, c.calib_date, c.result, c.limit_note, c.agency, c.cust_id, u.cust_cd, u.cust_nm, c.cert_no,
+        c.cycle_days, c.next_due_date, c.remark, c.void_yn, c.void_reason, c.voided_by, c.voided_at, c.created_at, c.created_by,
+        (select count(*) from sys_file f where f.target_type = 'qms-gauge-calib' and f.target_id = c.calib_id::text
+            and f.use_yn = 'Y') as file_cnt
+    </sql>
+
+    <select id="findHistory" resultType="io.smarthappy.module.qms.GaugeDtos$CalibRow">
+        select <include refid="calibCols"/>
+          from qms_gauge_calib c left join mst_cust u on u.cust_id = c.cust_id
+         where c.asset_id = #{assetId}
+         order by c.calib_date desc, c.calib_id desc
+    </select>
+
+    <select id="findCalib" resultType="io.smarthappy.module.qms.GaugeDtos$CalibRow">
+        select <include refid="calibCols"/>
+          from qms_gauge_calib c left join mst_cust u on u.cust_id = c.cust_id
+         where c.calib_id = #{calibId}
+    </select>
+
+    <!-- 측정 시각 기준 판정(QA I-1): 그날까지(교정일 <= day)의 마지막 유효 교정 — base 의 lc 와 같은 순서 -->
+    <select id="gaugeAsOf" resultType="io.smarthappy.module.qms.GaugeDtos$GaugeAsOf">
+        select a.use_yn, lc.result, lc.next_due_date
+          from mst_phys_asset a
+          left join lateral (
+               select c.result, c.next_due_date
+                 from qms_gauge_calib c
+                where c.asset_id = a.asset_id and c.void_yn = 'N' and c.calib_date &lt;= #{day}
+                order by c.calib_date desc, c.calib_id desc
+                limit 1) lc on true
+         where a.asset_id = #{assetId} and a.asset_type = 'GAUGE'
+    </select>
+
+    <!-- 25.6-Q(2026-10-27 사용자 결정): 그날이 어느 NG 교정의 영향 구간(직전 유효 교정일 ~ NG 교정일, impact 와 같은 경계)에 드는가.
+         NG 날은 하루 전체가 구간 — 같은 날 NG 뒤 재교정이 있어도(교정은 날짜만이라 시각 비교 불가) 영향 조회와 같이 본다(QA G-1 결정 2026-10-28) -->
+    <select id="inNgWindow" resultType="boolean">
+        select exists (
+            select 1 from qms_gauge_calib n
+             where n.asset_id = #{assetId} and n.void_yn = 'N' and n.result = 'NG' and n.calib_date &gt;= #{day}
+               and coalesce((select max(g.calib_date) from qms_gauge_calib g
+                              where g.asset_id = n.asset_id and g.void_yn = 'N' and g.result in ('OK', 'LIMITED') and g.calib_date &lt; n.calib_date),
+                            '-infinity'::date) &lt;= #{day})
+    </select>
+
+    <select id="prevGoodCalibDate" resultType="java.time.LocalDate">
+        select max(calib_date) from qms_gauge_calib
+         where asset_id = #{assetId} and void_yn = 'N' and result in ('OK', 'LIMITED') and calib_date &lt; #{before}
+    </select>
+
+    <!-- 2부 Q9 교정 NG 영향: 무효 처리되지 않은 측정값만, 검사(LOT)별 -->
+    <select id="impactLots" resultType="io.smarthappy.module.qms.GaugeDtos$ImpactRow">
+        select l.lot_id, l.lot_no, l.occurred_at as lot_occurred_at, i.item_cd, i.item_nm, h.insp_id, h.insp_no, h.insp_type,
+               h.status as insp_status, h.result as insp_result,
+               count(*) as meas_cnt, min(m.occurred_at) as first_at, max(m.occurred_at) as last_at
+          from qms_insp_meas m
+          join qms_insp_line x on x.insp_line_id = m.insp_line_id
+          join qms_insp h on h.insp_id = x.insp_id
+          join lot_master l on l.lot_id = h.lot_id
+          join mst_item i on i.item_id = h.item_id
+         where m.gauge_asset_id = #{assetId} and m.void_of_id is null
+           and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+           <if test="from != null">and m.occurred_at &gt;= #{from}</if>
+           and m.occurred_at &lt; #{to}
+         group by l.lot_id, l.lot_no, l.occurred_at, i.item_cd, i.item_nm, h.insp_id, h.insp_no, h.insp_type, h.status, h.result
+         order by max(m.occurred_at) desc, h.insp_id desc
+         limit #{limit}
+    </select>
+
+    <select id="findActiveCust" resultType="java.lang.Long">
+        select cust_id from mst_cust where cust_cd = #{custCd} and use_yn = 'Y'
+    </select>
+
+    <select id="insertCalib" resultType="long" flushCache="true">
+        insert into qms_gauge_calib (comp_cd, asset_id, calib_date, result, limit_note, agency, cust_id, cert_no, cycle_days, remark,
+                                     created_by)
+        values (hb_current_comp(), #{f.assetId}, #{f.calibDate}, #{f.result}, #{f.limitNote}, #{f.agency}, #{f.custId}, #{f.certNo},
+                #{f.cycleDays}, #{f.remark}, #{by})
+        returning calib_id
+    </select>
+
+    <update id="voidCalib">
+        update qms_gauge_calib set void_yn = 'Y', void_reason = #{reason}, voided_by = #{by}, voided_at = now()
+         where calib_id = #{calibId} and void_yn = 'N'
+    </update>
+
+    <!-- 계측기 정보만(클래스·주기) — 물리 자산의 나머지 칸은 기준정보 화면 몫 -->
+    <update id="updateProfile">
+        update mst_phys_asset set gauge_class = #{gaugeClass}, calib_cycle_days = #{cycleDays},
+                                  row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where asset_id = #{assetId} and asset_type = 'GAUGE' and row_ver = #{rowVer}
+    </update>
+</mapper>

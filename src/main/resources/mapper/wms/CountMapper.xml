@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 재고 실사·기간 마감 (P4 W5, docs/30 4.5). 상태 규칙은 트리거가 최종, 원장은 InventoryService 로만 -->
+<mapper namespace="io.smarthappy.module.wms.count.CountMapper">
+
+    <select id="plantExists" resultType="boolean">
+        select exists (select 1 from sys_plant where plant_cd = #{plantCd})
+    </select>
+
+    <select id="nodeIn" resultType="boolean">
+        with recursive up as (
+            select node_id, parent_id, 1 as lv from mst_equip_hier where node_id = #{nodeId}
+            union all
+            select p.node_id, p.parent_id, up.lv + 1 from up join mst_equip_hier p on p.node_id = up.parent_id where up.lv &lt; 20
+        )
+        select exists (select 1 from mst_equip_hier where node_id = #{nodeId} and plant_cd = #{plantCd} and node_type in ('WH', 'LOC'))
+           and (#{scopeId}::bigint is null or exists (select 1 from up where node_id = #{scopeId}))
+    </select>
+
+    <select id="itemIdByCode" resultType="long">
+        select item_id from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="lotCtrlYn" resultType="string">
+        select lot_ctrl_yn from mst_item where item_id = #{itemId}
+    </select>
+
+    <select id="lotByNo" resultType="io.smarthappy.module.wms.count.CountDtos$LotRef">
+        select lot_id, item_id from lot_master where lot_no = #{lotNo}
+    </select>
+
+    <!-- ================================================================ 머리 -->
+    <select id="insertCount" resultType="long" flushCache="true">
+        insert into wms_count (comp_cd, plant_cd, count_no, count_type, scope_node_id, item_id, blind_yn, tol_pct, remark,
+                               created_by, updated_by)
+        values (hb_current_comp(), #{plantCd}, #{countNo}, #{countType}, #{scopeNodeId}, #{itemId}, #{blindYn}, #{tolPct}, #{remark},
+                #{by}, #{by})
+        returning count_id
+    </select>
+
+    <sql id="headCols">
+        c.count_id, c.plant_cd, c.count_no, c.count_type, c.scope_node_id, wms_node_path(c.scope_node_id) as scope_path, c.item_id,
+        i.item_cd, c.blind_yn, c.tol_pct, c.status, c.remark, c.started_at, c.posted_at, c.posted_by, c.cancel_reason, c.row_ver,
+        c.created_at, c.created_by,
+        (select count(*) from wms_count_line l where l.count_id = c.count_id) as line_count,
+        (select count(*) from wms_count_line l where l.count_id = c.count_id and l.counted_qty is not null) as counted_count,
+        (select count(*) from wms_count_line l where l.count_id = c.count_id and l.diff_qty &lt;&gt; 0) as diff_count
+    </sql>
+
+    <select id="findCounts" resultType="io.smarthappy.module.wms.count.CountDtos$CountHead">
+        select <include refid="headCols"/>
+          from wms_count c left join mst_item i on i.item_id = c.item_id
+         where c.plant_cd = #{plantCd}
+           <if test="status != null">and c.status = #{status}</if>
+         order by c.count_id desc
+         limit #{limit}
+    </select>
+
+    <!-- 실사 목록 그리드(UI 단계 3 ①) — 조건은 findCounts 와 같다, 페이징·정렬(허용 열 enum)·마지막에 count_id -->
+    <sql id="countGridWhere">
+          from wms_count c left join mst_item i on i.item_id = c.item_id
+         where c.plant_cd = #{plantCd}
+           <if test="status != null">and c.status = #{status}</if>
+    </sql>
+
+    <select id="findCountPage" resultType="io.smarthappy.module.wms.count.CountDtos$CountHead">
+        select <include refid="headCols"/> <include refid="countGridWhere"/>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'COUNT_NO'">c.count_no</when>
+                <when test="o.key == 'COUNT_TYPE'">c.count_type</when>
+                <when test="o.key == 'STATUS'">c.status</when>
+                <otherwise>c.created_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        c.count_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countCounts" resultType="long">select count(*) <include refid="countGridWhere"/></select>
+
+    <select id="findCount" resultType="io.smarthappy.module.wms.count.CountDtos$CountHead">
+        select <include refid="headCols"/> from wms_count c left join mst_item i on i.item_id = c.item_id where c.count_id = #{id}
+    </select>
+
+    <!-- 상태를 바꾸는 동작은 머리 행 잠금 먼저(동시 확정·동시 입력) -->
+    <select id="lockCount" resultType="io.smarthappy.module.wms.count.CountDtos$CountHead" flushCache="true">
+        select c.count_id, c.plant_cd, c.count_no, c.count_type, c.scope_node_id, c.item_id, c.blind_yn, c.tol_pct, c.status, c.row_ver,
+               c.started_at
+          from wms_count c where c.count_id = #{id} for update
+    </select>
+
+    <update id="updateStatus">
+        update wms_count set status = #{to}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where count_id = #{id} and row_ver = #{rowVer} and status = #{from}
+    </update>
+
+    <update id="markStarted">
+        update wms_count set status = 'COUNTING', started_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where count_id = #{id} and status = 'DRAFT'
+    </update>
+
+    <update id="markPosted">
+        update wms_count set status = 'POSTED', posted_at = now(), posted_by = #{by}, row_ver = row_ver + 1, updated_at = now(),
+               updated_by = #{by}
+         where count_id = #{id} and status = 'REVIEW'
+    </update>
+
+    <update id="markCancelled">
+        update wms_count set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where count_id = #{id} and status in ('DRAFT', 'COUNTING', 'REVIEW')
+    </update>
+
+    <update id="touch">
+        update wms_count set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by} where count_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 줄 -->
+    <!-- 시작: 범위(하위 포함) 안 현재고 칸(수량 ≠ 0, LOT 없음 — 1부)마다 줄 -->
+    <insert id="generateLines">
+        with recursive scope as (
+            select node_id, 1 as lv from mst_equip_hier where node_id = #{scopeId}
+            union all
+            select c.node_id, s.lv + 1 from scope s join mst_equip_hier c on c.parent_id = s.node_id where s.lv &lt; 20
+        )
+        insert into wms_count_line (comp_cd, count_id, node_id, item_id, lot_id, stock_status, created_by, updated_by)
+        select hb_current_comp(), #{countId}, s.node_id, s.item_id, s.lot_id, s.stock_status, #{by}, #{by}
+          from inv_stock s
+         where s.plant_cd = #{plantCd} and s.qty &lt;&gt; 0
+           and s.node_id in (select node_id from scope)
+           <if test="itemId != null">and s.item_id = #{itemId}</if>
+         order by s.node_id, s.item_id, s.lot_id, s.stock_status
+    </insert>
+
+    <select id="insertLine" resultType="long" flushCache="true">
+        insert into wms_count_line (comp_cd, count_id, node_id, item_id, lot_id, stock_status, recount_no, created_by, updated_by)
+        values (hb_current_comp(), #{countId}, #{nodeId}, #{itemId}, #{lotId}, #{status}, #{recountNo}, #{by}, #{by})
+        returning line_id
+    </select>
+
+    <sql id="lineCols">
+        l.line_id, l.node_id, wms_node_path(l.node_id) as path, l.item_id, i.item_cd, i.item_nm, i.unit_cd, l.lot_id,
+        (select m.lot_no from lot_master m where m.lot_id = l.lot_id) as lot_no, l.stock_status, l.recount_no,
+        l.book_qty, l.counted_qty, l.counted_at, l.counted_by, l.diff_qty, l.adj_trx_id,
+        (select w.worker_cd from mst_worker w where w.worker_id = l.counted_worker_id) as counted_worker_cd,
+        (select w.worker_nm from mst_worker w where w.worker_id = l.counted_worker_id) as counted_worker_nm,
+        not exists (select 1 from wms_count_line n where n.count_id = l.count_id and n.node_id = l.node_id and n.item_id = l.item_id
+                       and n.lot_id is not distinct from l.lot_id and n.stock_status = l.stock_status
+                       and n.recount_no &gt; l.recount_no) as latest
+    </sql>
+
+    <select id="findLines" resultType="io.smarthappy.module.wms.count.CountDtos$LineRow">
+        select <include refid="lineCols"/> from wms_count_line l join mst_item i on i.item_id = l.item_id
+         where l.count_id = #{countId}
+         order by path, i.item_cd, lot_no nulls first, l.stock_status, l.recount_no
+    </select>
+
+    <select id="findLine" resultType="io.smarthappy.module.wms.count.CountDtos$LineRow">
+        select <include refid="lineCols"/> from wms_count_line l join mst_item i on i.item_id = l.item_id
+         where l.count_id = #{countId} and l.line_id = #{lineId}
+    </select>
+
+    <update id="updateCounted">
+        update wms_count_line set book_qty = #{bookQty}, counted_qty = #{countedQty}, counted_at = #{countedAt},
+               counted_by = #{by}, counted_worker_id = #{workerId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where line_id = #{lineId}
+    </update>
+
+    <update id="linkTrx">
+        update wms_count_line set adj_trx_id = #{trxId}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where line_id = #{lineId} and adj_trx_id is null
+    </update>
+
+    <select id="countOpen" resultType="int">
+        select count(*) from wms_count where plant_cd = #{plantCd} and status in ('DRAFT', 'COUNTING', 'REVIEW')
+    </select>
+
+    <!-- ================================================================ 기간 마감 -->
+    <sql id="periodCols">
+        close_id, plant_cd, period, status, closed_at, closed_by, reopened_at, reopened_by, reason, row_ver
+    </sql>
+
+    <select id="findPeriods" resultType="io.smarthappy.module.wms.count.CountDtos$PeriodRow">
+        select <include refid="periodCols"/> from sys_period_close
+         where plant_cd = #{plantCd} and module_cd = 'INV' and period between #{fromPeriod} and #{toPeriod}
+         order by period
+    </select>
+
+    <!-- 그리드(docs/40 §10.2 D1) — 목록(findPeriods + 서비스의 12달 채우기)과 같은 행: 1~12월을 만들고 마감 행을 붙인다.
+         행 없는 달의 상태는 'OPEN'(목록은 null — 그리드 상태 칸 배지가 값으로 톤을 고르므로).
+         시각 정렬은 빈 값(열림)을 늘 뒤로(nulls last), 끝에 월을 붙여 순서를 고정한다 -->
+    <select id="findPeriodPage" resultType="io.smarthappy.module.wms.count.CountDtos$PeriodRow">
+        select c.close_id, #{plantCd} as plant_cd, m.period, coalesce(c.status, 'OPEN') as status, c.closed_at, c.closed_by,
+               c.reopened_at, c.reopened_by, c.reason, c.row_ver
+          from (select #{year} || lpad(g::text, 2, '0') as period from generate_series(1, 12) g) m
+          left join sys_period_close c on c.plant_cd = #{plantCd} and c.module_cd = 'INV' and c.period = m.period
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'STATUS'">coalesce(c.status, 'OPEN')</when>
+                <when test="o.key == 'CLOSED_AT'">c.closed_at</when>
+                <when test="o.key == 'REOPENED_AT'">c.reopened_at</when>
+                <otherwise>m.period</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>
+            <if test="o.key == 'CLOSED_AT' or o.key == 'REOPENED_AT'"> nulls last</if>,
+        </foreach>
+        m.period
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="findPeriod" resultType="io.smarthappy.module.wms.count.CountDtos$PeriodRow">
+        select <include refid="periodCols"/> from sys_period_close where plant_cd = #{plantCd} and module_cd = 'INV' and period = #{period}
+    </select>
+
+    <!-- 원장 트리거(공유 잠금)와 줄 세우기 — 진행 중인 그 월 원장이 커밋될 때까지 기다린다 -->
+    <select id="lockPeriod" resultType="string">
+        select pg_advisory_xact_lock(hb_period_lock_key(hb_current_comp(), #{plantCd}, 'INV', #{period}))::text
+    </select>
+
+    <insert id="insertClose">
+        insert into sys_period_close (comp_cd, plant_cd, module_cd, period, status, closed_at, closed_by, created_by, updated_by)
+        values (hb_current_comp(), #{plantCd}, 'INV', #{period}, 'CLOSED', now(), #{by}, #{by}, #{by})
+    </insert>
+
+    <update id="reclose">
+        update sys_period_close set status = 'CLOSED', closed_at = now(), closed_by = #{by}, row_ver = row_ver + 1, updated_at = now(),
+               updated_by = #{by}
+         where close_id = #{id} and row_ver = #{rowVer} and status = 'REOPENED'
+    </update>
+
+    <update id="reopen">
+        update sys_period_close set status = 'REOPENED', reopened_at = now(), reopened_by = #{by}, reason = #{reason},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where close_id = #{id} and row_ver = #{rowVer} and status = 'CLOSED'
+    </update>
+</mapper>

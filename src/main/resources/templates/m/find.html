@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{m/layout :: head(#{m.tab.find})}"></head>
+<!--
+  모바일 찾기 (docs/74 화면 3, M9). LOT 번호·설비 코드를 입력하거나 스캔(hb.scan — 키보드 웨지·APK 스캐너)해 요약을 본다. 읽기 전용.
+  LOT = prd-lot 조회 권한, 설비 = cms-state 조회 권한 — 가진 쪽만 고를 수 있다(판정은 각 API).
+-->
+<body class="hb-m" th:data-today="${today}" th:data-can-lot="${can.lot}" th:data-can-equip="${can.equip}">
+<header th:replace="~{m/layout :: header(#{m.tab.find})}"></header>
+<main class="m-main">
+    <fieldset class="m-seg" id="kindSeg" th:if="${can.lot and can.equip}">
+        <legend th:text="#{m.find.kind}">찾을 것</legend>
+        <label><input type="radio" name="kind" value="LOT" checked><span th:text="#{m.find.lot}">LOT</span></label>
+        <label><input type="radio" name="kind" value="EQUIP"><span th:text="#{m.find.equip}">설비</span></label>
+    </fieldset>
+    <form id="findForm" class="m-search" autocomplete="off">
+        <label class="m-field"><span id="findLabel" th:text="${can.lot} ? #{m.find.lotNo} : #{m.find.equipCd}">LOT 번호</span>
+            <input id="findInput" maxlength="100" spellcheck="false" autocapitalize="characters" enterkeyhint="search"></label>
+        <button type="submit" id="findBtn" class="m-primary" th:text="#{m.find.go}">찾기</button>
+    </form>
+    <p class="m-muted m-small" th:text="#{m.find.hint}">스캐너가 연결돼 있으면 바코드를 읽어도 됩니다.</p>
+    <p id="msg" class="m-msg" role="status" aria-live="polite"></p>
+    <section id="result"></section>
+</main>
+<nav th:replace="~{m/layout :: tabs}"></nav>
+<th:block th:replace="~{m/layout :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.scan.js}"></script>
+<script th:src="@{/js/views/m/m-find.js}"></script>
+</body>
+</html>

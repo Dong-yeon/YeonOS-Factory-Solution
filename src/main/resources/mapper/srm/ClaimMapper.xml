@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 협력사 클레임 (SRM 2부 R4d, docs/31 4.12.4) — 회사 범위는 RLS, 쓰기의 comp_cd 는 hb_current_comp(). QMS 표는 읽지 않는다(계약으로만) -->
+<mapper namespace="io.smarthappy.module.srm.claim.ClaimMapper">
+
+    <sql id="clmCols">
+        k.claim_id, k.claim_no, k.cust_id, c.cust_cd, c.cust_nm, k.action_cd, k.title, k.request_text, k.reply_due,
+        trim_scale(k.charge_amt)::text as charge_amt, k.currency_cd, k.status, k.sent_at, k.sent_by, k.answer_cause, k.answer_action,
+        k.answered_on, k.answer_source, k.answered_by, k.closed_at, k.closed_by, k.cancel_reason, k.row_ver, k.created_at, k.created_by,
+        k.updated_at, k.updated_by,
+        (select count(*) from srm_claim_ncr n where n.claim_id = k.claim_id)::int as ncr_cnt
+    </sql>
+
+    <!-- 목록·grid 공통(c = ClaimCrit) — 기간 = 만든 날(회사 시간대) -->
+    <sql id="clmMatched">
+        select <include refid="clmCols"/>
+          from srm_claim k join mst_cust c on c.cust_id = k.cust_id
+         where k.created_at &gt;= (#{c.from}::date)::timestamp at time zone #{c.zone}
+           and k.created_at &lt; (#{c.to}::date + 1)::timestamp at time zone #{c.zone}
+        <if test="c.status != null">and k.status = #{c.status}</if>
+        <if test="c.keywordLike != null">
+           and (k.claim_no ilike #{c.keywordLike} escape '\' or k.title ilike #{c.keywordLike} escape '\'
+                or c.cust_cd ilike #{c.keywordLike} escape '\' or c.cust_nm ilike #{c.keywordLike} escape '\'
+                or exists (select 1 from srm_claim_ncr n where n.claim_id = k.claim_id and n.ncr_no ilike #{c.keywordLike} escape '\'))
+        </if>
+    </sql>
+
+    <select id="findClaims" resultType="io.smarthappy.module.srm.claim.ClaimDtos$ClaimRow">
+        select x.* from (<include refid="clmMatched"/>) x
+         order by x.created_at desc, x.claim_id desc
+         limit 2000
+    </select>
+
+    <!-- grid — 정렬은 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK -->
+    <select id="findClaimPage" resultType="io.smarthappy.module.srm.claim.ClaimDtos$ClaimRow">
+        select x.* from (<include refid="clmMatched"/>) x
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CLAIM_NO'">x.claim_no</when>
+                <when test="s.key == 'SUPPLIER'">x.cust_nm</when>
+                <when test="s.key == 'TITLE'">x.title</when>
+                <when test="s.key == 'REPLY_DUE'">x.reply_due is null, x.reply_due</when>
+                <when test="s.key == 'STATUS'">x.status</when>
+                <otherwise>x.created_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         x.claim_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countClaims" resultType="long">
+        select count(*) from (<include refid="clmMatched"/>) n
+    </select>
+
+    <select id="findClaim" resultType="io.smarthappy.module.srm.claim.ClaimDtos$ClaimRow">
+        select <include refid="clmCols"/> from srm_claim k join mst_cust c on c.cust_id = k.cust_id where k.claim_id = #{claimId}
+    </select>
+
+    <select id="lockClaim" resultType="io.smarthappy.module.srm.claim.ClaimDtos$ClaimRow" flushCache="true">
+        select claim_id, claim_no, cust_id, status, row_ver from srm_claim where claim_id = #{claimId} for update
+    </select>
+
+    <select id="findNcrs" resultType="io.smarthappy.module.srm.claim.ClaimDtos$ClaimNcrRow">
+        select n.ncr_id, n.ncr_no, n.item_id, i.item_cd, i.item_nm, trim_scale(n.nc_qty)::text as nc_qty, n.unit_cd
+          from srm_claim_ncr n join mst_item i on i.item_id = n.item_id
+         where n.claim_id = #{claimId}
+         order by n.claim_ncr_id
+    </select>
+
+    <!-- 클레임 ↔ 반품(같은 근거 NCR) — 취소된 반품 제외. 같은 협력사만(방어 — NCR 은 협력사 하나지만 스냅샷이라 DB 가 묶지 않는다) -->
+    <select id="returnsOfClaim" resultType="io.smarthappy.module.srm.claim.ReturnDtos$LinkRow">
+        select r.return_id as id, r.return_no as no, r.status, r.ncr_no, (r.created_at at time zone #{zone})::date as created_on
+          from srm_return r
+         where r.status &lt;&gt; 'CANCELLED'
+           and r.ncr_id in (select n.ncr_id from srm_claim_ncr n where n.claim_id = #{claimId})
+           and r.cust_id = (select k.cust_id from srm_claim k where k.claim_id = #{claimId})
+         order by r.return_id
+         limit 200
+    </select>
+
+    <select id="liveClaims" resultType="map">
+        select n.ncr_id, k.claim_no
+          from srm_claim_ncr n join srm_claim k on k.claim_id = n.claim_id
+         where k.status &lt;&gt; 'CANCELLED'
+           and n.ncr_id in <foreach collection="ncrIds" item="i" open="(" separator="," close=")">#{i}</foreach>
+    </select>
+
+    <select id="insertClaim" resultType="long" flushCache="true">
+        insert into srm_claim (comp_cd, claim_no, cust_id, action_cd, title, request_text, reply_due, charge_amt, currency_cd,
+                               created_by, updated_by)
+        values (hb_current_comp(), #{no}, #{v.custId}, #{v.actionCd}, #{v.title}, #{v.requestText}, #{v.replyDue}, #{v.chargeAmt},
+                #{v.currencyCd}, #{by}, #{by})
+        returning claim_id
+    </select>
+
+    <update id="updateClaim">
+        update srm_claim
+           set action_cd = #{v.actionCd}, title = #{v.title}, request_text = #{v.requestText}, reply_due = #{v.replyDue},
+               charge_amt = #{v.chargeAmt}, currency_cd = #{v.currencyCd}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where claim_id = #{claimId} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <delete id="deleteNcrs">
+        delete from srm_claim_ncr where claim_id = #{claimId}
+    </delete>
+
+    <insert id="insertNcr">
+        insert into srm_claim_ncr (comp_cd, claim_id, ncr_id, ncr_no, item_id, nc_qty, unit_cd, created_by, updated_by)
+        values (hb_current_comp(), #{claimId}, #{v.ncrId}, #{v.ncrNo}, #{v.itemId}, #{v.ncQty}, #{v.unitCd}, #{by}, #{by})
+    </insert>
+
+    <update id="send">
+        update srm_claim
+           set status = 'SENT', sent_at = now(), sent_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where claim_id = #{claimId} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <!-- 회신 입력(협력사 대신 — D4): 보낸 상태면 회신 받음으로, 회신 받음이면 고쳐 쓰기 -->
+    <update id="answer">
+        update srm_claim
+           set status = 'ANSWERED', answer_cause = #{cause}, answer_action = #{action}, answered_on = #{on},
+               answer_source = 'MANUAL', answered_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where claim_id = #{claimId} and status in ('SENT', 'ANSWERED') and row_ver = #{rowVer}
+    </update>
+
+    <!-- 협력사 포털 회신(P-4) — 보냄 상태만(회신 받음·종결·취소는 거부, 고쳐 쓰기 없음), 회신일 = 오늘(회사 날짜) -->
+    <update id="answerFromPortal">
+        update srm_claim
+           set status = 'ANSWERED', answer_cause = #{cause}, answer_action = #{action}, answered_on = #{on},
+               answer_source = 'PORTAL', answered_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where claim_id = #{claimId} and status = 'SENT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="reject">
+        update srm_claim
+           set status = 'SENT', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where claim_id = #{claimId} and status = 'ANSWERED' and row_ver = #{rowVer}
+    </update>
+
+    <update id="close">
+        update srm_claim
+           set status = 'CLOSED', closed_at = now(), closed_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where claim_id = #{claimId} and status = 'ANSWERED' and row_ver = #{rowVer}
+    </update>
+
+    <update id="cancel">
+        update srm_claim
+           set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where claim_id = #{claimId} and status in ('DRAFT', 'SENT') and row_ver = #{rowVer}
+    </update>
+
+    <select id="notifyInfo" resultType="map">
+        select k.claim_no, k.title, k.action_cd, trim_scale(k.charge_amt)::text as charge_amt, k.currency_cd, k.reply_due, c.cust_nm,
+               sc.comp_nm, (select count(*) from srm_claim_ncr n where n.claim_id = k.claim_id) as ncr_cnt,
+               coalesce((select ct.email from mst_cust_contact ct where ct.cust_id = k.cust_id and ct.use_yn = 'Y' and ct.main_yn = 'Y'
+                          and ct.email is not null order by ct.contact_id limit 1), c.email) as email
+          from srm_claim k join mst_cust c on c.cust_id = k.cust_id join sys_comp sc on sc.comp_cd = k.comp_cd
+         where k.claim_id = #{claimId}
+    </select>
+</mapper>

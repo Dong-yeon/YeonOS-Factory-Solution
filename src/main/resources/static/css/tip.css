@@ -1,0 +1,16 @@
+/*
+ * 버튼 툴팁 hb-tip (docs/36 20장) — hb.tip.js 가 요소 하나를 만들어 버튼 아래(모자라면 위)에 둔다.
+ * 좌표만 JS(CSSOM)로, 모양은 여기. 인라인 style 속성 없음(CSP). 터치에서는 JS 가 띄우지 않는다.
+ */
+.hb-tip { position: fixed; left: 0; top: 0; z-index: var(--hb-z-tip); max-width: min(var(--hb-tip-max-w), calc(100vw - 8px));
+    padding: var(--hb-space-2) var(--hb-space-4); border-radius: var(--hb-radius-md); box-shadow: var(--hb-shadow-2);
+    background: var(--hb-tip-bg); color: var(--hb-tip-text); font-size: var(--hb-fs-sm); font-weight: var(--hb-fw-regular);
+    line-height: 1.45; text-align: left; white-space: normal; overflow-wrap: anywhere; pointer-events: auto; }
+.hb-tip[hidden] { display: none; }
+/* 버튼과 툴팁 사이 틈 — 마우스를 툴팁으로 옮겨도 사라지지 않게(WCAG 1.4.13 가리키고 있으면 유지) */
+.hb-tip::before { content: ""; position: absolute; left: 0; right: 0; height: 8px; }
+.hb-tip[data-place="below"]::before { bottom: 100%; }
+.hb-tip[data-place="above"]::before { top: 100%; }
+@media print {
+    .hb-tip { display: none; }
+}

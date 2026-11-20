@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  출하 추적(리콜) (qms-lot-trace, 읽기만) — docs/57 2.4. 문제 LOT → 계보로 이어진 아래 LOT(MES) → 어느 고객에게 나갔나·어디 남았나(WMS).
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 책임자(WEB), 클레임·리콜 때. 직접 치는 값 = LOT 번호들(붙여넣기)·깊이.
+  서버가 채우는 값 = 고객별 요약·출하 목록·창고에 남은 것. 예외 = 계보가 상한에 걸리면 노란 줄, 찾지 못한 번호 표시. 아무것도 바꾸지 않는다.
+  바로가기(docs/29_P3 33장) = 출하 줄 → 클레임 NCR 등록(그 출하 LOT·출처 CLAIM), 남은 재고 → 품목별 봉쇄 열기(그 LOT 만 미리 체크). 만드는 것은 각 화면에서(권한도 그 화면).
+  역추적(docs/29_P3 32장) = 클레임 LOT → 원인 LOT·공급사·남은 원인 LOT. 방향을 바꾸면 결과 영역이 바뀐다(정방향 = 고객·출하, 역추적 = 공급사·원인 LOT).
+-->
+<body class="hb-page hb-page-scroll" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">출하 추적(리콜)</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="traceForm" class="hb-search hb-qms-trace-form" autocomplete="off">
+    <label class="hb-wide"><span th:text="#{qms.lotTrace.lotNos}">LOT 번호</span>
+        <textarea id="lotNos" data-field="lotNos" rows="3" maxlength="7000" required data-help-key="qms-lot-trace.lotNos"
+                  th:placeholder="#{qms.lotTrace.lotNosHint}"></textarea></label>
+    <label><span th:text="#{qms.lotTrace.direction}">방향</span>
+        <select id="direction" data-field="direction" data-help-key="qms-lot-trace.direction">
+            <option value="FORWARD" th:text="#{qms.lotTrace.dir.FORWARD}">정방향 — 어디로 갔나(출하·리콜)</option>
+            <option value="BACKWARD" th:text="#{qms.lotTrace.dir.BACKWARD}">역추적 — 어디서 왔나(원인·공급사)</option>
+        </select></label>
+    <label><span th:text="#{qms.lotTrace.depth}">깊이</span>
+        <input id="depth" data-field="depth" data-hb="number" data-scale="0" data-min="0" data-max="10" data-pad="false" value="10" data-help-key="qms-lot-trace.depth"></label>
+    <div class="hb-sp-actions">
+        <button type="button" id="exportBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" th:text="#{qms.lotTrace.excel}" disabled>엑셀</button>
+        <button type="button" id="toForwardBtn" class="hb-btn-secondary" hidden th:text="#{qms.lotTrace.toForward}">원인 LOT 으로 정방향</button>
+        <button type="submit" id="traceBtn" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<p id="hintFwd" class="hb-muted" th:text="#{qms.lotTrace.hint}">LOT 을 써서 만든 아래 LOT 까지 따라가 고객별 출하와 창고에 남은 수량을 봅니다(읽기만).</p>
+<p id="hintBack" class="hb-muted" hidden th:text="#{qms.lotTrace.hintBack}">이 LOT 을 만드는 데 들어간 위 LOT 까지 거슬러 원인 LOT·공급사와 아직 남은 원인 LOT 을 봅니다(읽기만).</p>
+<p id="summary" class="hb-muted" role="status" hidden></p>
+<p id="truncNote" class="hb-qms-status" data-status="DUE_SOON" role="alert" hidden th:text="#{qms.lotTrace.truncated}">계보가 상한에 걸려 일부만 보입니다 — 깊이를 줄이거나 LOT 을 나눠 조회하세요.</p>
+<p id="unknownNote" class="hb-qms-status" data-status="DUE_SOON" hidden></p>
+
+<section class="hb-sub" id="supSection" hidden>
+    <h2 th:text="#{qms.lotTrace.suppliers}">공급사별 요약 (원인 후보)</h2>
+    <div class="hb-qms-scroll">
+        <table class="hb-table" id="supTable">
+            <thead><tr>
+                <th th:text="#{qms.lotTrace.col.supplierCd}">공급사 코드</th>
+                <th th:text="#{qms.lotTrace.col.supplierNm}">공급사</th>
+                <th class="hb-num" th:text="#{qms.lotTrace.col.lotCnt}">관련 LOT</th>
+                <th th:text="#{qms.lotTrace.col.lots}">우리 LOT</th>
+                <th th:text="#{qms.lotTrace.col.supplierLotNo}">공급사 LOT</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub" id="originSection" hidden>
+    <h2 th:text="#{qms.lotTrace.origins}">원인 LOT</h2>
+    <p class="hb-muted" th:text="#{qms.lotTrace.originsHint}">맨 처음 = 더 거슬러 올라간 LOT 이 없는 것(입고 자재 등 — 상한에 걸렸으면 더 있을 수 있음).</p>
+    <div class="hb-qms-scroll">
+        <table class="hb-table" id="originTable">
+            <thead><tr>
+                <th th:text="#{qms.lotTrace.col.root}">뿌리 LOT</th>
+                <th th:text="#{qms.lotTrace.col.originLot}">원인 LOT</th>
+                <th class="hb-num" th:text="#{qms.lotTrace.col.depth}">깊이</th>
+                <th th:text="#{qms.lotTrace.col.path}">경로</th>
+                <th th:text="#{qms.lotTrace.col.relType}">연결</th>
+                <th th:text="#{qms.lotTrace.col.origin}">출처</th>
+                <th th:text="#{qms.lotTrace.col.supplierNm}">공급사</th>
+                <th th:text="#{qms.lotTrace.col.first}">맨 처음</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub" id="custSection">
+    <h2 th:text="#{qms.lotTrace.customers}">고객별 요약 (연락 대상)</h2>
+    <div class="hb-qms-scroll">
+        <table class="hb-table" id="custTable">
+            <thead><tr>
+                <th th:text="#{qms.lotTrace.col.custCd}">고객 코드</th>
+                <th th:text="#{qms.lotTrace.col.custNm}">고객</th>
+                <th class="hb-num" th:text="#{qms.lotTrace.col.shipCnt}">출하 수</th>
+                <th class="hb-num" th:text="#{qms.lotTrace.col.lotCnt}">관련 LOT</th>
+                <th class="hb-num" th:text="#{qms.lotTrace.col.qty}">순 수량</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub" id="shipSection">
+    <h2 th:text="#{qms.lotTrace.shipments}">출하 목록</h2>
+    <div class="hb-qms-scroll">
+        <table class="hb-table" id="shipTable">
+            <thead><tr>
+                <th th:text="#{qms.lotTrace.col.root}">뿌리 LOT</th>
+                <th th:text="#{qms.lotTrace.col.lot}">출하 LOT</th>
+                <th class="hb-num" th:text="#{qms.lotTrace.col.depth}">깊이</th>
+                <th th:text="#{qms.lotTrace.col.path}">경로</th>
+                <th th:text="#{qms.lotTrace.col.custNm}">고객</th>
+                <th th:text="#{qms.lotTrace.col.shipNo}">출하 번호</th>
+                <th th:text="#{qms.lotTrace.col.shippedAt}">출하 확정</th>
+                <th class="hb-num" th:text="#{qms.lotTrace.col.qty}">순 수량</th>
+                <th th:text="#{qms.lotTrace.col.pallets}">팔레트 · SSCC</th>
+                <th th:text="#{qms.lotTrace.col.actions}">바로가기</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub">
+    <h2 th:text="#{qms.lotTrace.stock}">창고에 남은 것</h2>
+    <p class="hb-muted" th:text="#{qms.lotTrace.stockHint}">쓸 수 있는지와 무관하게 있는 곳을 모두 보입니다(검사·보류·출하 대기 칸 포함). 보류는 LOT 보류·NCR 로.</p>
+    <p id="containLinks" class="hb-qms-inline" hidden></p>
+    <div class="hb-qms-scroll">
+        <table class="hb-table" id="stockTable">
+            <thead><tr>
+                <th th:text="#{qms.lotTrace.col.stockLot}">LOT</th>
+                <th th:text="#{qms.lotTrace.col.itemNm}">품목</th>
+                <th th:text="#{qms.lotTrace.col.plant}">공장</th>
+                <th th:text="#{qms.lotTrace.col.loc}">칸</th>
+                <th th:text="#{qms.lotTrace.col.status}">상태</th>
+                <th class="hb-num" th:text="#{qms.lotTrace.col.stockQty}">수량</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/views/qms/lot-trace.js}"></script>
+</body>
+</html>

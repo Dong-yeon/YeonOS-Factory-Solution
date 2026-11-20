@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- QMS 판정·NCR → 재고 상태 (docs/30 12.15) — QMS 표 읽기만, 회사는 RLS -->
+<mapper namespace="io.smarthappy.module.wms.inv.QualityStockMapper">
+
+    <select id="findInsp" resultType="io.smarthappy.module.wms.inv.QualityStockMapper$InspRow">
+        select q.insp_id, q.insp_no, q.insp_type, q.lot_id, q.item_id, q.status, q.result, q.judged_at, q.judged_by, q.voided_at, q.voided_by,
+               i.lot_ctrl_yn
+          from qms_insp q
+          join mst_item i on i.item_id = q.item_id
+         where q.insp_id = #{inspId}
+    </select>
+
+    <select id="findNcr" resultType="io.smarthappy.module.wms.inv.QualityStockMapper$NcrRow">
+        select n.ncr_id, n.ncr_no, n.lot_id, n.item_id, n.unit_cd, i.unit_cd as item_unit_cd, n.status, n.closed_at, n.closed_by, i.lot_ctrl_yn,
+               (select r.node_id from wms_cust_rtn r where n.src_type = 'WMS_CUST_RTN' and r.rtn_id = n.src_id) as rtn_node_id
+          from qms_ncr n
+          join mst_item i on i.item_id = n.item_id
+         where n.ncr_id = #{ncrId}
+    </select>
+
+    <select id="findDisps" resultType="io.smarthappy.module.wms.inv.QualityStockMapper$DispRow">
+        select d.disp_id, d.line_no, d.disp_type, d.qty from qms_ncr_disp d where d.ncr_id = #{ncrId} order by d.line_no
+    </select>
+
+    <select id="cellsOf" resultType="io.smarthappy.module.wms.inv.LotStockMapper$Cell">
+        select s.stock_id, s.plant_cd, s.node_id, s.stock_status, s.qty
+          from inv_stock s
+         where s.lot_id = #{lotId} and s.stock_status = #{status} and s.qty &gt; 0
+         order by s.node_id
+    </select>
+
+    <select id="lockCells" resultType="io.smarthappy.module.wms.inv.LotStockMapper$Cell">
+        select s.stock_id, s.plant_cd, s.node_id, s.stock_status, s.qty
+          from inv_stock s
+         where s.stock_id in <foreach collection="stockIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by s.item_id, s.node_id, s.lot_id nulls first, s.stock_status
+           for update
+    </select>
+
+    <select id="liveTrxOf" resultType="long">
+        select t.trx_id
+          from inv_trx t
+         where t.src_type = #{srcType} and t.src_id = #{srcId} and t.reversal_of_id is null
+           and not exists (select 1 from inv_trx r where r.reversal_of_id = t.trx_id)
+         order by t.trx_id
+    </select>
+
+    <select id="plantsOf" resultType="string">
+        select distinct s.plant_cd from inv_stock s where s.lot_id = #{lotId} and s.qty &lt;&gt; 0 order by 1
+    </select>
+
+    <!-- 판정 방향 행 = STATUS_IN 이 QC 가 아닌 것(무효 때 추가분을 QC 로 돌린 짝은 빼고 — 12.15.13) -->
+    <select id="reflectedPlants" resultType="string">
+        select distinct t.plant_cd
+          from inv_trx t
+         where t.src_type = 'QMS_INSP' and t.lot_id = #{lotId} and t.reversal_of_id is null
+           and t.trx_type = 'STATUS_IN' and t.stock_status &lt;&gt; 'QC'
+           and not exists (select 1 from inv_trx r where r.reversal_of_id = t.trx_id)
+         order by 1
+    </select>
+
+    <select id="latestResult" resultType="string">
+        select q.result
+          from qms_insp q
+         where q.lot_id = #{lotId} and q.insp_type in ('RECEIVE', 'FINAL') and q.status = 'JUDGED'
+         order by q.judged_at desc, q.insp_id desc
+         limit 1
+    </select>
+
+    <select id="blockedReceiptsSince" resultType="io.smarthappy.module.wms.inv.QualityStockMapper$NodeQty">
+        select t.plant_cd, t.node_id, sum(t.qty) as qty
+          from inv_trx t
+         where t.lot_id = #{lotId} and t.stock_status = 'BLOCKED' and t.trx_type in ('RCV_PRD', 'RCV_MAT', 'RCV_PO')
+           and t.recorded_at &gt;= #{since}
+         group by t.plant_cd, t.node_id
+        having sum(t.qty) &gt; 0
+         order by t.node_id
+    </select>
+
+    <select id="disposedNcrNo" resultType="string">
+        select n.ncr_no
+          from inv_trx t
+          join qms_ncr_disp d on d.disp_id = t.src_id
+          join qms_ncr n on n.ncr_id = d.ncr_id
+         where t.src_type = 'QMS_NCR' and t.lot_id = #{lotId} and t.reversal_of_id is null
+           and not exists (select 1 from inv_trx r where r.reversal_of_id = t.trx_id)
+         order by t.trx_id
+         limit 1
+    </select>
+
+    <!-- ================================================================ 대사 (docs/30 12.15.12) -->
+    <select id="qcPlants" resultType="string">
+        select distinct s.plant_cd from inv_stock s where s.stock_status = 'QC' and s.lot_id is not null and s.qty &gt; 0 order by 1
+    </select>
+
+    <!-- 판정 뒤 QC 로 들어온 몫(추가 입고·무효 때 되돌린 추가분 — 재검사 대상, 12.15.13)을 넘는 QC 가 남은 LOT 만 -->
+    <select id="countQcJudged" resultType="int">
+        select count(*)
+          from (select s.lot_id, sum(s.qty) as qc
+                  from inv_stock s
+                 where s.plant_cd in <foreach collection="plants" item="p" open="(" separator="," close=")">#{p}</foreach>
+                   and s.stock_status = 'QC' and s.lot_id is not null and s.qty &gt; 0
+                 group by s.lot_id) x
+          join lateral (select max(q.judged_at) as judged_at from qms_insp q
+                         where q.lot_id = x.lot_id and q.insp_type in ('RECEIVE', 'FINAL') and q.status = 'JUDGED') j on j.judged_at is not null
+         where not exists (select 1 from qms_insp q where q.lot_id = x.lot_id and q.insp_type in ('RECEIVE', 'FINAL') and q.status = 'OPEN')
+           and x.qc &gt; coalesce((select sum(t.qty) from inv_trx t
+                                  where t.lot_id = x.lot_id and t.stock_status = 'QC' and t.recorded_at &gt;= j.judged_at
+                                    and (t.trx_type in ('RCV_PRD', 'RCV_MAT', 'RCV_PO')
+                                         or (t.src_type = 'QMS_INSP' and t.trx_type = 'STATUS_IN'))), 0)
+    </select>
+
+    <select id="countVoidLive" resultType="int">
+        select count(distinct q.insp_id)
+          from inv_trx t
+          join qms_insp q on q.insp_id = t.src_id
+         where t.src_type = 'QMS_INSP' and q.status = 'VOID' and t.reversal_of_id is null
+           and t.trx_type = 'STATUS_IN' and t.stock_status &lt;&gt; 'QC'
+           and not exists (select 1 from inv_trx r where r.reversal_of_id = t.trx_id)
+    </select>
+</mapper>

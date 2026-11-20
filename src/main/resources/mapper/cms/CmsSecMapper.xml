@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS 1부 C5 — 설비 보안 대장 (docs/33 4.6). 설비(P1)에 1:1 보안 행을 붙여 보여 준다. 경고는 서비스가 계산 -->
+<mapper namespace="io.smarthappy.module.cms.CmsSecMapper">
+
+    <sql id="secCols">
+        e.equip_id, e.equip_cd, e.equip_nm, e.plant_cd, c.class_nm,
+        s.sec_id, s.network_yn, s.os_nm, s.os_ver, s.os_eos_date, s.last_scan_date, s.scan_tool, s.target_sl, s.current_sl,
+        s.usb_ctrl_yn, s.remote_access, s.remote_text, s.review_date, s.remark, s.row_ver, s.updated_at, s.updated_by
+    </sql>
+    <sql id="secFrom">
+        from mst_equip e
+        join mst_equip_class c on c.class_id = e.class_id
+        left join cms_equip_sec s on s.equip_id = e.equip_id
+    </sql>
+
+    <select id="findSecs" resultType="io.smarthappy.module.cms.CmsSecDtos$SecRow">
+        select <include refid="secCols"/> <include refid="secFrom"/>
+        <include refid="secWhere"/>
+         order by e.plant_cd, e.equip_cd
+         limit #{limit}
+    </select>
+
+    <!-- grid SQL 쪽(QA G-2, docs/33 13.18) — 경고 필터·계산 칸 정렬이 없을 때. 목록과 같은 조건·같은 DB 정렬 규칙, 허용 목록 enum 이름으로만,
+         빈 값 가능 칸(보안 행 left join)은 desc 에서도 맨 뒤(메모리 정렬과 같음), 마지막 설비 id -->
+    <sql id="secWhere">
+         where (e.use_yn = 'Y' or s.sec_id is not null)
+           <if test="plantCd != null">and e.plant_cd = #{plantCd}</if>
+           <if test="keyword != null">and (e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\'
+                or s.os_nm ilike #{keyword} escape '\')</if>
+    </sql>
+
+    <!-- 정렬(허용 목록 enum 이름으로만) — SQL 쪽·메모리 경로 공통, 저장 칸만(계산 칸은 서비스가 건넨 목록에 없다), 마지막 설비 id -->
+    <sql id="secOrder">
+         order by
+         <foreach collection="sorts" item="o">
+            <choose>
+                <when test="o.key == 'EQUIP_CD'">e.equip_cd<if test="o.desc"> desc</if></when>
+                <when test="o.key == 'EQUIP_NM'">e.equip_nm<if test="o.desc"> desc</if></when>
+                <when test="o.key == 'OS_NM'">s.os_nm<if test="o.desc"> desc nulls last</if></when>
+                <when test="o.key == 'OS_EOS_DATE'">s.os_eos_date<if test="o.desc"> desc nulls last</if></when>
+                <when test="o.key == 'LAST_SCAN_DATE'">s.last_scan_date<if test="o.desc"> desc nulls last</if></when>
+                <when test="o.key == 'REVIEW_DATE'">s.review_date<if test="o.desc"> desc nulls last</if></when>
+                <otherwise>e.plant_cd<if test="o.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         e.equip_id
+    </sql>
+
+    <select id="findSecPage" resultType="io.smarthappy.module.cms.CmsSecDtos$SecRow">
+        select <include refid="secCols"/> <include refid="secFrom"/>
+        <include refid="secWhere"/>
+        <include refid="secOrder"/>
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <!-- 메모리 경로(경고 필터·계산 칸 정렬, QA G-2 잔여) — 같은 조건·같은 정렬(저장 칸)로 다 읽는다. 서비스는 이 순서를 Java 로 다시 비교하지 않는다 -->
+    <select id="findSecsSorted" resultType="io.smarthappy.module.cms.CmsSecDtos$SecRow">
+        select <include refid="secCols"/> <include refid="secFrom"/>
+        <include refid="secWhere"/>
+        <include refid="secOrder"/>
+         limit #{limit}
+    </select>
+
+    <select id="countSecs" resultType="long">
+        select count(*) <include refid="secFrom"/>
+        <include refid="secWhere"/>
+    </select>
+
+    <select id="findSec" resultType="io.smarthappy.module.cms.CmsSecDtos$SecRow">
+        select <include refid="secCols"/> <include refid="secFrom"/> where e.equip_id = #{equipId}
+    </select>
+
+    <select id="lockSec" resultType="java.lang.Long">
+        select sec_id from cms_equip_sec where equip_id = #{equipId} for update
+    </select>
+
+    <insert id="insertSec">
+        insert into cms_equip_sec (comp_cd, equip_id, network_yn, os_nm, os_ver, os_eos_date, last_scan_date, scan_tool, target_sl,
+                                   current_sl, usb_ctrl_yn, remote_access, remote_text, review_date, remark, created_by, updated_by)
+        values (hb_current_comp(), #{equipId}, #{s.networkYn}, #{s.osNm}, #{s.osVer}, #{s.osEosDate}, #{s.lastScanDate}, #{s.scanTool},
+                #{s.targetSl}, #{s.currentSl}, #{s.usbCtrlYn}, #{s.remoteAccess}, #{s.remoteText}, #{s.reviewDate}, #{s.remark}, #{by}, #{by})
+    </insert>
+
+    <update id="updateSec">
+        update cms_equip_sec
+           set network_yn = #{s.networkYn}, os_nm = #{s.osNm}, os_ver = #{s.osVer}, os_eos_date = #{s.osEosDate},
+               last_scan_date = #{s.lastScanDate}, scan_tool = #{s.scanTool}, target_sl = #{s.targetSl}, current_sl = #{s.currentSl},
+               usb_ctrl_yn = #{s.usbCtrlYn}, remote_access = #{s.remoteAccess}, remote_text = #{s.remoteText}, review_date = #{s.reviewDate},
+               remark = #{s.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where equip_id = #{equipId} and row_ver = #{s.rowVer}
+    </update>
+</mapper>

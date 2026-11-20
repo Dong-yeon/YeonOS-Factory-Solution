@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  채번 규칙 (sys-numbering) — 시스템관리 2단계 (docs/36 9.4). 수주·작업지시·LOT 등 번호 모양을 회사가 정한다.
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자(WEB). 도입 때, 고객이 번호 체계를 요구할 때.
+  입력 = 패턴 토큰({yyMM}{seq:4} …)·초기화 주기. 저장 전 다음 번호를 미리 본다(번호를 쓰지 않음).
+  예외 = 이미 낸 번호와 겹칠 수 있는 변경은 경고(Q8), 이번 기간 번호가 새 자릿수를 넘으면 거부.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">채번 규칙</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<!-- 건수 적은 목록 = 빠른 찾기 1칸(docs/40 P1 ②) — 서버 grid 검색어(코드·이름) -->
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{sysUi.quickFind}">빠른 찾기</span>
+        <input type="search" name="keyword" maxlength="50" th:placeholder="#{sysUi.quickFindHint}"></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="ruleGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{sysNumbering.selectOrNew}">왼쪽에서 규칙을 고르거나 신규를 누르세요.</p>
+        <form id="ruleForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{sysNumbering.col.ruleCd}">규칙</span>
+                <input data-field="ruleCd" maxlength="30" required spellcheck="false" data-help-key="sys-numbering.ruleCd"></label>
+            <label><span th:text="#{sysNumbering.col.ruleNm}">이름</span>
+                <input data-field="ruleNm" maxlength="100" required></label>
+            <label class="hb-wide"><span th:text="#{sysNumbering.col.pattern}">패턴</span>
+                <input data-field="pattern" maxlength="50" required spellcheck="false" data-help-key="sys-numbering.pattern"></label>
+            <label><span th:text="#{sysNumbering.col.resetCycle}">초기화</span>
+                <select data-field="resetCycle" data-help-key="sys-numbering.resetCycle">
+                    <option value="NONE" th:text="#{code.NUMBERING_RESET.NONE}">안 함</option>
+                    <option value="YEAR" th:text="#{code.NUMBERING_RESET.YEAR}">매년</option>
+                    <option value="MONTH" th:text="#{code.NUMBERING_RESET.MONTH}">매월</option>
+                    <option value="DAY" th:text="#{code.NUMBERING_RESET.DAY}">매일</option>
+                </select></label>
+            <label><span th:text="#{sysNumbering.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{sysNumbering.preview}">다음 번호 미리보기</span>
+                <output id="preview" class="hb-output"></output></label>
+        </form>
+        <p id="warn" class="hb-msg hb-msg-error" hidden></p>
+        <p class="hb-muted" th:text="#{sysNumbering.tokens}">토큰: {yyyy} {yy} {MM} {dd} {yyMM} {yyMMdd} {yyyyMMdd} {plant} {seq:N}</p>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/views/admin/numbering-mgt.js}"></script>
+</body>
+</html>

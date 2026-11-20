@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- P3 QMS 2부 Q10 SPC (docs/29_P3 12.6) — 부분군 = 판정 확정 검사의 검사 행, 측정값은 살아 있는 값만 -->
+<mapper namespace="io.smarthappy.module.qms.SpcMapper">
+
+    <!-- 관리도 단위(품목·특성·검사 유형·공정) — 목록·그리드가 같은 묶음 조건(UI 단계 3, 결정 #45). unit_key = 그리드 행 키 -->
+    <!-- 관리도 단위 = 요약 표 qms_spc_unit(판정 상태 트리거로만 갱신 — 다시 계산 = hb_qms_spc_unit_calc, docs/29_P3 22장 H5) -->
+    <sql id="unitsQuery">
+        select u.item_id, i.item_cd, i.item_nm, u.char_id, c.char_no, c.char_nm, u.insp_type, u.proc_id, p.proc_cd, p.proc_nm,
+               case when c.data_type = 'ATTRIBUTE' then 'P' else 'XBAR_R' end as chart_type,
+               u.subgroup_cnt, u.last_at,
+               (select s.limit_id from qms_spc_limit s
+                 where s.item_id = u.item_id and s.char_id = u.char_id and s.insp_type = u.insp_type
+                   and s.proc_id is not distinct from u.proc_id and s.status = 'ACTIVE') as limit_id,
+               u.item_id || ':' || u.char_id || ':' || u.insp_type || ':' || coalesce(u.proc_id, 0) as unit_key
+          from qms_spc_unit u
+          join mst_item i on i.item_id = u.item_id
+          join qms_char c on c.char_id = u.char_id
+          left join mst_proc p on p.proc_id = u.proc_id
+         <where>
+           <if test="keywordLike != null">(i.item_cd ilike #{keywordLike} escape '\' or i.item_nm ilike #{keywordLike} escape '\'
+               or c.char_no ilike #{keywordLike} escape '\' or c.char_nm ilike #{keywordLike} escape '\')</if>
+         </where>
+    </sql>
+
+    <select id="findUnits" resultType="io.smarthappy.module.qms.SpcDtos$ChartUnit">
+        select u.*, case when u.limit_id is null then 'N' else 'Y' end as limit_yn from (<include refid="unitsQuery"/>) u
+         order by u.last_at desc, u.item_id, u.char_id
+         limit #{limit}
+    </select>
+
+    <!-- 그리드: 정렬은 허용 enum 키만(choose) + 마지막 = 단위 키(품목·특성·유형·공정 → 같은 값이면 순서 고정) -->
+    <select id="findUnitGrid" resultType="io.smarthappy.module.qms.SpcDtos$ChartUnit">
+        select u.*, case when u.limit_id is null then 'N' else 'Y' end as limit_yn from (<include refid="unitsQuery"/>) u
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'ITEM_CD'">u.item_cd</when>
+                <when test="o.key == 'INSP_TYPE'">u.insp_type</when>
+                <when test="o.key == 'SUBGROUP_CNT'">u.subgroup_cnt</when>
+                <otherwise>u.last_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+         u.item_id, u.char_id, u.insp_type, u.proc_id nulls first
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countUnits" resultType="long">
+        select count(*) from (<include refid="unitsQuery"/>) u
+    </select>
+
+    <select id="findUnitHead" resultType="io.smarthappy.module.qms.SpcDtos$UnitHead">
+        select i.item_id, i.item_cd, i.item_nm, c.char_id, c.char_no, c.char_nm, c.data_type, c.unit_nm, c.scale,
+               p.proc_id, p.proc_cd, p.proc_nm
+          from mst_item i
+          join qms_char c on c.char_id = #{charId}
+          left join mst_proc p on p.proc_id = #{procId}
+         where i.item_id = #{itemId}
+    </select>
+
+    <select id="findSubgroups" resultType="io.smarthappy.module.qms.SpcDtos$SubgroupHead">
+        select x.insp_line_id, h.insp_id, h.insp_no, l.lot_no, x.lsl, x.usl, min(m.occurred_at) as first_at
+          from qms_insp h
+          join qms_insp_line x on x.insp_id = h.insp_id and x.char_id = #{charId} and x.data_type = 'VARIABLE'
+          join lot_master l on l.lot_id = h.lot_id
+          join qms_insp_meas m on m.insp_line_id = x.insp_line_id and m.void_of_id is null and m.value is not null
+               and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+         where h.item_id = #{itemId} and h.insp_type = #{inspType} and h.status = 'JUDGED'
+           and h.proc_id is not distinct from #{procId}::bigint
+         group by x.insp_line_id, h.insp_id, h.insp_no, l.lot_no, x.lsl, x.usl
+         <if test="to != null">having min(m.occurred_at) &lt; #{to}</if>
+         order by min(m.occurred_at) desc, x.insp_line_id desc
+         limit #{limit}
+    </select>
+
+    <!-- p 관리도(docs/29_P3 28장): 계수형 행 = 부분군, n = 살아 있는 OK/NG 수, d = NG 수 -->
+    <select id="findPSubgroups" resultType="io.smarthappy.module.qms.SpcDtos$SubgroupHead">
+        select x.insp_line_id, h.insp_id, h.insp_no, l.lot_no, min(m.occurred_at) as first_at,
+               count(*)::integer as n, (count(*) filter (where m.ok_yn = 'N'))::integer as d
+          from qms_insp h
+          join qms_insp_line x on x.insp_id = h.insp_id and x.char_id = #{charId} and x.data_type = 'ATTRIBUTE'
+          join lot_master l on l.lot_id = h.lot_id
+          join qms_insp_meas m on m.insp_line_id = x.insp_line_id and m.void_of_id is null and m.ok_yn is not null
+               and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+         where h.item_id = #{itemId} and h.insp_type = #{inspType} and h.status = 'JUDGED'
+           and h.proc_id is not distinct from #{procId}::bigint
+         group by x.insp_line_id, h.insp_id, h.insp_no, l.lot_no
+         <if test="to != null">having min(m.occurred_at) &lt; #{to}</if>
+         order by min(m.occurred_at) desc, x.insp_line_id desc
+         limit #{limit}
+    </select>
+
+    <select id="findValues" resultType="io.smarthappy.module.qms.SpcDtos$MeasVal">
+        select m.insp_line_id, m.value
+          from qms_insp_meas m
+         where m.insp_line_id in <foreach collection="lineIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+           and m.void_of_id is null and m.value is not null
+           and not exists (select 1 from qms_insp_meas v where v.void_of_id = m.meas_id)
+         order by m.insp_line_id, m.sample_no
+    </select>
+
+    <sql id="limitCols">
+        limit_id, item_id, char_id, insp_type, proc_id, center, sigma, subgroup_cnt, from_at, to_at, rules, chart_type, status, remark, void_reason,
+        created_at, created_by, row_ver
+    </sql>
+
+    <select id="findLiveLimit" resultType="io.smarthappy.module.qms.SpcDtos$LimitRow">
+        select <include refid="limitCols"/> from qms_spc_limit
+         where item_id = #{itemId} and char_id = #{charId} and insp_type = #{inspType} and proc_id is not distinct from #{procId}::bigint
+           and status = 'ACTIVE'
+    </select>
+
+    <select id="findLimit" resultType="io.smarthappy.module.qms.SpcDtos$LimitRow">
+        select <include refid="limitCols"/> from qms_spc_limit where limit_id = #{id}
+    </select>
+
+    <select id="findLimits" resultType="io.smarthappy.module.qms.SpcDtos$LimitRow">
+        select <include refid="limitCols"/> from qms_spc_limit
+         where item_id = #{itemId} and char_id = #{charId} and insp_type = #{inspType} and proc_id is not distinct from #{procId}::bigint
+         order by created_at desc, limit_id desc
+         limit 50
+    </select>
+
+    <select id="insertLimit" resultType="long" flushCache="true">
+        insert into qms_spc_limit (comp_cd, item_id, char_id, insp_type, proc_id, center, sigma, subgroup_cnt, from_at, to_at, rules, chart_type,
+                                   remark, created_by, updated_by)
+        values (hb_current_comp(), #{itemId}, #{charId}, #{inspType}, #{procId}, #{center}, #{sigma}, #{subgroupCnt}, #{fromAt}, #{toAt},
+                #{rules}, #{chartType}, #{remark}, #{by}, #{by})
+        returning limit_id
+    </select>
+
+    <update id="voidLimit">
+        update qms_spc_limit set status = 'VOID', void_reason = #{reason}, voided_by = #{by}, voided_at = now(),
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where limit_id = #{id} and status = 'ACTIVE' and row_ver = #{rowVer}
+    </update>
+</mapper>

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  AP 규칙표 (apqp-ap) — P6 APQP A1 (docs/41 4장, 결정 P3).
+  조치 우선순위(AP H/M/L)를 정하는 S·O·D 범위 규칙을 회사가 입력한다 — 핸드북 표는 넣지 않는다(저작권).
+  1,000 조합(각 1~10)을 빠짐·겹침 없이 덮어야 "사용"으로 바꿀 수 있고, 확정 FMEA 가 쓴 표의 규칙은 고정(복사해서 새 표로).
+-->
+<body data-table-menu="" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/apqp.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">AP 규칙표</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" th:if="${actions.contains('SAVE')}" th:text="#{apqp.ap.new}">새 규칙표</button>
+        </div>
+        <p class="hb-muted" th:text="#{apqp.ap.note}">핸드북의 AP 표는 넣지 않습니다. 회사 기준(고객 요구)을 직접 입력하세요.</p>
+        <div class="apqp-scroll">
+            <table class="hb-cmp-table" id="sets">
+                <thead><tr>
+                    <th th:text="#{apqp.col.setCd}">코드</th>
+                    <th th:text="#{apqp.col.setNm}">이름</th>
+                    <th th:text="#{apqp.col.ruleCnt}">규칙</th>
+                    <th th:text="#{apqp.col.releasedCnt}">확정 FMEA</th>
+                    <th th:text="#{apqp.col.useYn}">사용</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="copyBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{apqp.ap.copy}">복사</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="mode" class="hb-muted"></p>
+        <form id="setForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{apqp.col.setCd}">코드</span><input data-field="setCd" maxlength="20" required data-help-key="apqp-ap.setCd"></label>
+            <label class="hb-wide"><span th:text="#{apqp.col.setNm}">이름</span><input data-field="setNm" maxlength="100" required></label>
+            <fieldset class="hb-seg" data-field="useYn">
+                <legend th:text="#{apqp.col.useYn}">사용</legend>
+                <label><input type="radio" name="useYn" value="Y"><span th:text="#{yn.Y}">사용</span></label>
+                <label><input type="radio" name="useYn" value="N" checked><span th:text="#{yn.N}">미사용</span></label>
+            </fieldset>
+            <label class="hb-wide"><span th:text="#{apqp.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+        <p id="lockNote" class="hb-msg" hidden th:text="#{apqp.ap.locked}">확정 FMEA 가 쓴 표라 규칙을 바꿀 수 없습니다. 복사해서 새 표로 고치세요.</p>
+        <section class="hb-sub">
+            <h2 th:text="#{apqp.ap.rules}">규칙 (S·O·D 범위 → AP)</h2>
+            <div class="apqp-scroll">
+                <table class="hb-cmp-table apqp-rules" id="rules">
+                    <thead><tr>
+                        <th>#</th>
+                        <th th:text="#{apqp.col.sev}">S</th>
+                        <th th:text="#{apqp.col.occ}">O</th>
+                        <th th:text="#{apqp.col.det}">D</th>
+                        <th>AP</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="hb-toolbar">
+                <button type="button" id="addRuleBtn" class="hb-btn-secondary" th:text="#{apqp.ap.addRule}">규칙 추가</button>
+            </div>
+            <p id="coverage" class="apqp-coverage" role="status"></p>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/apqp/ap-mgt.js}"></script>
+</body>
+</html>

@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 협력사 포털 SRM (docs/42 4장·7장 3) — 회사 범위는 RLS, 협력사 범위는 모든 문장의 #{custId}(가드 PortalMapperGuardTest).
+     읽기만 — 쓰기는 소유를 여기서 잠가 확인한 뒤 내부 서비스(AckService·AsnService)가 같은 검사로 한다.
+     내부 칸(메모·담당자·감사 행위자·ERP 번호·입고 쪽 칸)은 고르지 않는다 — 받은 양만 -->
+<mapper namespace="io.smarthappy.module.srm.portal.PortalSrmMapper">
+
+    <select id="supplier" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$SupplierInfo">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status
+          from mst_cust c left join srm_supplier s on s.cust_id = c.cust_id
+         where c.cust_id = #{custId}
+    </select>
+
+    <!-- ================================================================ 발주·회신 -->
+
+    <!-- p 별칭 필요: 유효 회신 = 지금 개정의 가장 큰 순번 -->
+    <sql id="validAck">
+        left join lateral (select a.ack_id, a.ack_seq, a.ack_status, a.ack_on from srm_po_ack a
+                            where a.po_id = p.po_id and a.rev = p.rev order by a.ack_seq desc limit 1) va on true
+    </sql>
+
+    <sql id="poCols">
+        p.po_id, p.po_no, p.rev, p.po_date, p.status, p.plant_cd, pl.plant_nm, p.currency_cd, trim_scale(p.total_amt)::text as total_amt,
+        p.issued_at, (select count(*) from srm_po_line l where l.po_id = p.po_id)::int as line_cnt,
+        va.ack_seq, va.ack_status, va.ack_on, (p.issued_at at time zone #{zone})::date + #{dueDays} as ack_due_date,
+        p.status in ('ISSUED', 'ACKED') as ackable
+    </sql>
+
+    <!-- 내 발행된 발주(발행한 적 없는 발주는 협력사가 모른다) — 발주일 기간 -->
+    <select id="findPos" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$PoRow">
+        select <include refid="poCols"/>
+          from srm_po p
+          left join sys_plant pl on pl.plant_cd = p.plant_cd
+          <include refid="validAck"/>
+         where p.cust_id = #{custId} and p.issued_at is not null
+           and p.po_date between #{from} and #{to}
+        <if test="open">and p.status in ('ISSUED', 'ACKED', 'PARTIAL_RECEIVED')</if>
+        <if test="keywordLike != null">and p.po_no ilike #{keywordLike} escape '\'</if>
+         order by p.po_date desc, p.po_id desc
+         limit 500
+    </select>
+
+    <select id="findPo" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$PoRow">
+        select <include refid="poCols"/>
+          from srm_po p
+          left join sys_plant pl on pl.plant_cd = p.plant_cd
+          <include refid="validAck"/>
+         where p.po_id = #{poId} and p.cust_id = #{custId} and p.issued_at is not null
+    </select>
+
+    <select id="findPoLines" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$PoLine">
+        select l.po_line_id, l.line_no, i.item_cd, l.item_nm, l.supplier_item_cd, l.unit_cd, trim_scale(l.qty)::text as qty,
+               trim_scale(l.cancel_qty)::text as cancel_qty, trim_scale(l.recv_qty)::text as recv_qty,
+               trim_scale(greatest(l.qty - l.cancel_qty - l.recv_qty, 0))::text as open_qty,
+               trim_scale(l.unit_price)::text as unit_price, trim_scale(l.amt)::text as amt, l.due_date, l.line_status,
+               trim_scale(pr.qty)::text as promised_qty, pr.first_date as promised_first, pr.last_date as promised_last
+          from srm_po_line l
+          join srm_po p on p.po_id = l.po_id
+          join mst_item i on i.item_id = l.item_id
+          <include refid="validAck"/>
+          left join lateral (select sum(al.promised_qty) as qty, min(al.promised_date) as first_date, max(al.promised_date) as last_date
+                               from srm_po_ack_line al where al.ack_id = va.ack_id and al.po_line_id = l.po_line_id) pr on true
+         where l.po_id = #{poId} and p.cust_id = #{custId} and p.issued_at is not null
+         order by l.line_no
+    </select>
+
+    <select id="findAcks" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$AckRow">
+        select a.ack_id, a.ack_seq, a.rev, a.source, a.ack_status, a.reject_reason, a.ack_by_nm, a.ack_on, a.remark, a.created_at,
+               (a.rev = p.rev and a.ack_seq = (select max(x.ack_seq) from srm_po_ack x where x.po_id = p.po_id and x.rev = p.rev)) as valid,
+               a.rev &lt; p.rev as old_rev
+          from srm_po_ack a join srm_po p on p.po_id = a.po_id
+         where a.po_id = #{poId} and p.cust_id = #{custId}
+         order by a.ack_seq desc
+    </select>
+
+    <select id="findAckLines" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$AckLine">
+        select al.ack_id, al.po_line_id, l.line_no, i.item_cd, al.promised_date, trim_scale(al.promised_qty)::text as promised_qty, al.remark
+          from srm_po_ack_line al
+          join srm_po_ack a on a.ack_id = al.ack_id
+          join srm_po p on p.po_id = a.po_id
+          join srm_po_line l on l.po_line_id = al.po_line_id
+          join mst_item i on i.item_id = l.item_id
+         where a.po_id = #{poId} and p.cust_id = #{custId}
+         order by a.ack_seq desc, l.line_no, al.promised_date
+    </select>
+
+    <!-- 회신 전 소유 확인 — 내 발행된 발주 머리를 잠근다(회신 서비스가 같은 트랜잭션에서 다시 잠가도 같은 행) -->
+    <select id="lockOwnPo" resultType="long" flushCache="true">
+        select po_id from srm_po where po_id = #{poId} and cust_id = #{custId} and issued_at is not null for update
+    </select>
+
+    <!-- ================================================================ ASN -->
+
+    <sql id="asnCols">
+        a.asn_id, a.asn_no, a.plant_cd, pl.plant_nm, a.ship_date, a.eta_date, a.supplier_ref, a.carrier_memo, a.source, a.status,
+        a.sent_at, a.cancel_reason, a.remark, a.row_ver,
+        (select count(*) from srm_asn_line l where l.asn_id = a.asn_id)::int as line_cnt,
+        a.open_line_cnt
+    </sql>
+
+    <!-- 출하~도착 구간이 조회 기간과 겹침(내부 목록과 같은 기준) -->
+    <select id="findAsns" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$AsnRow">
+        select <include refid="asnCols"/>
+          from srm_asn a left join sys_plant pl on pl.plant_cd = a.plant_cd
+         where a.cust_id = #{custId} and a.ship_date &lt;= #{to} and a.eta_date &gt;= #{from}
+        <if test="status != null">and a.status = #{status}</if>
+        <if test="keywordLike != null">and (a.asn_no ilike #{keywordLike} escape '\' or a.supplier_ref ilike #{keywordLike} escape '\')</if>
+         order by a.eta_date desc, a.asn_id desc
+         limit 500
+    </select>
+
+    <select id="findAsn" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$AsnRow">
+        select <include refid="asnCols"/>
+          from srm_asn a left join sys_plant pl on pl.plant_cd = a.plant_cd
+         where a.asn_id = #{asnId} and a.cust_id = #{custId}
+    </select>
+
+    <select id="findAsnLines" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$AsnLine">
+        select l.line_no, l.po_line_id, p.po_no, pl.line_no as po_line_no, i.item_cd, pl.item_nm, l.unit_cd, trim_scale(l.qty)::text as qty,
+               trim_scale(coalesce((select sum(x.qty) from srm_po_receipt x where x.asn_line_id = l.asn_line_id), 0))::text as recv_qty,
+               l.supplier_lot_no, l.mfg_date, l.expiry_date, l.pack_cnt, l.remark
+          from srm_asn_line l
+          join srm_asn a on a.asn_id = l.asn_id
+          join srm_po_line pl on pl.po_line_id = l.po_line_id
+          join srm_po p on p.po_id = pl.po_id
+          join mst_item i on i.item_id = l.item_id
+         where l.asn_id = #{asnId} and a.cust_id = #{custId}
+         order by l.line_no
+    </select>
+
+    <select id="lockOwnAsn" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$OwnAsn" flushCache="true">
+        select asn_id, source, status from srm_asn where asn_id = #{asnId} and cust_id = #{custId} for update
+    </select>
+
+    <!-- ASN 을 낼 수 있는 공장 = 내 열린 원천 SRM 발주가 있는 공장 -->
+    <select id="plants" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$PlantOption">
+        select distinct p.plant_cd, pl.plant_nm
+          from srm_po p left join sys_plant pl on pl.plant_cd = p.plant_cd
+         where p.cust_id = #{custId} and p.source = 'SRM' and p.status in ('ISSUED', 'ACKED', 'PARTIAL_RECEIVED')
+         order by p.plant_cd
+    </select>
+
+    <!-- 내부 ASN 화면 poLineOptions 와 같은 계산 — 통지 가능 = 받을 수 있는 양 − 다른 살아 있는 ASN 의 남은 양 -->
+    <select id="poLineOptions" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$PoLineOption">
+        select y.po_line_id, y.po_no, y.line_no, y.item_cd, y.item_nm, y.unit_cd, trim_scale(y.open_qty)::text as open_qty,
+               trim_scale(y.notified)::text as notified_qty, trim_scale(greatest(y.room - y.notified, 0))::text as notifiable_qty, y.due_date
+          from (select l.po_line_id, p.po_no, l.line_no, i.item_cd, l.item_nm, l.unit_cd, l.due_date,
+                       l.qty - l.cancel_qty - l.recv_qty as open_qty,
+                       (l.qty - l.cancel_qty) * (100 + hb_srm_recv_over_pct(p.comp_cd, p.plant_cd)) / 100 - l.recv_qty as room,
+                       coalesce((select sum(greatest(al.qty - coalesce((select sum(x.qty) from srm_po_receipt x where x.asn_line_id = al.asn_line_id), 0), 0))
+                                   from srm_asn_line al join srm_asn a on a.asn_id = al.asn_id
+                                  where al.po_line_id = l.po_line_id and a.status in ('SENT', 'PARTIAL_RECEIVED')
+                                <if test="asnId != null">and a.asn_id &lt;&gt; #{asnId}</if>), 0) as notified
+                  from srm_po p
+                  join srm_po_line l on l.po_id = p.po_id and l.line_status = 'OPEN'
+                  join mst_item i on i.item_id = l.item_id
+                 where p.cust_id = #{custId} and p.plant_cd = #{plantCd} and p.source = 'SRM'
+                   and p.status in ('ISSUED', 'ACKED', 'PARTIAL_RECEIVED')
+                   and l.qty - l.cancel_qty - l.recv_qty &gt; 0) y
+         order by y.due_date, y.po_no, y.line_no
+         limit 500
+    </select>
+
+    <!-- ================================================================ 클레임 회신 (P-4) -->
+
+    <sql id="claimCols">
+        k.claim_id, k.claim_no, k.action_cd, k.title, k.request_text, k.reply_due, trim_scale(k.charge_amt)::text as charge_amt, k.currency_cd,
+        k.status, k.sent_at, k.answer_cause, k.answer_action, k.answered_on, k.answer_source, k.closed_at, k.cancel_reason, k.row_ver,
+        (select count(*) from srm_claim_ncr n where n.claim_id = k.claim_id)::int as ncr_cnt
+    </sql>
+
+    <!-- 내게 보낸 클레임(작성 중 제외 — 보낸 적 있는 것만) — 기간 = 보낸 날(회사 날짜) -->
+    <select id="findClaims" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$ClaimRow">
+        select <include refid="claimCols"/>
+          from srm_claim k
+         where k.cust_id = #{custId} and k.sent_at is not null
+           and k.sent_at &gt;= (#{from}::date)::timestamp at time zone #{zone}
+           and k.sent_at &lt; (#{to}::date + 1)::timestamp at time zone #{zone}
+        <if test="status != null">and k.status = #{status}</if>
+         order by k.sent_at desc, k.claim_id desc
+         limit 500
+    </select>
+
+    <select id="findClaim" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$ClaimRow">
+        select <include refid="claimCols"/>
+          from srm_claim k
+         where k.claim_id = #{claimId} and k.cust_id = #{custId} and k.sent_at is not null
+    </select>
+
+    <select id="findClaimNcrs" resultType="io.smarthappy.module.srm.portal.PortalSrmDtos$ClaimNcr">
+        select n.ncr_no, i.item_cd, i.item_nm, trim_scale(n.nc_qty)::text as nc_qty, n.unit_cd
+          from srm_claim_ncr n
+          join srm_claim k on k.claim_id = n.claim_id
+          join mst_item i on i.item_id = n.item_id
+         where n.claim_id = #{claimId} and k.cust_id = #{custId} and k.sent_at is not null
+         order by n.claim_ncr_id
+    </select>
+
+    <select id="lockOwnClaim" resultType="long" flushCache="true">
+        select claim_id from srm_claim where claim_id = #{claimId} and cust_id = #{custId} and sent_at is not null for update
+    </select>
+</mapper>

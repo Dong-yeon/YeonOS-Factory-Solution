@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  불량 유형 (mst-defect) — P1 6단계 (docs/21). 표준 상위(DEFECT_CAT, 시스템) + 회사 하위 코드 2단. 수십 개라 페이지 없는 표 + 상세 폼.
+  직접 치는 값 = 코드·이름·상위 분류·순서. 상위는 회사가 늘리지 않는다(회사 간 비교·AI 라벨 공통). 코드는 만든 뒤 고정.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">불량 유형</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{defect.keyword}">코드·이름</span>
+        <input name="keyword" maxlength="100" data-help-key="mst-defect.keyword"></label>
+    <label class="hb-check"><input type="checkbox" name="withUnused" value="true">
+        <span th:text="#{defect.withUnused}">사용 중지 포함</span></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="defectGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{defect.selectOrNew}">왼쪽에서 불량 유형을 고르거나 신규를 누르세요.</p>
+        <form id="defectForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{defect.col.catCd}">상위 분류</span>
+                <select data-field="catCd" data-hb="select" data-code="DEFECT_CAT" data-blank="select" required data-help-key="mst-defect.catCd"></select></label>
+            <label><span th:text="#{defect.col.defectCd}">불량 코드</span>
+                <input data-field="defectCd" maxlength="20" required data-help-key="mst-defect.defectCd"></label>
+            <label class="hb-wide-2"><span th:text="#{defect.col.defectNm}">불량명</span>
+                <input data-field="defectNm" maxlength="100" required></label>
+            <label><span th:text="#{defect.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{defect.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{defect.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/master/defect-mgt.js}"></script>
+</body>
+</html>

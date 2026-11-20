@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 발주 (SRM S3, docs/31 4장) — 회사 범위는 RLS, 쓰기의 comp_cd 는 hb_current_comp() -->
+<mapper namespace="io.smarthappy.module.srm.po.PoMapper">
+
+    <!-- ================================================================ 참조 -->
+
+    <select id="findSupplier" resultType="io.smarthappy.module.srm.po.PoDtos$SupplierRef">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status, s.currency_cd, s.pay_terms_cd
+          from mst_cust c join srm_supplier s on s.cust_id = c.cust_id
+         where c.cust_cd = #{custCd}
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.srm.po.PoDtos$ItemRef">
+        select i.item_id, i.item_cd, i.item_nm, i.unit_cd, i.use_yn,
+               (select s.supplier_item_cd from srm_source s where s.cust_id = #{custId} and s.item_id = i.item_id and s.use_yn = 'Y')
+                   as supplier_item_cd
+          from mst_item i where i.item_cd = #{itemCd}
+    </select>
+
+    <select id="unitScale" resultType="integer">
+        select coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = #{unitCd}),
+                        (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = #{unitCd}))
+    </select>
+
+    <select id="currencyScale" resultType="integer">
+        select hb_currency_scale(#{currencyCd})
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="findWh" resultType="long">
+        select node_id from mst_equip_hier where plant_cd = #{plantCd} and node_cd = #{whCd} and node_type = 'WH' and use_yn = 'Y'
+    </select>
+
+    <select id="findWhs" resultType="io.smarthappy.module.srm.po.PoDtos$WhOption">
+        select node_id, node_cd, node_nm from mst_equip_hier
+         where plant_cd = #{plantCd} and node_type = 'WH' and use_yn = 'Y' order by sort_no, node_cd
+    </select>
+
+    <select id="codeUsable" resultType="boolean">
+        select hb_code_usable(hb_current_comp(), #{grp}, #{code})
+    </select>
+
+    <sql id="prLineRefCols">
+        l.pr_line_id, l.pr_id, p.pr_no, p.status as pr_status, p.plant_cd, l.item_id, i.item_cd, i.item_nm, l.unit_cd,
+        trim_scale(l.qty)::text as qty, l.need_date, l.line_status, c.cust_cd as pref_cust_cd
+    </sql>
+
+    <select id="findOpenPrLines" resultType="io.smarthappy.module.srm.po.PoDtos$PrLineRef">
+        select * from (
+            select <include refid="prLineRefCols"/>,
+                   trim_scale(coalesce(o.ordered, 0))::text as ordered_qty, trim_scale(l.qty - coalesce(o.ordered, 0))::text as remain_qty,
+                   l.qty - coalesce(o.ordered, 0) as remain_num
+              from srm_pr_line l
+              join srm_pr p on p.pr_id = l.pr_id
+              join mst_item i on i.item_id = l.item_id
+              left join mst_cust c on c.cust_id = l.pref_cust_id
+              left join lateral (select sum(pl.qty - pl.cancel_qty) as ordered from srm_po_line pl join srm_po po on po.po_id = pl.po_id
+                                  where pl.pr_line_id = l.pr_line_id and po.status &lt;&gt; 'CANCELLED' and pl.line_status &lt;&gt; 'CANCELLED') o on true
+             where p.status = 'APPROVED' and l.line_status = 'OPEN'
+            <if test="itemCd != null">and i.item_cd = #{itemCd}</if>
+            <if test="keywordLike != null">and (p.pr_no ilike #{keywordLike} escape '\' or i.item_cd ilike #{keywordLike} escape '\'
+                or i.item_nm ilike #{keywordLike} escape '\')</if>
+        ) x where x.remain_num &gt; 0
+         order by x.need_date nulls last, x.pr_no, x.pr_line_id
+         limit 500
+    </select>
+
+    <!-- 잠금만 — 남은 수량은 잠근 뒤 다른 문장(findPrLineRefs)으로 센다: READ COMMITTED 에서 FOR UPDATE 로 기다린 문장은
+         잠근 행만 다시 읽고 같은 문장 안의 집계(다른 발주 행 합)는 문장 시작 때 스냅샷 그대로라 방금 커밋된 발주를 못 본다 -->
+    <select id="lockPrLines" resultType="long" flushCache="true">
+        select l.pr_line_id from srm_pr_line l join srm_pr p on p.pr_id = l.pr_id
+         where l.pr_line_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by l.pr_line_id
+           for update of l for share of p
+    </select>
+
+    <select id="findPrLineRefs" resultType="io.smarthappy.module.srm.po.PoDtos$PrLineRef" flushCache="true">
+        select <include refid="prLineRefCols"/>,
+               trim_scale(coalesce(o.ordered, 0))::text as ordered_qty, trim_scale(l.qty - coalesce(o.ordered, 0))::text as remain_qty
+          from srm_pr_line l
+          join srm_pr p on p.pr_id = l.pr_id
+          join mst_item i on i.item_id = l.item_id
+          left join mst_cust c on c.cust_id = l.pref_cust_id
+          left join lateral (select sum(pl.qty - pl.cancel_qty) as ordered from srm_po_line pl join srm_po po on po.po_id = pl.po_id
+                              where pl.pr_line_id = l.pr_line_id and po.status &lt;&gt; 'CANCELLED' and pl.line_status &lt;&gt; 'CANCELLED'
+                              <if test="exceptPoId != null">and pl.po_id &lt;&gt; #{exceptPoId}</if>) o on true
+         where l.pr_line_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by l.pr_line_id
+    </select>
+
+    <!-- ================================================================ 발주 -->
+
+    <sql id="poCols">
+        p.po_id, p.po_no, p.rev, p.po_date, p.cust_id, c.cust_cd, c.cust_nm, s.trade_status, p.plant_cd, pl.plant_nm, p.wh_id,
+        w.node_cd as wh_cd, w.node_nm as wh_nm, p.currency_cd, p.pay_terms_cd, p.buyer_user_id, bu.user_nm as buyer_nm, p.status,
+        p.apr_request_id, p.issued_at, p.issued_by, p.cancel_reason, trim_scale(p.total_amt)::text as total_amt, p.source, p.remark,
+        (select m.external_id from mst_ext_id_map m where m.entity_type = 'PO' and m.internal_id = p.po_id and m.use_yn = 'Y'
+          order by m.map_id limit 1) as erp_po_no,
+        (select count(*) from srm_po_line l where l.po_id = p.po_id) as line_cnt, p.row_ver, p.updated_at, p.updated_by
+    </sql>
+    <sql id="poFrom">
+          from srm_po p
+          join mst_cust c on c.cust_id = p.cust_id
+          join srm_supplier s on s.cust_id = p.cust_id
+          left join sys_plant pl on pl.plant_cd = p.plant_cd
+          left join mst_equip_hier w on w.node_id = p.wh_id
+          left join sys_user bu on bu.user_id = p.buyer_user_id
+    </sql>
+
+    <!-- 목록·grid 공통 조건(c = PoCrit) — 발주일 기간 필수(서비스가 DateRanges 로 검사) -->
+    <sql id="poWhere">
+         where p.po_date between #{c.from} and #{c.to}
+        <if test="c.status != null">and p.status = #{c.status}</if>
+        <if test="c.custCd != null">and c.cust_cd = #{c.custCd}</if>
+        <if test="c.keywordLike != null">
+           and (p.po_no ilike #{c.keywordLike} escape '\' or c.cust_nm ilike #{c.keywordLike} escape '\'
+                or exists (select 1 from mst_ext_id_map m where m.entity_type = 'PO' and m.internal_id = p.po_id and m.use_yn = 'Y'
+                            and m.external_id ilike #{c.keywordLike} escape '\')
+                or exists (select 1 from srm_po_line l join mst_item i on i.item_id = l.item_id
+                            where l.po_id = p.po_id and (i.item_cd ilike #{c.keywordLike} escape '\' or l.item_nm ilike #{c.keywordLike} escape '\')))
+        </if>
+    </sql>
+
+    <select id="findPos" resultType="io.smarthappy.module.srm.po.PoDtos$PoRow">
+        select <include refid="poCols"/>
+        <include refid="poFrom"/>
+        <include refid="poWhere"/>
+         order by p.po_date desc, p.po_id desc
+         limit 2000
+    </select>
+
+    <!-- grid(UI 단계 3 ①, docs/31 5.2) — 정렬은 허용 목록 enum 이름으로만 고른다(문자열 치환 없이), 마지막에 PK.
+         합계 정렬은 통화가 섞여도 숫자 크기로만(통화 칸이 옆에 보인다) -->
+    <select id="findPoPage" resultType="io.smarthappy.module.srm.po.PoDtos$PoRow">
+        select <include refid="poCols"/>
+        <include refid="poFrom"/>
+        <include refid="poWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PO_NO'">p.po_no</when>
+                <when test="s.key == 'SUPPLIER'">c.cust_nm</when>
+                <when test="s.key == 'TOTAL'">p.total_amt</when>
+                <when test="s.key == 'LINE_CNT'">(select count(*) from srm_po_line l where l.po_id = p.po_id)</when>
+                <when test="s.key == 'STATUS'">p.status</when>
+                <otherwise>p.po_date</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         p.po_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countPos" resultType="long">
+        select count(*) <include refid="poFrom"/> <include refid="poWhere"/>
+    </select>
+
+    <select id="findPo" resultType="io.smarthappy.module.srm.po.PoDtos$PoRow">
+        select <include refid="poCols"/>
+        <include refid="poFrom"/>
+         where p.po_id = #{id}
+    </select>
+
+    <select id="lockPo" resultType="io.smarthappy.module.srm.po.PoDtos$PoRow" flushCache="true">
+        select p.po_id, p.po_no, p.rev, p.status, p.cust_id, p.currency_cd, p.po_date, p.plant_cd, p.row_ver, p.apr_request_id
+          from srm_po p where p.po_id = #{id} for update
+    </select>
+
+    <select id="findLines" resultType="io.smarthappy.module.srm.po.PoDtos$PoLineRow">
+        select l.po_line_id, l.po_id, l.line_no, l.item_id, i.item_cd, l.item_nm, i.use_yn as item_use_yn, l.supplier_item_cd,
+               l.unit_cd, trim_scale(l.qty)::text as qty, trim_scale(l.unit_price)::text as unit_price, trim_scale(l.amt)::text as amt,
+               l.due_date, l.pr_line_id, r.pr_no, trim_scale(l.cancel_qty)::text as cancel_qty, l.line_status, l.remark,
+               coalesce(l.due_date &lt; p.po_date + src.lead_days, false) as lead_short,
+               coalesce(l.qty &lt; src.moq, false) as moq_short,
+               coalesce(src.order_mult is not null and mod(l.qty, src.order_mult) &lt;&gt; 0, false) as mult_off
+          from srm_po_line l
+          join srm_po p on p.po_id = l.po_id
+          join mst_item i on i.item_id = l.item_id
+          left join srm_source src on src.cust_id = p.cust_id and src.item_id = l.item_id and src.use_yn = 'Y'
+          left join srm_pr_line rl on rl.pr_line_id = l.pr_line_id
+          left join srm_pr r on r.pr_id = rl.pr_id
+         where l.po_id = #{poId}
+         order by l.line_no
+    </select>
+
+    <select id="findRevs" resultType="io.smarthappy.module.srm.po.PoDtos$RevRow">
+        select rev, issued_at, issued_by from srm_po_rev where po_id = #{poId} order by rev desc
+    </select>
+
+    <select id="insertPo" resultType="long" flushCache="true">
+        insert into srm_po (comp_cd, po_no, po_date, cust_id, plant_cd, wh_id, currency_cd, pay_terms_cd, buyer_user_id, total_amt,
+                            remark, created_by, updated_by)
+        values (hb_current_comp(), #{poNo}, #{poDate}, #{custId}, #{f.plantCd}, #{f.whId}, #{currencyCd}, #{f.payTermsCd},
+                #{buyerUserId}, #{f.totalAmt}, #{f.remark}, #{by}, #{by})
+        returning po_id
+    </select>
+
+    <update id="updatePo">
+        update srm_po
+           set plant_cd = #{f.plantCd}, wh_id = #{f.whId}, pay_terms_cd = #{f.payTermsCd}, remark = #{f.remark},
+               total_amt = #{f.totalAmt}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where po_id = #{id} and row_ver = #{f.rowVer} and status = 'DRAFT'
+    </update>
+
+    <select id="nextLineNo" resultType="int">
+        select coalesce(max(line_no), 0) + 1 from srm_po_line where po_id = #{poId}
+    </select>
+
+    <insert id="insertLine">
+        insert into srm_po_line (comp_cd, po_id, line_no, item_id, item_nm, supplier_item_cd, unit_cd, qty, unit_price, amt,
+                                 due_date, pr_line_id, remark, created_by, updated_by)
+        values (hb_current_comp(), #{poId}, #{lineNo}, #{f.itemId}, #{f.itemNm}, #{f.supplierItemCd}, #{f.unitCd}, #{f.qty},
+                #{f.unitPrice}, #{f.amt}, #{f.dueDate}, #{f.prLineId}, #{f.remark}, #{by}, #{by})
+    </insert>
+
+    <!-- 바뀐 행만 UPDATE -->
+    <update id="updateLine">
+        update srm_po_line
+           set item_id = #{f.itemId}, item_nm = #{f.itemNm}, supplier_item_cd = #{f.supplierItemCd}, unit_cd = #{f.unitCd},
+               qty = #{f.qty}, unit_price = #{f.unitPrice}, amt = #{f.amt}, due_date = #{f.dueDate}, pr_line_id = #{f.prLineId},
+               remark = #{f.remark}, updated_at = now(), updated_by = #{by}
+         where po_line_id = #{f.poLineId}
+           and ((item_id, qty, unit_price, amt, due_date) is distinct from
+                    (#{f.itemId}::bigint, #{f.qty}::numeric, #{f.unitPrice}::numeric, #{f.amt}::numeric, #{f.dueDate}::date)
+                or item_nm is distinct from #{f.itemNm}::varchar or supplier_item_cd is distinct from #{f.supplierItemCd}::varchar
+                or unit_cd is distinct from #{f.unitCd}::varchar or pr_line_id is distinct from #{f.prLineId}::bigint
+                or remark is distinct from #{f.remark}::varchar)
+    </update>
+
+    <delete id="deleteLine">
+        delete from srm_po_line where po_line_id = #{poLineId}
+    </delete>
+
+    <update id="changeStatus">
+        update srm_po
+           set status = #{to},
+               apr_request_id = coalesce(#{aprRequestId}::bigint, apr_request_id),
+               cancel_reason = case when #{to} = 'CANCELLED' then #{cancelReason} else cancel_reason end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where po_id = #{id} and status = #{from} and row_ver = #{rowVer}
+    </update>
+
+    <update id="issue">
+        update srm_po
+           set status = 'ISSUED', issued_at = now(), issued_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where po_id = #{id} and status = 'APPROVED' and row_ver = #{rowVer}
+    </update>
+
+    <update id="revise">
+        update srm_po
+           set status = 'DRAFT', rev = case when status in ('ISSUED', 'ACKED') then rev + 1 else rev end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where po_id = #{id} and status = #{from} and row_ver = #{rowVer}
+    </update>
+
+    <!-- 발행본 스냅샷 식(발행 때 저장 / 발행 전 미리보기 같은 모양) — p·c·w 별칭 필요 -->
+    <sql id="snapshotExpr">
+               jsonb_build_object(
+                   'po', jsonb_build_object('poNo', p.po_no, 'rev', p.rev, 'poDate', p.po_date, 'custCd', c.cust_cd, 'custNm', c.cust_nm,
+                                            'plantCd', p.plant_cd, 'whCd', w.node_cd, 'currencyCd', p.currency_cd,
+                                            'payTermsCd', p.pay_terms_cd, 'totalAmt', trim_scale(p.total_amt)::text, 'remark', p.remark),
+                   'lines', coalesce((select jsonb_agg(jsonb_build_object(
+                                'lineNo', l.line_no, 'itemCd', i.item_cd, 'itemNm', l.item_nm, 'supplierItemCd', l.supplier_item_cd,
+                                'unitCd', l.unit_cd, 'qty', trim_scale(l.qty)::text, 'unitPrice', trim_scale(l.unit_price)::text,
+                                'amt', trim_scale(l.amt)::text, 'dueDate', l.due_date, 'lineStatus', l.line_status) order by l.line_no)
+                              from srm_po_line l join mst_item i on i.item_id = l.item_id where l.po_id = p.po_id), '[]'::jsonb))
+    </sql>
+
+    <insert id="insertRevSnapshot">
+        insert into srm_po_rev (comp_cd, po_id, rev, issued_by, snapshot, created_by)
+        select p.comp_cd, p.po_id, p.rev, #{by},
+               <include refid="snapshotExpr"/>,
+               #{by}
+          from srm_po p join mst_cust c on c.cust_id = p.cust_id left join mst_equip_hier w on w.node_id = p.wh_id
+         where p.po_id = #{id}
+    </insert>
+
+    <select id="currentSnapshot" resultType="string">
+        select (<include refid="snapshotExpr"/>)::text
+          from srm_po p join mst_cust c on c.cust_id = p.cust_id left join mst_equip_hier w on w.node_id = p.wh_id
+         where p.po_id = #{id}
+    </select>
+
+    <select id="revSnapshot" resultType="string">
+        select snapshot::text from srm_po_rev where po_id = #{id} and rev = #{rev}
+    </select>
+
+    <update id="finishApproval">
+        update srm_po
+           set status = #{to}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where po_id = #{id} and status = 'IN_APPROVAL'
+    </update>
+
+    <select id="aprTurn" resultType="map">
+        select (select l.approver_id from apr_line l where l.apr_id = r.apr_id and l.status = 'CURRENT') as current_id, r.requester_id
+          from apr_request r where r.apr_id = #{aprId} and r.status = 'PENDING'
+    </select>
+
+    <select id="notifyInfo" resultType="map">
+        select p.po_no, p.rev, c.cust_nm, sc.comp_nm, p.currency_cd, trim_scale(p.total_amt)::text as total_amt,
+               (select count(*) from srm_po_line l where l.po_id = p.po_id) as line_cnt,
+               (select min(l.due_date) from srm_po_line l where l.po_id = p.po_id) as first_due,
+               coalesce((select ct.email from mst_cust_contact ct where ct.cust_id = p.cust_id and ct.use_yn = 'Y' and ct.main_yn = 'Y'
+                          and ct.email is not null order by ct.contact_id limit 1), c.email) as email
+          from srm_po p join mst_cust c on c.cust_id = p.cust_id join sys_comp sc on sc.comp_cd = p.comp_cd
+         where p.po_id = #{id}
+    </select>
+
+    <select id="sumAmt" resultType="java.math.BigDecimal">
+        select coalesce(sum(amt), 0) from srm_po_line where po_id = #{poId}
+    </select>
+
+    <!-- ================================================================ ERP 발주 받기 (S3b) -->
+
+    <select id="findErpSystem" resultType="long">
+        select system_id from mst_ext_system where system_cd = #{systemCd} and system_type = 'ERP' and use_yn = 'Y'
+    </select>
+
+    <select id="findMappedId" resultType="long">
+        select internal_id from mst_ext_id_map
+         where system_id = #{systemId} and entity_type = #{entityType} and external_id = #{externalId} and use_yn = 'Y'
+    </select>
+
+    <select id="findSupplierById" resultType="io.smarthappy.module.srm.po.PoDtos$SupplierRef">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status, s.currency_cd, s.pay_terms_cd
+          from mst_cust c join srm_supplier s on s.cust_id = c.cust_id
+         where c.cust_id = #{custId}
+    </select>
+
+    <select id="findItemCd" resultType="string">
+        select item_cd from mst_item where item_id = #{itemId}
+    </select>
+
+    <!-- 대조 값은 엑셀 검증의 정규화 값과 같은 모양(코드 = 내부 코드, 수량·단가 = trim_scale 글자) -->
+    <select id="findErpLine" resultType="map" flushCache="true">
+        select l.po_line_id, c.cust_cd, p.plant_cd, w.node_cd as wh_cd, p.currency_cd, p.po_date::text as po_date, i.item_cd,
+               trim_scale(l.qty)::text as qty, trim_scale(l.unit_price)::text as unit_price, l.due_date::text as due_date, l.remark
+          from mst_ext_id_map m
+          join srm_po p on p.po_id = m.internal_id
+          join mst_cust c on c.cust_id = p.cust_id
+          left join mst_equip_hier w on w.node_id = p.wh_id
+          join srm_po_line l on l.po_id = p.po_id and l.line_no = #{lineNo}
+          join mst_item i on i.item_id = l.item_id
+         where m.system_id = #{systemId} and m.entity_type = 'PO' and m.external_id = #{erpPoNo} and m.use_yn = 'Y'
+    </select>
+
+    <select id="erpPoExists" resultType="boolean" flushCache="true">
+        select exists (select 1 from mst_ext_id_map where system_id = #{systemId} and entity_type = 'PO' and external_id = #{erpPoNo}
+                          and use_yn = 'Y')
+    </select>
+
+    <select id="insertErpPo" resultType="long" flushCache="true">
+        insert into srm_po (comp_cd, po_no, po_date, cust_id, plant_cd, wh_id, currency_cd, pay_terms_cd, buyer_user_id, total_amt,
+                            remark, source, created_by, updated_by)
+        values (hb_current_comp(), #{poNo}, #{poDate}, #{custId}, #{f.plantCd}, #{f.whId}, #{currencyCd}, #{f.payTermsCd},
+                #{buyerUserId}, #{f.totalAmt}, #{f.remark}, 'ERP', #{by}, #{by})
+        returning po_id
+    </select>
+
+    <insert id="insertExtMap">
+        insert into mst_ext_id_map (comp_cd, system_id, entity_type, internal_id, external_id, created_by, updated_by)
+        values (hb_current_comp(), #{systemId}, 'PO', #{poId}, #{erpPoNo}, #{by}, #{by})
+    </insert>
+
+    <select id="countErpLines" resultType="long" flushCache="true">
+        select count(*) from srm_po_line l join srm_po p on p.po_id = l.po_id where p.source = 'ERP'
+    </select>
+</mapper>

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  출하 특이사항 (wms-ship-note) — docs/56, docs/49 W-4. "이 고객·이 품목군·이 품목에 출하할 때 지킬 것"을 규칙으로 등록한다.
+  걸린 출하 지시·피킹 화면·PDA 피킹에 배지로 보이고, 확인 필수 규칙은 [확인] 전에는 피킹·출하 확정이 서버에서 막힌다.
+  사용성 체크(docs/11 4.3): 주 사용자 = 영업·출하 담당(WEB). 직접 치는 값 = 고객 코드·품목 코드(비우면 전체)·제목·내용. 품목군은 고르기.
+  예외 = 없는 코드(400), 품목군과 품목 동시(400 — 품목이 품목군을 정함), 다른 사람이 먼저 고침(409 — 다시 읽기). 삭제 없음 = 사용 끔.
+  글을 고치면 규칙 버전이 올라 걸린 열린 지시는 다시 확인해야 한다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">출하 특이사항</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{wmsShipNote.keyword}">제목·고객·품목</span>
+        <input name="q" maxlength="100" data-help-key="wms-ship-note.keyword"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{wmsShipNote.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y"><span th:text="#{wmsLoc.yes}">예</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{wmsLoc.no}">아니오</span></label>
+    </fieldset>
+    <fieldset class="hb-seg">
+        <legend th:text="#{wmsShipNote.col.ackRequired}">확인 필수</legend>
+        <label><input type="radio" name="ackRequiredYn" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="ackRequiredYn" value="Y"><span th:text="#{wmsLoc.yes}">예</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtn" th:text="#{wmsShipNote.new}">새 특이사항</button>
+        </div>
+        <div id="noteGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{wmsShipNote.selectHint}">왼쪽에서 고르거나 [새 특이사항]을 누르세요.</p>
+        <form id="noteForm" class="hb-form" autocomplete="off" hidden>
+            <label><span th:text="#{wmsShipNote.col.custCd}">고객 코드</span>
+                <input data-field="custCd" maxlength="30" th:placeholder="#{wmsShipNote.blankAll}" data-help-key="wms-ship-note.custCd"></label>
+            <label><span th:text="#{wmsShipNote.col.classCd}">품목군</span>
+                <select data-field="classCd" id="classSel"><option value="" th:text="#{wmsShipNote.blankAll}">(전체)</option></select></label>
+            <label><span th:text="#{wmsShipNote.col.itemCd}">품목 코드</span>
+                <input data-field="itemCd" maxlength="40" th:placeholder="#{wmsShipNote.blankAll}" data-help-key="wms-ship-note.itemCd"></label>
+            <label class="hb-wide-2"><span th:text="#{wmsShipNote.col.title}">제목</span>
+                <input data-field="title" maxlength="100" required data-help-key="wms-ship-note.title"></label>
+            <label class="hb-wide-2"><span th:text="#{wmsShipNote.body}">내용</span>
+                <textarea data-field="body" maxlength="1000" rows="4"></textarea></label>
+            <label><span th:text="#{wmsShipNote.col.ackRequired}">확인 필수</span>
+                <select data-field="ackRequiredYn">
+                    <option value="N" th:text="#{wmsLoc.no}">아니오</option>
+                    <option value="Y" th:text="#{wmsLoc.yes}">예</option>
+                </select></label>
+            <label><span th:text="#{wmsShipNote.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{wmsLoc.yes}">예</option>
+                    <option value="N" th:text="#{wmsLoc.no}">아니오</option>
+                </select></label>
+            <label><span th:text="#{wmsShipNote.col.sortNo}">순서</span>
+                <input data-field="sortNo" type="number" min="0" max="9999" step="1" value="0"></label>
+            <p class="hb-muted hb-wide-2" id="noteMeta"></p>
+            <div class="hb-toolbar hb-wide-2" th:if="${actions.contains('SAVE')}">
+                <button type="submit" id="saveBtn" th:text="#{common.save}">저장</button>
+            </div>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/wms/ship-note.js}"></script>
+</body>
+</html>

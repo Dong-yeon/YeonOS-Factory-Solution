@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 품목관리 (P1 1단계). 목록(findPage)·건수(count)·엑셀(cursor) 은 같은 조건·정렬 조각을 쓴다 (docs/09 6.1) -->
+<mapper namespace="io.smarthappy.module.master.item.ItemMapper">
+
+    <sql id="columns">
+        i.item_id, i.item_cd, i.item_nm, i.spec, i.item_type, i.proc_type, i.unit_cd, i.lot_ctrl_yn, i.net_mass_kg,
+        i.hs_cd, i.remark, i.use_yn, i.std_price, i.row_ver, i.updated_at, i.updated_by,
+        <!-- ERP 품번 = 사용 중 ERP 시스템 하나(코드 순 첫째)의 매핑 — ErpMapper.erpItem 과 같은 규칙 (docs/17 9장) -->
+        (select x.external_id from mst_ext_id_map x
+          where x.entity_type = 'ITEM' and x.use_yn = 'Y' and x.internal_id = i.item_id
+            and x.system_id = (select s.system_id from mst_ext_system s where s.system_type = 'ERP' and s.use_yn = 'Y'
+                                order by s.system_cd limit 1)) as erp_item_cd
+    </sql>
+
+    <!-- 이름 검색은 품목명 또는 규격 (현장은 규격으로 찾는 일이 많다) -->
+    <sql id="where">
+        from mst_item i
+        <where>
+            <!-- 품목코드 칸 = 시스템 코드 또는 사용 중 외부 품번(ERP·고객 어느 시스템이든) 앞부분, 대소문자 무시 (docs/17 9.2 (d)) -->
+            <if test="q.itemCdLike != null">and (i.item_cd like #{q.itemCdLike} escape '\'
+                or exists (select 1 from mst_ext_id_map x where x.entity_type = 'ITEM' and x.use_yn = 'Y'
+                            and x.internal_id = i.item_id and upper(x.external_id) like #{q.itemCdLike} escape '\'))</if>
+            <if test="q.itemNmLike != null">and (i.item_nm ilike #{q.itemNmLike} escape '\' or i.spec ilike #{q.itemNmLike} escape '\')</if>
+            <if test="q.itemType != null">and i.item_type = #{q.itemType}</if>
+            <if test="q.procType != null">and i.proc_type = #{q.procType}</if>
+            <if test="q.useYn != null">and i.use_yn = #{q.useYn}</if>
+        </where>
+    </sql>
+
+    <!-- 정렬: 화이트리스트 enum 이름으로만 열을 고른다. 마지막에 PK — 페이지 경계 중복·누락 방지 -->
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ITEM_CD'">i.item_cd</when>
+                <when test="s.key == 'ITEM_NM'">i.item_nm</when>
+                <when test="s.key == 'ITEM_TYPE'">i.item_type</when>
+                <when test="s.key == 'PROC_TYPE'">i.proc_type</when>
+                <when test="s.key == 'USE_YN'">i.use_yn</when>
+                <otherwise>i.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        i.item_id
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.master.item.ItemDtos$ItemRow">
+        select <include refid="columns"/>
+        <include refid="where"/>
+        <include refid="orderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.master.item.ItemDtos$ItemRow" fetchSize="1000">
+        select <include refid="columns"/>
+        <include refid="where"/>
+        <include refid="orderBy"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.master.item.ItemDtos$ItemRow">
+        select <include refid="columns"/> from mst_item i where i.item_id = #{id}
+    </select>
+
+    <select id="existsCd" resultType="boolean">
+        select exists (select 1 from mst_item where item_cd = #{itemCd}
+        <if test="exceptId != null">and item_id &lt;&gt; #{exceptId}</if>)
+    </select>
+
+    <!-- 기본 단위를 바꿀 수 없는 품목: BOM 머리·행(상태 무관)·사용 중 환산·작업지시·재고 원장에 쓰임
+         (hb_check_item_unit_in_use 트리거와 같은 조건 — D-B1, docs/30 11.10) -->
+    <select id="unitInUse" resultType="boolean">
+        select exists (select 1 from mst_bom where item_id = #{itemId})
+            or exists (select 1 from mst_bom_line where item_id = #{itemId})
+            or exists (select 1 from mst_unit_conv where item_id = #{itemId} and use_yn = 'Y')
+            or exists (select 1 from prd_wo where item_id = #{itemId})
+            or exists (select 1 from inv_trx where item_id = #{itemId})
+            or exists (select 1 from sal_order_line where item_id = #{itemId})
+            or exists (select 1 from lot_master where item_id = #{itemId})
+    </select>
+
+    <select id="unitUsable" resultType="boolean">
+        select exists (select 1 from sys_code where grp_cd = 'UNIT' and code = #{unitCd} and use_yn = 'Y')
+            or exists (select 1 from sys_comp_code where grp_cd = 'UNIT' and code = #{unitCd} and use_yn = 'Y')
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into mst_item (comp_cd, item_cd, item_nm, spec, item_type, proc_type, unit_cd, lot_ctrl_yn, net_mass_kg,
+                              hs_cd, remark, use_yn, std_price, created_by, updated_by)
+        values (hb_current_comp(), #{f.itemCd}, #{f.itemNm}, #{f.spec}, #{f.itemType}, #{f.procType}, #{f.unitCd},
+                #{f.lotCtrlYn}, #{f.netMassKg}, #{f.hsCd}, #{f.remark}, #{f.useYn}, #{f.stdPrice}, #{by}, #{by})
+        returning item_id
+    </select>
+
+    <update id="update">
+        update mst_item
+           set item_nm = #{f.itemNm}, spec = #{f.spec}, item_type = #{f.itemType},
+               proc_type = #{f.procType}, unit_cd = #{f.unitCd}, lot_ctrl_yn = #{f.lotCtrlYn},
+               net_mass_kg = #{f.netMassKg}, hs_cd = #{f.hsCd}, remark = #{f.remark}, use_yn = #{f.useYn},
+               std_price = #{f.stdPrice},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where item_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <update id="disable">
+        update mst_item set use_yn = 'N', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where item_id = #{id} and row_ver = #{rowVer}
+    </update>
+</mapper>

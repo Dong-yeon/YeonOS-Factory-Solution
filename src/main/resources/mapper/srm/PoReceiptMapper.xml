@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 구매 입고 게이트 (SRM 2부 R1, docs/31 4.9) — 회사 범위는 RLS. 잠금 = 발주 머리 → 발주 행 -->
+<mapper namespace="io.smarthappy.module.srm.link.PoReceiptMapper">
+
+    <select id="findPoId" resultType="long" flushCache="true">
+        select po_id from srm_po_line where po_line_id = #{poLineId}
+    </select>
+
+    <select id="plantOf" resultType="string">
+        select plant_cd from srm_po where po_id = #{poId}
+    </select>
+
+    <select id="lockHead" resultType="io.smarthappy.module.srm.link.PoReceiptMapper$Head" flushCache="true">
+        select po_id, po_no, rev, status, source, cust_id, plant_cd, wh_id, po_date
+          from srm_po where po_id = #{poId}
+           for update
+    </select>
+
+    <select id="lockLine" resultType="io.smarthappy.module.srm.link.PoReceiptMapper$Line" flushCache="true">
+        select l.po_line_id, l.po_id, l.line_no, l.item_id, l.unit_cd, l.qty, l.cancel_qty, l.recv_qty, l.line_status,
+               i.unit_cd as base_unit,
+               case when l.unit_cd = i.unit_cd then 1 else uc.factor end as factor,
+               coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = l.unit_cd),
+                        (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = l.unit_cd)) as unit_scale,
+               coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = i.unit_cd),
+                        (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = i.unit_cd)) as base_scale
+          from srm_po_line l
+          join mst_item i on i.item_id = l.item_id
+          left join mst_unit_conv uc on uc.item_id = l.item_id and uc.from_unit = l.unit_cd and uc.to_unit = i.unit_cd and uc.use_yn = 'Y'
+         where l.po_line_id = #{poLineId}
+           for update of l
+    </select>
+
+    <select id="refExists" resultType="boolean" flushCache="true">
+        select exists (select 1 from srm_po_receipt where trx_ref = #{trxRef})
+    </select>
+
+    <select id="dayNet" resultType="java.math.BigDecimal" flushCache="true">
+        select coalesce(sum(qty), 0) from srm_po_receipt where po_line_id = #{poLineId} and occurred_on = #{on}
+    </select>
+
+    <insert id="insertReceipt">
+        insert into srm_po_receipt (comp_cd, po_id, po_line_id, occurred_on, qty, trx_ref, asn_line_id, lot_id, created_by)
+        values (hb_current_comp(), #{poId}, #{poLineId}, #{on}, #{qty}, #{trxRef}, #{asnLineId}, #{lotId}, #{by})
+    </insert>
+
+    <update id="attachLot">
+        update srm_po_receipt set lot_id = #{lotId}
+         where trx_ref = #{trxRef} and qty &gt; 0 and lot_id is null
+    </update>
+
+    <select id="findReceiptByRef" resultType="io.smarthappy.module.srm.link.PoReceiptMapper$ReceiptRef" flushCache="true">
+        select po_line_id, occurred_on, asn_line_id, lot_id from srm_po_receipt where trx_ref = #{trxRef}
+    </select>
+
+    <select id="lockAsn" resultType="io.smarthappy.module.srm.link.PoReceiptMapper$AsnLock" flushCache="true">
+        select a.asn_id, l.po_line_id, a.status
+          from srm_asn_line l join srm_asn a on a.asn_id = l.asn_id
+         where l.asn_line_id = #{asnLineId}
+           for update of a
+    </select>
+
+    <select id="asnState" resultType="io.smarthappy.module.srm.link.PoReceiptMapper$AsnState" flushCache="true">
+        select any_recv, all_recv from hb_srm_asn_recv_state(#{asnId})
+    </select>
+
+    <update id="changeAsnStatus">
+        update srm_asn
+           set status = #{to}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where asn_id = #{asnId} and status = #{from}
+    </update>
+
+    <update id="addRecv">
+        update srm_po_line
+           set recv_qty = recv_qty + #{qty}, updated_at = now(), updated_by = #{by}
+         where po_line_id = #{poLineId}
+    </update>
+
+    <select id="summary" resultType="io.smarthappy.module.srm.link.PoReceiptMapper$Summary" flushCache="true">
+        select coalesce(bool_or(l.recv_qty &gt; 0), false) as any_recv,
+               coalesce(bool_and(l.recv_qty &gt;= l.qty - l.cancel_qty) filter (where l.line_status = 'OPEN' and l.qty - l.cancel_qty &gt; 0), false) as full
+          from srm_po_line l where l.po_id = #{poId}
+    </select>
+
+    <select id="ackAccepted" resultType="boolean" flushCache="true">
+        select coalesce((select a.ack_status in ('ACCEPTED', 'PARTIAL') from srm_po_ack a join srm_po p on p.po_id = a.po_id
+                          where a.po_id = #{poId} and a.rev = p.rev order by a.ack_seq desc limit 1), false)
+    </select>
+
+    <update id="changeStatus">
+        update srm_po
+           set status = #{to}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where po_id = #{poId} and status = #{from}
+    </update>
+</mapper>

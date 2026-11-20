@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 설비 상태·연결·Collector (P2 6단계, docs/25 4.8). 회사 조건은 RLS -->
+<mapper namespace="io.smarthappy.module.cms.CollectorMapper">
+
+    <select id="findEquip" resultType="io.smarthappy.module.cms.CollectorDtos$EquipRef">
+        select e.equip_id, e.equip_cd, e.plant_cd
+          from mst_equip e
+         where e.equip_cd = #{equipCd} and e.plant_cd = #{plantCd} and e.use_yn = 'Y'
+           <if test="nodeId != null">
+           and e.node_id in (with recursive sub(node_id) as (
+                                 select #{nodeId}::bigint
+                                 union all
+                                 select h.node_id from mst_equip_hier h join sub s on h.parent_id = s.node_id)
+                             select node_id from sub)
+           </if>
+    </select>
+
+    <!-- ================================================================ seq -->
+
+    <insert id="ensureSeq">
+        insert into cms_collector_seq (comp_cd, terminal_id, last_seq) values (hb_current_comp(), #{terminalId}, #{seq})
+        on conflict do nothing
+    </insert>
+
+    <select id="lockSeq" resultType="long" flushCache="true" useCache="false">
+        select last_seq from cms_collector_seq where terminal_id = #{terminalId} for update
+    </select>
+
+    <update id="updateSeq">
+        update cms_collector_seq set last_seq = #{seq}, updated_at = now() where terminal_id = #{terminalId}
+    </update>
+
+    <!-- ================================================================ 상태 구간 -->
+
+    <!-- 설비 단위 줄 세우기 — 열린 구간이 없을 때 두 이벤트가 함께 "없음" 을 보고 둘 다 여는 것을 막는다(배제 제약은 마지막 방어) -->
+    <select id="lockEquip" resultType="string" flushCache="true" useCache="false">
+        select pg_advisory_xact_lock(hashtext('cms_equip_state'), hashtext(#{equipId}::text))::text
+    </select>
+
+    <select id="lockOpen" resultType="io.smarthappy.module.cms.CollectorDtos$OpenInterval" flushCache="true" useCache="false">
+        select state_log_id, state_cat, reason_id, start_at, pack_state from cms_equip_state_log
+         where equip_id = #{equipId} and end_at is null
+         for update
+    </select>
+
+    <select id="lastEnd" resultType="java.time.OffsetDateTime" flushCache="true" useCache="false">
+        select max(end_at) from cms_equip_state_log where equip_id = #{equipId}
+    </select>
+
+    <update id="close">
+        update cms_equip_state_log set end_at = #{endAt} where state_log_id = #{id} and end_at is null
+    </update>
+
+    <select id="insertInterval" resultType="long" flushCache="true">
+        insert into cms_equip_state_log (comp_cd, equip_id, state_cat, reason_id, start_at, wo_id, source, terminal_id, event_id,
+                                         occurred_at, entry_method, recorded_by, pack_state)
+        values (hb_current_comp(), #{f.equipId}, #{f.stateCat}, #{f.reasonId}, #{f.startAt}, #{f.woId}, 'AUTO', #{f.terminalId},
+                #{f.eventId}, #{f.occurredAt}, 'AUTO', #{by}, #{f.packState})
+        returning state_log_id
+    </select>
+
+    <!-- 그 설비에서 진행 중(RUN)인 지시 공정 — 여럿이면 최근 착수 -->
+    <select id="runningProc" resultType="io.smarthappy.module.cms.CollectorDtos$RunningProc" flushCache="true" useCache="false">
+        select wp.wo_proc_id, wp.wo_id, wp.equip_id from prd_wo_proc wp
+         where wp.equip_id = #{equipId} and wp.status = 'RUN'
+         order by wp.updated_at desc, wp.wo_proc_id desc
+         limit 1
+    </select>
+
+    <select id="reason" resultType="io.smarthappy.module.cms.CollectorDtos$ReasonRef">
+        select reason_id, state_cat from cms_state_reason where reason_cd = #{reasonCd} and use_yn = 'Y'
+    </select>
+
+    <!-- ================================================================ 연결 -->
+
+    <insert id="insertConn">
+        insert into cms_equip_conn_log (comp_cd, terminal_id, equip_id, conn, seq_from, seq_to, event_id, occurred_at, recorded_by)
+        values (hb_current_comp(), #{terminalId}, #{equipId}, #{conn}, #{seqFrom}, #{seqTo}, #{eventId}, #{occurredAt}, #{by})
+    </insert>
+
+    <!-- ================================================================ 파라미터·에너지 -->
+
+    <!-- 진행 중 공정의 스냅샷 파라미터와 코드가 같을 때만(없으면 0건). 판정은 상하한 -->
+    <insert id="insertParamAuto">
+        insert into prd_param_actual (comp_cd, wo_proc_id, wo_param_id, param_cd, value, judge, equip_id, terminal_id, source,
+                                      work_day, shift_cd, client_req_id, occurred_at, entry_method, recorded_by)
+        select hb_current_comp(), p.wo_proc_id, p.wo_param_id, p.param_cd, #{value},
+               case when (p.lsl is null or #{value} &gt;= p.lsl) and (p.usl is null or #{value} &lt;= p.usl) then 'OK' else 'NG' end,
+               #{equipId}, #{terminalId}, 'COLLECTOR', #{workDay}, #{shiftCd}, #{reqId}, #{occurredAt}, 'AUTO', #{by}
+          from prd_wo_param p
+         where p.wo_proc_id = #{woProcId} and p.param_cd = #{paramCd}
+    </insert>
+
+    <select id="insertEnergy" resultType="long" flushCache="true">
+        insert into cms_energy_reading (comp_cd, plant_cd, meter_cd, period_start, period_end, qty, unit_cd, reading_src, terminal_id,
+                                        event_id, occurred_at, entry_method, recorded_by)
+        values (hb_current_comp(), #{f.plantCd}, #{f.meterCd}, #{f.periodStart}, #{f.periodEnd}, #{f.qty}, #{f.unitCd}, 'COLLECTOR',
+                #{f.terminalId}, #{f.eventId}, #{f.occurredAt}, 'AUTO', #{by})
+        returning reading_id
+    </select>
+
+    <select id="insertCount" resultType="long" flushCache="true">
+        insert into cms_equip_count (comp_cd, equip_id, metric_cd, qty, terminal_id, event_id, occurred_at, entry_method, recorded_by)
+        values (hb_current_comp(), #{f.equipId}, #{f.metricCd}, #{f.qty}, #{f.terminalId}, #{f.eventId}, #{f.occurredAt}, 'AUTO', #{by})
+        returning count_id
+    </select>
+
+    <!-- 묶음 COUNT 원장 한 문장(docs/70 W3) — 배열은 같은 길이, 보낸 순서대로. 규약·트리거(hb_guard_equip_count)는 행마다 그대로 -->
+    <insert id="insertCounts">
+        insert into cms_equip_count (comp_cd, equip_id, metric_cd, qty, terminal_id, event_id, occurred_at, entry_method, recorded_by)
+        select hb_current_comp(), x.equip_id, x.metric_cd, x.qty, #{terminalId}, x.event_id, x.occurred_at, 'AUTO', #{by}
+          from unnest(#{equipIds,typeHandler=org.apache.ibatis.type.ArrayTypeHandler}::varchar[]::bigint[],
+                      #{metricCds,typeHandler=org.apache.ibatis.type.ArrayTypeHandler}::varchar[],
+                      #{qtys,typeHandler=org.apache.ibatis.type.ArrayTypeHandler}::varchar[]::numeric[],
+                      #{eventIds,typeHandler=org.apache.ibatis.type.ArrayTypeHandler}::varchar[],
+                      #{occurred,typeHandler=org.apache.ibatis.type.ArrayTypeHandler}::varchar[]::timestamptz[])
+               with ordinality as x(equip_id, metric_cd, qty, event_id, occurred_at, ord)
+         order by x.ord
+    </insert>
+
+    <!-- ================================================================ 수신 멱등(docs/70 W2) -->
+
+    <!-- 처음이면 1 -->
+    <insert id="claimEvent">
+        insert into cms_equip_inbox (comp_cd, event_id) values (hb_current_comp(), #{eventId})
+        on conflict do nothing
+    </insert>
+
+    <!-- 묶음 한 문장 — 처음 받은 eventId 만 돌려준다(같은 배열 안 중복은 호출한 쪽이 먼저 거른다) -->
+    <select id="claimEvents" resultType="string" flushCache="true" useCache="false">
+        insert into cms_equip_inbox (comp_cd, event_id)
+        select hb_current_comp(), x.event_id from unnest(#{eventIds,typeHandler=org.apache.ibatis.type.ArrayTypeHandler}::varchar[]) as x(event_id)
+        on conflict do nothing
+        returning event_id
+    </select>
+
+    <!-- 보존 정리 — 기준보다 오래된 행을 한 번에 limit 행까지(받은 시각 순). 트리거가 최소 기간·법적 보류를 다시 본다 -->
+    <delete id="purgeInbox">
+        delete from cms_equip_inbox where ctid in (
+            select ctid from cms_equip_inbox where received_at &lt; #{cutoff} order by received_at limit #{limit})
+    </delete>
+
+    <!-- 회사 보존 기간(클래스 최소 이상)·해제 안 된 법적 보류의 가장 이른 시작 -->
+    <select id="inboxKeepDays" resultType="int" flushCache="true" useCache="false">
+        select greatest(coalesce(p.keep_days, k.default_days), k.min_days)
+          from sys_retention_class k
+          left join sys_retention_policy p on p.comp_cd = hb_current_comp() and p.class_cd = k.class_cd
+         where k.class_cd = 'EQUIP_INBOX'
+    </select>
+
+    <select id="inboxHoldFrom" resultType="java.time.OffsetDateTime" flushCache="true" useCache="false">
+        select min(h.from_at) from sys_legal_hold h where h.class_cd = 'EQUIP_INBOX' and h.released_at is null
+    </select>
+
+    <!-- ================================================================ 타임라인 -->
+
+    <select id="plants" resultType="io.smarthappy.module.cms.CollectorDtos$PlantRow">
+        select plant_cd, plant_nm from sys_plant where use_yn = 'Y' order by plant_cd
+    </select>
+
+    <select id="equips" resultType="io.smarthappy.module.cms.CollectorDtos$EquipRow">
+        select e.equip_id, e.equip_cd, e.equip_nm, h.node_cd
+          from mst_equip e left join mst_equip_hier h on h.node_id = e.node_id
+         where e.plant_cd = #{plantCd} and e.use_yn = 'Y'
+         order by h.node_cd nulls last, e.equip_cd
+    </select>
+
+    <!-- [from, to) 과 겹치는 구간(열린 구간 포함) -->
+    <select id="intervals" resultType="io.smarthappy.module.cms.CollectorDtos$IntervalRow">
+        select s.state_log_id, s.equip_id, s.state_cat, r.reason_cd, r.reason_nm, r.planned_yn, s.start_at, s.end_at, w.wo_no, s.source, s.pack_state
+          from cms_equip_state_log s
+          join mst_equip e on e.equip_id = s.equip_id
+          left join cms_state_reason r on r.reason_id = s.reason_id
+          left join prd_wo w on w.wo_id = s.wo_id
+         where e.plant_cd = #{plantCd} and s.start_at &lt; #{to} and (s.end_at is null or s.end_at &gt; #{from})
+         order by s.equip_id, s.start_at
+         limit 5000
+    </select>
+
+    <select id="conns" resultType="io.smarthappy.module.cms.CollectorDtos$ConnRow">
+        select c.conn_log_id, c.equip_id, e.equip_cd, t.terminal_cd, c.conn, c.seq_from, c.seq_to, c.occurred_at
+          from cms_equip_conn_log c
+          join sys_terminal t on t.terminal_id = c.terminal_id
+          left join mst_equip e on e.equip_id = c.equip_id
+         where t.plant_cd = #{plantCd} and c.occurred_at &gt;= #{from} and c.occurred_at &lt; #{to}
+         order by c.occurred_at desc, c.conn_log_id desc
+         limit 500
+    </select>
+</mapper>

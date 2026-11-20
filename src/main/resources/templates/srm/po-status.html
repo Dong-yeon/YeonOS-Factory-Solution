@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  발주 진행 현황 (srm-po-status) — SRM 1부 S5 (docs/31 4.5). 조회 전용. 발행된(발행·회신) 발주의 열린 행:
+  회신 안 옴(회신 기한 = 발행일 + 정책 SRM_ACK_DUE_DAYS 가 지남, 거절 포함) · 늦어질(약속 끝 날 > 요구 납기) · 납기 임박(요구 납기 ≤ 오늘 + n일).
+  2부 R1(4.9): 입고 중 발주 포함, 열린 수량 = 수량 − 취소 − 입고(남은 행만), 받은 게 있으면 "입고 n".
+-->
+<body class="hb-page hb-page-scroll" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/srm.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">발주 진행 현황</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{srm.status.period}" data-from-name="from" data-to-name="to"
+         data-presets="thisWeek,last7,last30,thisMonth,lastMonth" data-default="last30" data-max-days="366"></div>
+    <fieldset class="hb-seg">
+        <legend th:text="#{srm.status.view}">보기</legend>
+        <label><input type="radio" name="view" value="ALL" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="view" value="NO_ACK"><span th:text="#{srm.status.view.NO_ACK}">회신 안 옴</span></label>
+        <label><input type="radio" name="view" value="LATE"><span th:text="#{srm.status.view.LATE}">늦어질 발주</span></label>
+        <label><input type="radio" name="view" value="DUE_SOON"><span th:text="#{srm.status.view.DUE_SOON}">납기 임박</span></label>
+    </fieldset>
+    <label><span th:text="#{srm.status.soonDays}">임박 일수</span>
+        <input name="soonDays" data-hb="number" data-scale="0" data-min="0" data-max="60" value="7" maxlength="2"
+               data-help-key="srm-po-status.soonDays"></label>
+    <label><span th:text="#{srm.status.keyword}">번호·협력사·품목</span><input name="keyword" maxlength="100"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div id="statusGrid" class="hb-grid-host srm-grid-page"></div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/srm/srm-ui.js}"></script>
+<script th:src="@{/js/views/srm/po-status.js}"></script>
+</body>
+</html>

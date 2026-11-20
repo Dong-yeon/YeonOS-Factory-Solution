@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  샘플링 계획 · AQL 표 (qms-sampling) — P3 QMS Q1 (docs/29). 보기 두 개: 샘플링 계획(목록 + 상세 + 판정 미리보기) / AQL 표(올리기 + 조회).
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질 기획 담당(WEB, 마우스·키보드). 계획은 수십 개.
+  직접 치는 값 = 계획 코드·이름·방식과 방식별 수치(고정 n·비율·AQL 표준·검사 수준·엄격도·AQL·Ac) — 회사 품질 기준이라 서버가 채울 수 없음.
+  서버가 채우는 값 = Re(= Ac + 1), 사용(비우면 사용), AQL 이면 n·Ac·Re 는 표에서.
+  AQL 표는 시드가 없다(표준 원문 저작권 — D3): 회사가 표준을 보고 엑셀 템플릿 두 개(로트 → 시료 문자, 문자 × AQL → n·Ac·Re)로 올린다.
+  예외 = 확정 검사계획이 쓰는 계획의 방식·수치 변경(거부 — 새 계획 코드로), 표에 없는 로트·AQL(미리보기 칸 오류).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">샘플링 계획 · AQL 표</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<fieldset class="hb-seg hb-qms-views" id="views">
+    <legend th:text="#{qms.sampling.view}">보기</legend>
+    <label><input type="radio" name="view" value="plans" checked><span th:text="#{qms.sampling.viewPlans}">샘플링 계획</span></label>
+    <label><input type="radio" name="view" value="aql"><span th:text="#{qms.sampling.viewAql}">AQL 표</span></label>
+</fieldset>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.sampling.keyword}">코드·이름</span>
+        <input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{qms.sampling.col.method}">방식</span>
+        <select name="method" data-hb="select" data-code="SAMPLING_METHOD" data-blank="all"></select></label>
+    <label class="hb-check"><input type="checkbox" name="withUnused" value="true">
+        <span th:text="#{qms.sampling.withUnused}">사용 중지 포함</span></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split" id="planView">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="samplingGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.sampling.selectOrNew}">왼쪽에서 샘플링 계획을 고르거나 신규를 누르세요.</p>
+        <p id="lockNote" class="hb-notice" hidden></p>
+
+        <form id="samplingForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{qms.sampling.col.planCd}">계획 코드</span>
+                <input data-field="planCd" maxlength="20" required data-help-key="qms-sampling.planCd"></label>
+            <label class="hb-wide-2"><span th:text="#{qms.sampling.col.planNm}">계획명</span>
+                <input data-field="planNm" maxlength="100" required></label>
+            <label><span th:text="#{qms.sampling.col.method}">방식</span>
+                <select data-field="method" data-hb="select" data-code="SAMPLING_METHOD" data-blank="select" required
+                        data-help-key="qms-sampling.method"></select></label>
+            <label class="hb-qms-m" data-methods="FIXED"><span th:text="#{qms.sampling.col.fixedN}">시료 수(n)</span>
+                <input data-field="fixedN" data-hb="number" data-scale="0" data-min="1" data-max="1000000" data-pad="false"></label>
+            <label class="hb-qms-m" data-methods="PERCENT"><span th:text="#{qms.sampling.col.pct}">비율(%)</span>
+                <input data-field="pct" data-hb="number" data-scale="2" data-min="0.01" data-max="100" data-pad="false"
+                       data-help-key="qms-sampling.pct"></label>
+            <label class="hb-qms-m" data-methods="AQL"><span th:text="#{qms.sampling.col.stdCd}">AQL 표준</span>
+                <select data-field="stdCd" data-help-key="qms-sampling.stdCd"></select></label>
+            <label class="hb-qms-m" data-methods="AQL"><span th:text="#{qms.sampling.col.inspLevel}">검사 수준</span>
+                <select data-field="inspLevel" data-hb="select" data-code="INSP_LEVEL" data-blank="select"></select></label>
+            <label class="hb-qms-m" data-methods="AQL"><span th:text="#{qms.sampling.col.severity}">엄격도</span>
+                <select data-field="severity" data-hb="select" data-code="AQL_SEVERITY" data-blank="select"></select></label>
+            <label class="hb-qms-m" data-methods="AQL"><span th:text="#{qms.sampling.col.aql}">AQL</span>
+                <input data-field="aql" data-hb="number" data-scale="3" data-min="0.001" data-max="1000" data-pad="false"
+                       data-help-key="qms-sampling.aql"></label>
+            <label class="hb-qms-m" data-methods="FIXED ALL PERCENT"><span th:text="#{qms.sampling.col.ac}">합격 판정 개수(Ac)</span>
+                <input data-field="ac" data-hb="number" data-scale="0" data-min="0" data-max="999999" data-pad="false"
+                       data-help-key="qms-sampling.ac"></label>
+            <label><span th:text="#{qms.sampling.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{qms.sampling.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{qms.sampling.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+
+        <section class="hb-sub" id="previewSection">
+            <h2 th:text="#{qms.sampling.preview}">판정 미리보기</h2>
+            <p class="hb-muted" th:text="#{qms.sampling.previewHint}">지금 입력한 값으로 계산합니다(저장하지 않음).</p>
+            <form id="previewForm" class="hb-qms-preview" autocomplete="off">
+                <label><span th:text="#{qms.sampling.lotQty}">로트 크기</span>
+                    <input data-field="lotQty" data-hb="number" data-scale="0" data-min="1" data-max="1000000000" data-pad="false"></label>
+                <label><span th:text="#{qms.sampling.defects}">불량 수(선택)</span>
+                    <input data-field="defects" data-hb="number" data-scale="0" data-min="0" data-max="1000000000" data-pad="false"></label>
+                <button type="submit" class="hb-btn-secondary" id="previewBtn" th:text="#{qms.sampling.calc}">계산</button>
+            </form>
+            <p id="previewOut" class="hb-qms-result" role="status"></p>
+        </section>
+    </aside>
+</div>
+
+<section class="hb-qms-aql" id="aqlView" hidden>
+    <div class="hb-toolbar">
+        <label><span th:text="#{qms.sampling.col.stdCd}">AQL 표준</span>
+            <select id="aqlStd"></select></label>
+        <button type="button" id="importLetterBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}"
+                th:text="#{qms.aql.importLetter}">표 1 올리기(로트 → 문자)</button>
+        <button type="button" id="importPlanBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}"
+                th:text="#{qms.aql.importPlan}">표 2 올리기(문자 × AQL → n·Ac·Re)</button>
+    </div>
+    <p class="hb-muted" th:text="#{qms.aql.hint}">AQL 표는 제품에 들어 있지 않습니다. 회사가 가진 표준(ISO 2859-1 / KS Q ISO 2859-1)을 보고 템플릿 두 개로 올립니다. 화살표는 풀어서 n·Ac·Re 로 넣습니다.</p>
+    <p id="aqlEmpty" class="hb-notice" hidden th:text="#{qms.aql.empty}">올린 AQL 표가 없습니다.</p>
+    <div class="hb-qms-aql-tables">
+        <div>
+            <h3 th:text="#{qms.aql.letterTitle}">표 1 · 로트 크기 → 시료 문자</h3>
+            <table class="hb-cmp-table" id="letterTable">
+                <thead><tr>
+                    <th th:text="#{qms.aql.col.inspLevel}">검사 수준</th>
+                    <th th:text="#{qms.aql.col.lotFrom}">로트 시작</th>
+                    <th th:text="#{qms.aql.col.lotTo}">로트 끝</th>
+                    <th th:text="#{qms.aql.col.codeLetter}">시료 문자</th>
+                    <th th:text="#{qms.aql.col.useYn}">사용</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <div>
+            <h3 th:text="#{qms.aql.planTitle}">표 2 · 시료 문자 × AQL → n · Ac · Re</h3>
+            <table class="hb-cmp-table" id="planTable">
+                <thead><tr>
+                    <th th:text="#{qms.aql.col.severity}">엄격도</th>
+                    <th th:text="#{qms.aql.col.codeLetter}">시료 문자</th>
+                    <th th:text="#{qms.aql.col.aql}">AQL</th>
+                    <th th:text="#{qms.aql.col.sampleSize}">시료 수(n)</th>
+                    <th th:text="#{qms.aql.col.ac}">Ac</th>
+                    <th th:text="#{qms.aql.col.re}">Re</th>
+                    <th th:text="#{qms.aql.col.useYn}">사용</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/sampling-mgt.js}"></script>
+</body>
+</html>

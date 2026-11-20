@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- LOT·계보 원장 (P2 4단계, docs/25 4.5). 회사 조건은 RLS. 잔량은 hb_lot_balance(원장에서 계산), 응답 수량은 trim_scale 글자 -->
+<mapper namespace="io.smarthappy.module.production.LotMapper">
+
+    <sql id="lotCols">
+        m.lot_id, m.lot_no, m.item_id, i.item_cd, i.item_nm, m.origin, trim_scale(m.qty_created)::text as qty_created,
+        trim_scale(hb_lot_balance(m.lot_id))::text as balance, m.unit_cd, m.wo_id, w.wo_no, m.supplier_cust_id,
+        c.cust_cd as supplier_cd, c.cust_nm as supplier_nm, m.supplier_lot_no, m.occurred_at, m.hold_yn, m.hold_reason,
+        m.remark, m.row_ver, m.created_at, m.created_by
+    </sql>
+
+    <sql id="lotFrom">
+        from lot_master m
+        join mst_item i on i.item_id = m.item_id
+        left join prd_wo w on w.wo_id = m.wo_id
+        left join mst_cust c on c.cust_id = m.supplier_cust_id
+    </sql>
+
+    <!-- 목록·grid 공통 조건 -->
+    <sql id="lotWhere">
+         where true
+           <!-- 기간은 회사 날짜: 세션 시간대(UTC)로 date→timestamptz 를 바꾸면 하루 경계가 9시간 어긋난다 -->
+           <if test="from != null">and m.created_at &gt;= cast(#{from} as date)::timestamp at time zone #{zone}</if>
+           <if test="to != null">and m.created_at &lt; (cast(#{to} as date) + 1)::timestamp at time zone #{zone}</if>
+           <!-- 보류만 = 홈 카드 lotHoldCount 와 같은 조건(부분 인덱스 ix_lot_master_hold) -->
+           <if test="holdOnly">and m.hold_yn = 'Y' and hb_lot_balance(m.lot_id) &gt; 0</if>
+           <if test="itemId != null">and m.item_id = #{itemId}</if>
+           <if test="origin != null">and m.origin = #{origin}</if>
+           <if test="woId != null">and m.wo_id = #{woId}</if>
+           <if test="keyword != null">
+           and (m.lot_no like '%' || #{keyword} || '%' escape '\' or m.supplier_lot_no like '%' || #{keyword} || '%' escape '\')
+           </if>
+    </sql>
+
+    <select id="findLots" resultType="io.smarthappy.module.production.LotDtos$LotRow">
+        select <include refid="lotCols"/>
+        <include refid="lotFrom"/>
+        <include refid="lotWhere"/>
+         order by m.created_at desc, m.lot_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK. 잔량(원장 계산)은 정렬 밖.
+         지연 조인(docs/25 4.41, docs/qa offset H1): 안쪽 = lot_id 만 거름·정렬·offset(기본 정렬은 ix_lot_master_created),
+         바깥 = 그 한 쪽(50행)에만 조인·hb_lot_balance. 잔량 조건은 "보류만"에만 있고 보류 부분 인덱스(ix_lot_master_hold)가 후보를 먼저 줄인다.
+         품목 코드 정렬만 안쪽에서 품목 코드가 필요하다 — 그 정렬일 때만 부질의(다른 정렬은 품목 조인 없음) -->
+    <select id="findLotPage" resultType="io.smarthappy.module.production.LotDtos$LotRow">
+        select <include refid="lotCols"/>
+          from (
+                select m.lot_id
+                  from lot_master m
+                <include refid="lotWhere"/>
+                 order by
+                 <foreach collection="page.sorts" item="s">
+                    <choose>
+                        <when test="s.key == 'LOT_NO'">m.lot_no</when>
+                        <when test="s.key == 'ITEM_CD'">(select x.item_cd from mst_item x where x.item_id = m.item_id)</when>
+                        <when test="s.key == 'ORIGIN'">m.origin</when>
+                        <otherwise>m.created_at</otherwise>
+                    </choose>
+                    <if test="s.desc"> desc</if>,
+                 </foreach>
+                 m.lot_id desc
+                 limit #{page.size} offset #{page.offset}
+               ) k
+          join lot_master m on m.lot_id = k.lot_id
+          join mst_item i on i.item_id = m.item_id
+          left join prd_wo w on w.wo_id = m.wo_id
+          left join mst_cust c on c.cust_id = m.supplier_cust_id
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'LOT_NO'">m.lot_no</when>
+                <when test="s.key == 'ITEM_CD'">i.item_cd</when>
+                <when test="s.key == 'ORIGIN'">m.origin</when>
+                <otherwise>m.created_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         m.lot_id desc
+    </select>
+
+    <select id="countLots" resultType="long">
+        select count(*) from lot_master m
+        <include refid="lotWhere"/>
+    </select>
+
+    <select id="findLot" resultType="io.smarthappy.module.production.LotDtos$LotRow">
+        select <include refid="lotCols"/>
+        <include refid="lotFrom"/>
+         where m.lot_id = #{id}
+    </select>
+
+    <select id="findLotByNo" resultType="io.smarthappy.module.production.LotDtos$LotRow">
+        select <include refid="lotCols"/>
+        <include refid="lotFrom"/>
+         where m.lot_no = #{lotNo}
+    </select>
+
+    <select id="lockLot" resultType="io.smarthappy.module.production.LotDtos$LockedLot" flushCache="true" useCache="false">
+        select m.lot_id, m.lot_no, m.item_id, i.item_cd, m.unit_cd, m.hold_yn, hb_lot_balance(m.lot_id) as balance
+          from (select * from lot_master where lot_id = #{id} for update) m
+          join mst_item i on i.item_id = m.item_id
+    </select>
+
+    <select id="lotNoExists" resultType="boolean" flushCache="true" useCache="false">
+        select exists (select 1 from lot_master where lot_no = #{lotNo})
+    </select>
+
+    <select id="countWoLots" resultType="int" flushCache="true" useCache="false">
+        select count(*) from lot_master where wo_id = #{woId}
+    </select>
+
+    <select id="insertLot" resultType="long" flushCache="true">
+        insert into lot_master (comp_cd, lot_no, item_id, origin, qty_created, unit_cd, wo_id, supplier_cust_id, supplier_lot_no,
+                                occurred_at, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.lotNo}, #{f.itemId}, #{f.origin}, #{f.qty}, #{f.unitCd}, #{f.woId}, #{f.supplierCustId},
+                #{f.supplierLotNo}, #{f.occurredAt}, #{f.remark}, #{by}, #{by})
+        returning lot_id
+    </select>
+
+    <select id="insertEdge" resultType="long" flushCache="true">
+        insert into lot_genealogy (comp_cd, parent_lot_id, child_lot_id, rel_type, qty, unit_cd, wo_id, wo_proc_id, equip_id,
+                                   reason, occurred_at, entry_method, recorded_by, performed_by, reversal_of_id, change_id)
+        values (hb_current_comp(), #{f.parentLotId}, #{f.childLotId}, #{f.relType}, #{f.qty}, #{f.unitCd}, #{f.woId},
+                #{f.woProcId}, #{f.equipId}, #{f.reason}, #{f.occurredAt}, #{f.entryMethod}, #{by}, #{f.performedBy},
+                #{f.reversalOfId}, #{f.changeId})
+        returning gen_id
+    </select>
+
+    <!-- ================================================================ 계보 -->
+
+    <sql id="edgeCols">
+        g.gen_id, g.parent_lot_id, p.lot_no as parent_lot_no, g.child_lot_id, ch.lot_no as child_lot_no, g.rel_type,
+        trim_scale(g.qty)::text as qty, g.unit_cd, g.wo_id, g.wo_proc_id, g.equip_id, w.wo_no, g.reason, g.occurred_at, g.recorded_at, g.entry_method,
+        g.recorded_by, k.worker_nm as performed_by, g.reversal_of_id, g.change_id,
+        exists (select 1 from lot_genealogy r where r.reversal_of_id = g.gen_id) as reversed
+    </sql>
+
+    <sql id="edgeFrom">
+        from lot_genealogy g
+        join lot_master p on p.lot_id = g.parent_lot_id
+        join lot_master ch on ch.lot_id = g.child_lot_id
+        left join prd_wo w on w.wo_id = g.wo_id
+        left join mst_worker k on k.worker_id = g.performed_by
+    </sql>
+
+    <select id="findEdge" resultType="io.smarthappy.module.production.LotDtos$EdgeRow">
+        select <include refid="edgeCols"/> <include refid="edgeFrom"/> where g.gen_id = #{id}
+    </select>
+
+    <select id="parentsOf" resultType="io.smarthappy.module.production.LotDtos$EdgeRow">
+        select <include refid="edgeCols"/> <include refid="edgeFrom"/>
+         where g.child_lot_id = #{lotId} order by g.occurred_at, g.gen_id
+    </select>
+
+    <select id="childrenOf" resultType="io.smarthappy.module.production.LotDtos$EdgeRow">
+        select <include refid="edgeCols"/> <include refid="edgeFrom"/>
+         where g.parent_lot_id = #{lotId} order by g.occurred_at, g.gen_id
+    </select>
+
+    <!-- 살아 있는 계보 = 역분개 행이 아니고 되돌려지지도 않은 행 -->
+    <sql id="live">
+        g.reversal_of_id is null and not exists (select 1 from lot_genealogy r where r.reversal_of_id = g.gen_id)
+    </sql>
+
+    <!--
+      추적. BACK: 이 LOT 의 부모 쪽(어디서 왔나), FWD: 자식 쪽(어디로 갔나).
+      같은 (부모, 자식, 유형) 의 여러 행은 UNION 이 한 줄로 합친다(경로가 같으면 같은 줄) — 수량은 마지막에 그 연결의 합.
+      경로 배열로 순환을 끊고(cycle 표시), 깊이·행 상한에서 멈춘다(정렬 전에 자름)
+    -->
+    <select id="trace" resultType="io.smarthappy.module.production.LotDtos$TraceRow">
+        with recursive t (lvl, lot_id, via_lot_id, rel_type, path, cyc) as (
+            select 1, <choose><when test="back">g.parent_lot_id, g.child_lot_id</when><otherwise>g.child_lot_id, g.parent_lot_id</otherwise></choose>,
+                   g.rel_type,
+                   array[#{lotId}::bigint, <choose><when test="back">g.parent_lot_id</when><otherwise>g.child_lot_id</otherwise></choose>],
+                   false
+              from lot_genealogy g
+             where <choose><when test="back">g.child_lot_id</when><otherwise>g.parent_lot_id</otherwise></choose> = #{lotId}
+               and <include refid="live"/>
+            union
+            select t.lvl + 1, <choose><when test="back">g.parent_lot_id, g.child_lot_id</when><otherwise>g.child_lot_id, g.parent_lot_id</otherwise></choose>,
+                   g.rel_type,
+                   t.path || <choose><when test="back">g.parent_lot_id</when><otherwise>g.child_lot_id</otherwise></choose>,
+                   <choose><when test="back">g.parent_lot_id</when><otherwise>g.child_lot_id</otherwise></choose> = any(t.path)
+              from t
+              join lot_genealogy g on <choose><when test="back">g.child_lot_id</when><otherwise>g.parent_lot_id</otherwise></choose> = t.lot_id
+             where not t.cyc and t.lvl &lt; #{depth} and <include refid="live"/>
+        ),
+        capped as (select * from t limit #{limit})
+        select c.lvl, c.lot_id, m.lot_no, c.via_lot_id, i.item_cd, i.item_nm, m.origin, c.rel_type,
+               (select trim_scale(sum(g.qty))::text from lot_genealogy g
+                 where g.parent_lot_id = <choose><when test="back">c.lot_id</when><otherwise>c.via_lot_id</otherwise></choose>
+                   and g.child_lot_id = <choose><when test="back">c.via_lot_id</when><otherwise>c.lot_id</otherwise></choose>
+                   and g.rel_type = c.rel_type) as qty,
+               (select pl.unit_cd from lot_master pl
+                 where pl.lot_id = <choose><when test="back">c.lot_id</when><otherwise>c.via_lot_id</otherwise></choose>) as unit_cd,
+               w.wo_no, m.supplier_lot_no, m.hold_yn, c.cyc as cycle
+          from capped c
+          join lot_master m on m.lot_id = c.lot_id
+          join mst_item i on i.item_id = m.item_id
+          left join prd_wo w on w.wo_id = m.wo_id
+         order by c.path
+    </select>
+</mapper>

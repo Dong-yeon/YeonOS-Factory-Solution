@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  산출물 현황 (pms-deliverable) — PMS 3단계 (docs/32 PM3, D5·D6).
+  프로젝트를 고르면 단계별 준비율 + 산출물 칸 표. 칸 추가·수정은 PM, 제출(파일)은 담당·PM, 승인·반려·면제는 이 화면 APPROVE.
+  제출마다 새 파일 — 승인된 파일은 바꾸지 않고 새로 제출한다(제출한 파일은 지울 수 없다).
+  PM7: 또는 프로젝트 ECO 의 PPAP 패키지에 연결(고객 승인 = 승인, 잠정 승인은 아님).
+  PM6: 제출물 대신 QMS 문서 리비전에 연결할 수 있다(배포본 = 승인, D6). 연결된 칸은 파일을 받지 않는다. [QMS 상태 반영] = 배포된 리비전을 승인으로.
+-->
+<body data-table-menu="excelBtn" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/pms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">산출물 현황</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{pms.keyword}">번호·이름·고객·품번</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{pms.col.status}">상태</legend>
+        <label><input type="radio" name="status" value="OPEN" checked><span th:text="#{pms.status.OPEN}">진행 중</span></label>
+        <label><input type="radio" name="status" value=""><span th:text="#{common.all}">전체</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+<!-- 프로젝트 고르기 = hb.grid(docs/40 §10.2 D1, 서버 페이징·정렬). 행을 누르거나 Enter → 아래 상세 -->
+<div id="projGrid" class="hb-grid-host pms-tmpl-grid"></div>
+
+<div class="hb-split" id="detailView" hidden>
+    <section class="hb-split-main">
+        <div class="pms-head">
+            <h2 id="projTitle"></h2>
+            <span id="projSummary" class="hb-muted"></span>
+        </div>
+        <ul class="pms-phases" id="phases" data-help-key="pms-deliverable.readiness"></ul>
+        <div class="hb-toolbar">
+            <button type="button" id="addBtn" class="hb-btn-secondary" th:text="#{pms.addDeliv}">산출물 칸 추가</button>
+            <button type="button" id="syncDocsBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{pms.syncDocs}"
+                    data-help-key="pms-deliverable.syncDocs">QMS 상태 반영</button>
+            <label class="hb-check"><input type="checkbox" id="onlyOpen"><span th:text="#{pms.onlyOpen}">미결만</span></label>
+            <!-- 도구줄 순서: [신규] … [엑셀 내려받기] 끝(docs/40 P1 ③) -->
+            <button type="button" id="excelBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" th:text="#{pms.excel}">엑셀 내려받기</button>
+            <span id="count" class="hb-muted"></span>
+        </div>
+        <div class="hb-replace-host">
+            <table class="hb-cmp-table" id="delivs">
+                <thead><tr>
+                    <th th:text="#{pms.col.wbs}">WBS</th>
+                    <th th:text="#{pms.col.taskNm}">작업명</th>
+                    <th th:text="#{pms.col.delivNm}">산출물</th>
+                    <th th:text="#{pms.col.required}">필수</th>
+                    <th th:text="#{pms.col.owner}">담당</th>
+                    <th th:text="#{pms.col.due}">기한</th>
+                    <th th:text="#{pms.col.delivStatus}">상태</th>
+                    <th th:text="#{pms.col.submission}">제출물</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 저장 줄과 떨어진 자리(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="deleteBtn" class="hb-btn-danger-outline" hidden th:text="#{pms.deleteDeliv}">칸 삭제</button>
+        </div>
+        <p id="mode" class="hb-muted" th:text="#{pms.selectDeliv}">왼쪽에서 산출물을 고르세요.</p>
+        <form id="delivForm" class="hb-form" autocomplete="off">
+            <label class="hb-wide" id="taskBox"><span th:text="#{pms.col.taskNm}">작업</span><select data-field="taskId" id="taskSel"></select></label>
+            <label class="hb-wide"><span th:text="#{pms.col.delivNm}">산출물</span><input data-field="delivNm" maxlength="200" required></label>
+            <label><span th:text="#{pms.col.required}">필수</span>
+                <select data-field="requiredYn">
+                    <option value="Y" th:text="#{pms.required.Y}">필수</option>
+                    <option value="N" th:text="#{pms.required.N}">선택</option>
+                </select></label>
+            <label><span th:text="#{pms.col.formDocNo}">빈 서식(QMS 문서 번호)</span><input data-field="formDocNo" maxlength="30"
+                    data-help-key="pms-deliverable.formDocNo"></label>
+            <label><span th:text="#{pms.col.owner}">담당</span><select data-field="ownerLoginId" id="ownerSel"></select></label>
+            <label><span th:text="#{pms.col.dueDate}">기한(비우면 작업 종료일)</span><input type="date" data-field="dueDate"
+                    data-help-key="pms-deliverable.dueDate"></label>
+        </form>
+        <p id="stateNote" class="hb-muted"></p>
+
+        <section class="hb-sub" id="submitBox" hidden>
+            <h2 th:text="#{pms.submitTitle}">제출</h2>
+            <form id="submitForm" class="hb-form" autocomplete="off">
+                <label class="hb-wide"><span th:text="#{pms.col.file}">파일</span><input type="file" id="fileInput" data-field="file"
+                        data-help-key="pms-deliverable.file"></label>
+                <label class="hb-wide"><span th:text="#{pms.col.note}">메모</span><input data-field="note" maxlength="500"></label>
+                <div class="hb-toolbar"><button type="button" id="submitBtn" class="hb-btn-secondary" th:text="#{pms.submit}">제출</button></div>
+            </form>
+        </section>
+
+        <section class="hb-sub" id="docBox" hidden>
+            <h2 th:text="#{pms.docLinkTitle}">QMS 문서 연결</h2>
+            <form id="docForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{pms.col.docNo}">문서 번호</span><input data-field="docNo" maxlength="30"
+                        data-help-key="pms-deliverable.docLink"></label>
+                <label><span th:text="#{pms.col.docRev}">리비전(비우면 배포본)</span><input data-field="rev" maxlength="4"></label>
+                <label class="hb-wide"><span th:text="#{pms.col.note}">메모</span><input data-field="note" maxlength="500"></label>
+                <div class="hb-toolbar">
+                    <button type="button" id="docLinkBtn" class="hb-btn-secondary" th:text="#{pms.docLink}">연결</button>
+                    <button type="button" id="ppapLinkBtn" class="hb-btn-secondary" th:text="#{pms.ppapLink}" data-help-key="pms-deliverable.ppap"
+                            data-field="ppap">프로젝트 ECO 의 PPAP 연결</button>
+                </div>
+            </form>
+            <h2 th:text="#{pms.apqpLinkTitle}">PFMEA·관리계획서 연결</h2>
+            <form id="apqpForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{pms.col.apqpKind}">종류</span>
+                    <select data-field="kind">
+                        <option value="FMEA" th:text="#{pms.apqp.FMEA}">PFMEA</option>
+                        <option value="CP" th:text="#{pms.apqp.CP}">관리계획서</option>
+                    </select></label>
+                <label><span th:text="#{pms.col.apqpNo}">번호</span><input data-field="apqpNo" maxlength="30"
+                        data-help-key="pms-deliverable.apqpLink"></label>
+                <label><span th:text="#{pms.col.apqpRev}">리비전(비우면 확정본)</span><input data-field="apqpRev" inputmode="numeric" maxlength="3"></label>
+                <label class="hb-wide"><span th:text="#{pms.col.note}">메모</span><input data-field="note" maxlength="500"></label>
+                <div class="hb-toolbar">
+                    <button type="button" id="apqpLinkBtn" class="hb-btn-secondary" th:text="#{pms.docLink}">연결</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="hb-sub" id="decideBox" hidden>
+            <h2 th:text="#{pms.decideTitle}">승인·반려·면제</h2>
+            <form id="decideForm" class="hb-form" autocomplete="off">
+                <label class="hb-wide"><span th:text="#{pms.col.decideNote}">의견·사유(반려·면제는 필수)</span><input data-field="note" maxlength="500"></label>
+                <div class="hb-toolbar">
+                    <button type="button" class="hb-btn-secondary" data-decide="APPROVE" th:text="#{pms.decide.APPROVE}">승인</button>
+                    <button type="button" class="hb-btn-secondary" data-decide="REJECT" th:text="#{pms.decide.REJECT}">반려</button>
+                    <button type="button" class="hb-btn-secondary" data-decide="WAIVE" th:text="#{pms.decide.WAIVE}">면제</button>
+                    <button type="button" class="hb-btn-ghost" data-decide="UNWAIVE" th:text="#{pms.decide.UNWAIVE}">면제 풀기</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="hb-sub" id="histBox" hidden>
+            <h2 th:text="#{pms.delivHistory}">제출·결정 이력</h2>
+            <ul class="pms-deps" id="histList"></ul>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/pms/pms-ui.js}"></script>
+<script th:src="@{/js/views/pms/deliverable-mgt.js}"></script>
+</body>
+</html>

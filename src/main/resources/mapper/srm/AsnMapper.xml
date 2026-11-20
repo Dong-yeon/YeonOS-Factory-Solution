@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 사전 납품 통지 (SRM 2부 R3a, docs/31 4.11) — 회사 범위는 RLS, 쓰기의 comp_cd 는 hb_current_comp(). 받은 양 = Σ 입고 이력(asn_line_id) -->
+<mapper namespace="io.smarthappy.module.srm.asn.AsnMapper">
+
+    <!-- ================================================================ 선택지 -->
+
+    <select id="findPlants" resultType="io.smarthappy.module.srm.asn.AsnDtos$PlantOption">
+        select plant_cd, plant_nm from sys_plant where use_yn = 'Y' order by sort_no, plant_cd
+    </select>
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <select id="findSuppliers" resultType="io.smarthappy.module.srm.asn.AsnDtos$SupplierRef">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status
+          from mst_cust c join srm_supplier s on s.cust_id = c.cust_id
+         where c.use_yn = 'Y'
+         order by c.cust_cd
+         limit 2000
+    </select>
+
+    <select id="findSupplier" resultType="io.smarthappy.module.srm.asn.AsnDtos$SupplierRef">
+        select c.cust_id, c.cust_cd, c.cust_nm, s.trade_status
+          from mst_cust c join srm_supplier s on s.cust_id = c.cust_id
+         where c.cust_cd = #{custCd}
+    </select>
+
+    <!-- ================================================================ ASN -->
+
+    <sql id="asnCols">
+        a.asn_id, a.asn_no, a.cust_id, c.cust_cd, c.cust_nm, a.plant_cd, pl.plant_nm, a.ship_date, a.eta_date, a.supplier_ref,
+        a.carrier_memo, a.source, a.status, a.sent_at, a.sent_by, a.cancel_reason, a.remark, a.row_ver, a.updated_at, a.updated_by,
+        (select count(*) from srm_asn_line l where l.asn_id = a.asn_id)::int as line_cnt,
+        <include refid="openLineCnt"/> as open_line_cnt
+    </sql>
+    <!-- a 별칭 필요: 덜 받은 행 수 — 트리거가 유지하는 칸(docs/31 5.6, V185). 정의 = hb_srm_asn_open_cnt -->
+    <sql id="openLineCnt">a.open_line_cnt</sql>
+    <sql id="asnFrom">
+          from srm_asn a
+          join mst_cust c on c.cust_id = a.cust_id
+          left join sys_plant pl on pl.plant_cd = a.plant_cd
+    </sql>
+
+    <!-- 목록·grid 공통(c = AsnCrit): 안쪽 조건 + 늦음 판정·"늦은 ASN 만" — 결과 x.* + late -->
+    <sql id="asnMatched">
+        select x.*, (x.status in ('SENT', 'PARTIAL_RECEIVED') and x.open_line_cnt &gt; 0 and x.eta_date &lt; #{c.today}) as late
+          from (select <include refid="asnCols"/> <include refid="asnFrom"/> <include refid="asnWhere"/>) x
+        <if test="c.late">where x.status in ('SENT', 'PARTIAL_RECEIVED') and x.open_line_cnt &gt; 0 and x.eta_date &lt; #{c.today}</if>
+    </sql>
+    <!-- a·c 별칭 필요: 출하~도착 구간이 조회 기간과 겹침(도착은 대개 미래) -->
+    <sql id="asnWhere">
+         where a.ship_date &lt;= #{c.to} and a.eta_date &gt;= #{c.from}
+        <if test="c.status != null">and a.status = #{c.status}</if>
+        <if test="c.keywordLike != null">
+           and (a.asn_no ilike #{c.keywordLike} escape '\' or a.supplier_ref ilike #{c.keywordLike} escape '\'
+                or c.cust_cd ilike #{c.keywordLike} escape '\' or c.cust_nm ilike #{c.keywordLike} escape '\')
+        </if>
+    </sql>
+
+    <select id="findAsns" resultType="io.smarthappy.module.srm.asn.AsnDtos$AsnRow">
+        <include refid="asnMatched"/>
+         order by x.eta_date desc, x.asn_id desc
+         limit 2000
+    </select>
+
+    <!-- grid(UI 단계 3 ①, docs/31 5.2) — 정렬은 허용 목록 enum 이름으로만 고른다(문자열 치환 없이), 마지막에 PK -->
+    <!-- grid — 지연 조인(QA 2026-10-24 offset M5, docs/31 5.3): 안쪽은 거르기·정렬 칸만으로 쪽 하나의 asn_id 를 고르고(행마다 하는
+         계산 없이), 바깥이 그 쪽(최대 size 행)만 행 수를 센다. 덜 받은 행 수는 칸이라(docs/31 5.6) 안쪽 정렬·"늦은 ASN 만" 거름에 바로 쓴다.
+         정렬은 허용 목록 enum 이름으로만, 마지막에 PK -->
+    <select id="findAsnPage" resultType="io.smarthappy.module.srm.asn.AsnDtos$AsnRow">
+        select x.*, (x.status in ('SENT', 'PARTIAL_RECEIVED') and x.open_line_cnt &gt; 0 and x.eta_date &lt; #{c.today}) as late
+          from (select a.asn_id, a.asn_no, c.cust_nm, a.plant_cd, a.ship_date, a.eta_date, a.status, a.open_line_cnt
+                  from srm_asn a join mst_cust c on c.cust_id = a.cust_id
+                  <include refid="asnWhere"/>
+                  <if test="c.late">and a.status in ('SENT', 'PARTIAL_RECEIVED') and a.eta_date &lt; #{c.today}
+                      and <include refid="openLineCnt"/> &gt; 0</if>
+                 order by
+                 <foreach collection="page.sorts" item="s">
+                    <choose>
+                        <when test="s.key == 'ASN_NO'">a.asn_no</when>
+                        <when test="s.key == 'SUPPLIER'">c.cust_nm</when>
+                        <when test="s.key == 'PLANT'">a.plant_cd</when>
+                        <when test="s.key == 'SHIP_DATE'">a.ship_date</when>
+                        <when test="s.key == 'OPEN_LINES'">a.open_line_cnt</when>
+                        <when test="s.key == 'STATUS'">a.status</when>
+                        <otherwise>a.eta_date</otherwise>
+                    </choose>
+                    <if test="s.desc"> desc</if>,
+                 </foreach>
+                 a.asn_id desc
+                 limit #{page.size} offset #{page.offset}) k
+         cross join lateral (select <include refid="asnCols"/> <include refid="asnFrom"/> where a.asn_id = k.asn_id) x
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ASN_NO'">x.asn_no</when>
+                <when test="s.key == 'SUPPLIER'">x.cust_nm</when>
+                <when test="s.key == 'PLANT'">x.plant_cd</when>
+                <when test="s.key == 'SHIP_DATE'">x.ship_date</when>
+                <when test="s.key == 'OPEN_LINES'">x.open_line_cnt</when>
+                <when test="s.key == 'STATUS'">x.status</when>
+                <otherwise>x.eta_date</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         x.asn_id desc
+    </select>
+
+    <select id="countAsns" resultType="long">
+        select count(*) from (<include refid="asnMatched"/>) n
+    </select>
+
+    <select id="findAsn" resultType="io.smarthappy.module.srm.asn.AsnDtos$AsnRow">
+        select x.*, (x.status in ('SENT', 'PARTIAL_RECEIVED') and x.open_line_cnt &gt; 0 and x.eta_date &lt; #{today}) as late
+          from (select <include refid="asnCols"/> <include refid="asnFrom"/> where a.asn_id = #{asnId}) x
+    </select>
+
+    <select id="lockAsn" resultType="io.smarthappy.module.srm.asn.AsnDtos$AsnRow" flushCache="true">
+        select asn_id, asn_no, cust_id, plant_cd, status, row_ver from srm_asn where asn_id = #{asnId} for update
+    </select>
+
+    <select id="findLines" resultType="io.smarthappy.module.srm.asn.AsnDtos$AsnLineRow">
+        select l.asn_line_id, l.line_no, l.po_line_id, p.po_id, p.po_no, pl.line_no as po_line_no, l.item_id, i.item_cd, pl.item_nm,
+               l.unit_cd, trim_scale(l.qty)::text as qty, trim_scale(r.recv)::text as recv_qty,
+               trim_scale(greatest(l.qty - r.recv, 0))::text as remain_qty, l.supplier_lot_no, l.mfg_date, l.expiry_date, l.pack_cnt, l.remark
+          from srm_asn_line l
+          join srm_po_line pl on pl.po_line_id = l.po_line_id
+          join srm_po p on p.po_id = pl.po_id
+          join mst_item i on i.item_id = l.item_id
+          cross join lateral (select coalesce(sum(x.qty), 0) as recv from srm_po_receipt x where x.asn_line_id = l.asn_line_id) r
+         where l.asn_id = #{asnId}
+         order by l.line_no
+    </select>
+
+    <!-- 고를 수 있는 발주 행 — 통지 가능 = 주문 × (1 + 초과율) − 입고 − 다른 살아 있는 ASN 남은 양 -->
+    <select id="poLineOptions" resultType="io.smarthappy.module.srm.asn.AsnDtos$PoLineOption">
+        select y.po_line_id, y.po_no, y.line_no, y.item_cd, y.item_nm, y.unit_cd, trim_scale(y.open_qty)::text as open_qty,
+               trim_scale(y.notified)::text as notified_qty, trim_scale(greatest(y.room - y.notified, 0))::text as notifiable_qty, y.due_date
+          from (select l.po_line_id, p.po_no, l.line_no, i.item_cd, l.item_nm, l.unit_cd, l.due_date,
+                       l.qty - l.cancel_qty - l.recv_qty as open_qty,
+                       (l.qty - l.cancel_qty) * (100 + hb_srm_recv_over_pct(p.comp_cd, p.plant_cd)) / 100 - l.recv_qty as room,
+                       coalesce((select sum(greatest(al.qty - coalesce((select sum(x.qty) from srm_po_receipt x where x.asn_line_id = al.asn_line_id), 0), 0))
+                                   from srm_asn_line al join srm_asn a on a.asn_id = al.asn_id
+                                  where al.po_line_id = l.po_line_id and a.status in ('SENT', 'PARTIAL_RECEIVED')
+                                <if test="asnId != null">and a.asn_id &lt;&gt; #{asnId}</if>), 0) as notified
+                  from srm_po p
+                  join srm_po_line l on l.po_id = p.po_id and l.line_status = 'OPEN'
+                  join mst_item i on i.item_id = l.item_id
+                 where p.cust_id = #{custId} and p.plant_cd = #{plantCd} and p.source = 'SRM'
+                   and p.status in ('ISSUED', 'ACKED', 'PARTIAL_RECEIVED')
+                   and l.qty - l.cancel_qty - l.recv_qty &gt; 0) y
+         order by y.due_date, y.po_no, y.line_no
+         limit 500
+    </select>
+
+    <select id="findPoLine" resultType="io.smarthappy.module.srm.asn.AsnDtos$PoLineRef">
+        select l.po_line_id, l.item_id, l.unit_cd, p.cust_id, p.plant_cd, p.status, p.source, l.line_status,
+               coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = l.unit_cd),
+                        (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = l.unit_cd)) as unit_scale
+          from srm_po_line l join srm_po p on p.po_id = l.po_id
+         where l.po_line_id = #{poLineId}
+    </select>
+
+    <!-- 엑셀: 발주 번호·행으로 발주 행 + 통지 가능 양(살아 있는 ASN 남은 양을 뺀 것) -->
+    <select id="findPoLineByNo" resultType="io.smarthappy.module.srm.asn.AsnDtos$PoLineRef">
+        select l.po_line_id, l.item_id, l.unit_cd, p.cust_id, p.plant_cd, p.status, p.source, l.line_status,
+               coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = l.unit_cd),
+                        (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = l.unit_cd)) as unit_scale,
+               (l.qty - l.cancel_qty) * (100 + hb_srm_recv_over_pct(p.comp_cd, p.plant_cd)) / 100 - l.recv_qty
+                 - coalesce((select sum(greatest(al.qty - coalesce((select sum(x.qty) from srm_po_receipt x where x.asn_line_id = al.asn_line_id), 0), 0))
+                               from srm_asn_line al join srm_asn a on a.asn_id = al.asn_id
+                              where al.po_line_id = l.po_line_id and a.status in ('SENT', 'PARTIAL_RECEIVED')), 0) as notifiable
+          from srm_po p join srm_po_line l on l.po_id = p.po_id
+         where p.po_no = #{poNo} and l.line_no = #{lineNo}
+    </select>
+
+    <!-- 같은 협력사 살아 있는 ASN 이 그 납품서 번호를 쓰고 있나 -->
+    <select id="supplierRefUsed" resultType="boolean">
+        select exists (select 1 from srm_asn where cust_id = #{custId} and supplier_ref = #{ref} and status &lt;&gt; 'CANCELLED')
+    </select>
+
+    <select id="countLines" resultType="long" flushCache="true">
+        select count(*) from srm_asn_line
+    </select>
+
+    <!-- ================================================================ 저장 -->
+
+    <select id="insertAsn" resultType="long" flushCache="true">
+        insert into srm_asn (comp_cd, asn_no, cust_id, plant_cd, ship_date, eta_date, supplier_ref, carrier_memo, source, import_job_id,
+                             remark, created_by, updated_by)
+        values (hb_current_comp(), #{asnNo}, #{v.custId}, #{v.plantCd}, #{v.shipDate}, #{v.etaDate}, #{v.supplierRef}, #{v.carrierMemo},
+                #{source}, #{jobId}, #{v.remark}, #{by}, #{by})
+        returning asn_id
+    </select>
+
+    <update id="updateAsn">
+        update srm_asn
+           set plant_cd = #{v.plantCd}, ship_date = #{v.shipDate}, eta_date = #{v.etaDate}, supplier_ref = #{v.supplierRef},
+               carrier_memo = #{v.carrierMemo}, remark = #{v.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where asn_id = #{asnId} and status = 'DRAFT' and row_ver = #{rowVer} and cust_id = #{v.custId}
+    </update>
+
+    <delete id="deleteLines">
+        delete from srm_asn_line where asn_id = #{asnId}
+    </delete>
+
+    <insert id="insertLine">
+        insert into srm_asn_line (comp_cd, asn_id, line_no, po_line_id, item_id, unit_cd, qty, supplier_lot_no, mfg_date, expiry_date,
+                                  pack_cnt, remark, created_by, updated_by)
+        values (hb_current_comp(), #{asnId}, #{lineNo}, #{v.poLineId}, #{v.itemId}, #{v.unitCd}, #{v.qty}, #{v.supplierLotNo}, #{v.mfgDate},
+                #{v.expiryDate}, #{v.packCnt}, #{v.remark}, #{by}, #{by})
+    </insert>
+
+    <select id="limits" resultType="io.smarthappy.module.srm.asn.AsnDtos$LimitRow" flushCache="true">
+        select pl.po_line_id,
+               (pl.qty - pl.cancel_qty) * (100 + hb_srm_recv_over_pct(pl.comp_cd, #{plantCd})) / 100 - pl.recv_qty
+                 - coalesce((select sum(greatest(al.qty - coalesce((select sum(x.qty) from srm_po_receipt x where x.asn_line_id = al.asn_line_id), 0), 0))
+                               from srm_asn_line al join srm_asn a on a.asn_id = al.asn_id
+                              where al.po_line_id = pl.po_line_id and a.asn_id &lt;&gt; #{asnId} and a.status in ('SENT', 'PARTIAL_RECEIVED')), 0) as allowed,
+               (select sum(m.qty) from srm_asn_line m where m.asn_id = #{asnId} and m.po_line_id = pl.po_line_id) as mine
+          from srm_po_line pl
+         where pl.po_line_id in (select po_line_id from srm_asn_line where asn_id = #{asnId})
+    </select>
+
+    <update id="send">
+        update srm_asn
+           set status = 'SENT', sent_at = now(), sent_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where asn_id = #{asnId} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="changeStatus">
+        update srm_asn
+           set status = #{to}, cancel_reason = #{cancelReason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where asn_id = #{asnId} and status = #{from} and row_ver = #{rowVer}
+    </update>
+</mapper>

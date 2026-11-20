@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설계 변경 지시 (plm-eco) — PLM 1단계 (docs/39). 작성 중에 내용·영향 대상(품목 / BOM·라우팅 작성 중 리비전)·첨부를 정하고
+  결재 상신 → 승인 → (고객 승인 기록) → 적용(대상 리비전을 유효일로 확정). 결재 뒤 대상이 바뀌면 적용이 거부된다.
+  3b(docs/39 13장): 변경 종류(설계·4M·임시)·표시 구간, 설비·공정 대상, 적용 뒤 "표시된 LOT"(생산 실적이 남긴 변경 뒤 첫 LOT·4M 구간 LOT).
+  2단계(15장): 도면 대상(QMS 문서 리비전, 적용 = 배포), 상신 뒤 첨부 고정(D7), PPAP 증빙은 따로(작성 중에만).
+  16장: QMS 품질 요약(EcoQualityView — QMS 없으면 숨김), 문서 대상 유형 4종·품목 선택(16.1).
+  4단계(14장): 일괄 대체(자품목 X → Y, ECO 유효일)를 대상으로, PPAP 패키지(18요소·제출·고객 판정 → 고객 승인), 고객 통지(PCN).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/plm.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설계 변경 지시</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{plm.col.status}">상태</span>
+        <select name="status">
+            <option value="" th:text="#{common.all}">전체</option>
+            <option value="CUST_WAIT" th:text="#{plmEco.status.custWait}">고객 응답 대기(PPAP 판정·통지 기한 지남)</option>
+            <option value="DRAFT" th:text="#{code.PLM_ECO_STATUS.DRAFT}">작성 중</option>
+            <option value="PENDING" th:text="#{code.PLM_ECO_STATUS.PENDING}">결재 중</option>
+            <option value="APPROVED" th:text="#{code.PLM_ECO_STATUS.APPROVED}">승인됨</option>
+            <option value="RELEASED" th:text="#{code.PLM_ECO_STATUS.RELEASED}">적용됨</option>
+            <option value="CANCELLED" th:text="#{code.PLM_ECO_STATUS.CANCELLED}">취소</option>
+        </select></label>
+    <label><span th:text="#{plm.col.itemCd}">품목 코드</span><input name="itemCd" maxlength="40"></label>
+    <label><span th:text="#{plm.col.keyword}">번호·제목</span><input name="keyword" maxlength="50"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="ecoGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="releaseBtn" th:if="${actions.contains('APPROVE')}" hidden th:text="#{plmEco.release}">적용</button>
+            <button type="button" id="copyBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{plmEco.copy}">복사</button>
+            <button type="button" id="noticeBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" hidden th:text="#{plmEco.notice}">통지서</button>
+            <button type="button" id="recordBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" hidden th:text="#{plmEco.record}">기록서</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 저장 줄과 떨어진 자리, 외곽선 위험 톤(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="cancelBtn" class="hb-btn-danger-outline" hidden th:text="#{plmEco.cancel}">지시 취소</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{plmEco.selectOrNew}">왼쪽에서 지시를 고르거나 신규를 누르세요.</p>
+        <form id="ecoForm" class="hb-form" autocomplete="off">
+            <label class="hb-wide"><span th:text="#{plm.col.title}">제목</span>
+                <input data-field="title" maxlength="200" required></label>
+            <label><span th:text="#{plm.col.reason}">변경 사유</span>
+                <select data-field="reasonCd" data-code="PLM_CHANGE_REASON" data-blank="select" required></select></label>
+            <label><span th:text="#{plm.col.effectiveDate}">유효일</span>
+                <input data-field="effectiveDate" type="date" min="2000-01-01" max="2999-12-31" required data-help-key="plm-eco.effectiveDate"></label>
+            <label><span th:text="#{plm.col.owner}">담당</span><select data-field="ownerId" id="ownerSel"></select></label>
+            <label><span th:text="#{plm.col.changeKind}">변경 종류</span>
+                <select data-field="changeKind" data-code="PLM_CHANGE_KIND" required data-help-key="plm-eco.changeKind"></select></label>
+            <label><span th:text="#{plm.col.markLots}">첫 LOT 표시 수</span>
+                <input data-field="markLots" type="number" min="1" max="100" step="1" inputmode="numeric" data-help-key="plm-eco.markLots"></label>
+            <label><span th:text="#{plm.col.markUntil}">표시 끝</span>
+                <input data-field="markUntil" type="date" min="2000-01-01" max="2999-12-31" data-help-key="plm-eco.markUntil"></label>
+            <label><span th:text="#{plm.col.applyCond}">적용 조건</span>
+                <select data-field="applyCond" data-code="PLM_APPLY_COND" required data-help-key="plm-eco.applyCond"></select></label>
+            <label><span th:text="#{plm.col.stockItemCd}">소진 품목</span>
+                <input data-field="stockItemCd" maxlength="50" autocapitalize="characters" data-help-key="plm-eco.stockItemCd"></label>
+            <label><span th:text="#{plm.col.stockPlantCd}">재고 공장</span>
+                <input data-field="stockPlantCd" maxlength="20" autocapitalize="characters"></label>
+            <label><span th:text="#{plm.col.custApprovalReq}">고객 승인 필요</span>
+                <select data-field="custApprovalReqYn">
+                    <option value="N" th:text="#{plm.no}">아니오</option>
+                    <option value="Y" th:text="#{plm.yes}">예</option>
+                </select></label>
+            <label><span th:text="#{plm.col.cust}">고객</span><select data-field="custCd" id="custSel"></select></label>
+            <label class="hb-wide"><span th:text="#{plm.col.description}">내용</span>
+                <textarea data-field="description" maxlength="4000" rows="4"></textarea></label>
+            <label><span th:text="#{plm.col.status}">상태</span><output id="ecoStatus" class="hb-output"></output></label>
+            <label><span th:text="#{plm.col.custApproval}">고객 승인</span><output id="custStatus" class="hb-output"></output></label>
+            <label><span th:text="#{plm.col.stockAvailable}">남은 가용 재고</span><output id="stockStatus" class="hb-output"></output></label>
+        </form>
+
+        <section class="hb-sub" id="targetSection" hidden>
+            <h2 th:text="#{plmEco.targets}">영향 대상</h2>
+            <table class="hb-cmp-table" id="targets">
+                <thead><tr>
+                    <th th:text="#{plm.col.targetType}">유형</th>
+                    <th th:text="#{plm.col.item}">품목</th>
+                    <th th:text="#{plm.col.rev}">리비전</th>
+                    <th th:text="#{plm.col.refStatus}">지금 상태</th>
+                    <th th:text="#{plm.col.changeDesc}">변경 내용</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <div class="hb-toolbar" id="targetTools" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{plm.col.itemCd}">품목 코드</span>
+                    <input id="candItem" maxlength="40" list="itemList"><datalist id="itemList"></datalist></label>
+                <select id="candSel" th:aria-label="#{plmEco.candidate}"></select>
+                <label><span th:text="#{plm.col.refCd}">설비·공정 코드</span><input id="candRef" maxlength="30"></label>
+                <button type="button" id="addTargetBtn" class="hb-btn-secondary" th:text="#{plmEco.addTarget}">대상 추가</button>
+                <button type="button" id="saveTargetsBtn" th:text="#{plmEco.saveTargets}">대상 저장</button>
+                <button type="button" id="impactBtn" class="hb-btn-secondary" th:text="#{plmEco.impact}">영향 후보</button>
+            </div>
+            <div id="impactBox" hidden>
+                <p id="impactInfo" class="hb-muted"></p>
+                <label class="hb-check"><input type="checkbox" id="impactAll"> <span th:text="#{plmEco.impactAll}">위로 더 보기(전체 레벨)</span></label>
+                <div class="plm-table-scroll">
+                    <table class="hb-cmp-table" id="impactRows">
+                        <thead><tr>
+                            <th th:text="#{plmEco.impactLevel}">레벨</th>
+                            <th th:text="#{plm.col.item}">품목</th>
+                            <th th:text="#{plmEco.impactRev}">쓰이는 리비전</th>
+                            <th th:text="#{plmEco.impactDraft}">작성 중</th>
+                            <th th:text="#{plm.col.status}">상태</th>
+                            <th></th>
+                        </tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="qualitySection" hidden>
+            <h2 th:text="#{plmEco.quality}">품질(4M)</h2>
+            <p id="qualityInfo" class="hb-muted"></p>
+            <a id="qualityLink" th:text="#{plmEco.qualityOpen}">4M 변경관리에서 열기</a>
+            <a id="setupLink" hidden th:text="#{plmEco.setupOpen}">초품 판정에서 열기</a>
+        </section>
+
+        <section class="hb-sub" id="replaceSection" hidden>
+            <h2 th:text="#{plmEco.replace}">일괄 대체</h2>
+            <div class="hb-toolbar">
+                <label><span th:text="#{plmEco.fromItem}">바꿀 자품목</span><input id="repFrom" maxlength="40" list="itemList"></label>
+                <label><span th:text="#{plmEco.toItem}">새 자품목</span><input id="repTo" maxlength="40" list="itemList"></label>
+                <button type="button" id="repPreviewBtn" class="hb-btn-secondary" th:text="#{plmEco.replacePreview}">미리보기</button>
+                <button type="button" id="repRunBtn" hidden th:text="#{plmEco.replaceRun}">대체해 대상에 추가</button>
+            </div>
+            <table class="hb-cmp-table" id="repRows" hidden>
+                <thead><tr>
+                    <th></th>
+                    <th th:text="#{plm.col.item}">품목</th>
+                    <th th:text="#{plm.col.rev}">리비전</th>
+                    <th th:text="#{plmEco.replaceAction}">처리</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+
+        <section class="hb-sub" id="ppapSection" hidden>
+            <h2 th:text="#{plmEco.ppap}">PPAP</h2>
+            <p id="ppapInfo" class="hb-muted"></p>
+            <ul id="ppapSigns" class="hb-plain-list" th:aria-label="#{plm.signs}" hidden></ul>
+            <div class="hb-toolbar" id="ppapCreate" hidden>
+                <select id="ppapCust" th:aria-label="#{plm.col.cust}"></select>
+                <select id="ppapLevel" th:aria-label="#{plmEco.ppapLevel}"></select>
+                <button type="button" id="ppapCreateBtn" class="hb-btn-secondary" th:text="#{plmEco.ppapCreate}">PPAP 만들기</button>
+            </div>
+            <div class="plm-table-scroll">
+                <table class="hb-cmp-table" id="ppapElems" hidden>
+                    <thead><tr>
+                        <th class="hb-num">No</th>
+                        <th th:text="#{plmEco.ppapElem}">요소</th>
+                        <th th:text="#{plmEco.ppapReq}">요구</th>
+                        <th th:text="#{plm.col.status}">상태</th>
+                        <th th:text="#{plm.files}">첨부</th>
+                        <th th:text="#{plm.col.comment}">의견</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div id="ppapEvidence" hidden>
+                <h3 th:text="#{plmEco.ppapFiles}">PPAP 증빙</h3>
+                <ul id="ppapFiles" class="hb-files"></ul>
+                <input type="file" id="ppapFileInput" th:if="${actions.contains('SAVE')}" th:aria-label="#{plmEco.ppapFiles}">
+            </div>
+            <div id="ppapMail" hidden>
+                <div class="hb-toolbar"><button type="button" id="ppapMailBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{plmEco.ppapMail}">메일 보내기</button></div>
+                <div id="ppapMailLines"></div>
+            </div>
+            <div class="hb-toolbar" id="ppapDoc" th:if="${actions.contains('EXCEL')}" hidden>
+                <button type="button" id="ppapSummaryBtn" class="hb-btn-secondary" th:text="#{plmEco.ppapSummary}">요약서</button>
+            </div>
+            <div class="hb-toolbar" id="ppapTools" hidden>
+                <select id="ppapLevelEdit" th:aria-label="#{plmEco.ppapLevel}"></select>
+                <button type="button" id="ppapSaveBtn" class="hb-btn-secondary" th:text="#{plmEco.ppapSave}">PPAP 저장</button>
+                <button type="button" id="ppapSubmitBtn" th:text="#{plmEco.ppapSubmit}">제출</button>
+                <button type="button" id="ppapReopenBtn" class="hb-btn-secondary" th:text="#{plmEco.ppapReopen}">다시 작성</button>
+            </div>
+            <div class="hb-toolbar" id="ppapDecide" hidden>
+                <select id="ppapDecision" th:aria-label="#{plmEco.ppapDecision}"></select>
+                <input id="ppapDecidedOn" type="date" min="2000-01-01" max="2999-12-31" th:aria-label="#{plmEco.ppapDecidedOn}">
+                <input id="ppapRef" maxlength="100" th:placeholder="#{plmEco.ppapRef}" th:aria-label="#{plmEco.ppapRef}">
+                <input id="ppapNote" maxlength="1000" th:placeholder="#{plm.col.comment}" th:aria-label="#{plm.col.comment}">
+                <button type="button" id="ppapDecideBtn" th:if="${actions.contains('APPROVE')}" th:text="#{plmEco.ppapDecideBtn}">판정 기록</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="pcnSection" hidden>
+            <h2 th:text="#{plmEco.pcn}">고객 통지(PCN)</h2>
+            <div class="plm-table-scroll">
+                <table class="hb-cmp-table" id="pcns">
+                    <thead><tr>
+                        <th th:text="#{plmEco.pcnNo}">통지 번호</th>
+                        <th th:text="#{plm.col.cust}">고객</th>
+                        <th th:text="#{plmEco.notifiedOn}">통지일</th>
+                        <th th:text="#{plmEco.responseDue}">응답 기한</th>
+                        <th th:text="#{plm.col.status}">상태</th>
+                        <th th:text="#{plmEco.response}">응답</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="hb-toolbar" id="pcnTools" th:if="${actions.contains('SAVE')}">
+                <select id="pcnCust" th:aria-label="#{plm.col.cust}"></select>
+                <input id="pcnOn" type="date" min="2000-01-01" max="2999-12-31" th:aria-label="#{plmEco.notifiedOn}">
+                <input id="pcnDue" type="date" min="2000-01-01" max="2999-12-31" th:aria-label="#{plmEco.responseDue}">
+                <input id="pcnNote" maxlength="1000" th:placeholder="#{plm.col.comment}" th:aria-label="#{plm.col.comment}">
+                <button type="button" id="pcnAddBtn" class="hb-btn-secondary" th:text="#{plmEco.pcnAdd}">통지 기록</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="markSection" hidden>
+            <h2 th:text="#{plmEco.marks}">표시된 LOT</h2>
+            <p id="markInfo" class="hb-muted"></p>
+            <div class="plm-table-scroll">
+                <table class="hb-cmp-table" id="marks">
+                    <thead><tr>
+                        <th class="hb-num" th:text="#{plm.col.seqNo}">순번</th>
+                        <th th:text="#{plm.col.markReason}">표시 이유</th>
+                        <th th:text="#{plm.col.lotNo}">LOT 번호</th>
+                        <th th:text="#{plm.col.item}">품목</th>
+                        <th th:text="#{plm.col.woNo}">작업지시</th>
+                        <th th:text="#{plm.col.equip}">설비</th>
+                        <th th:text="#{plm.col.occurredAt}">발생 시각</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="aprSection" hidden>
+            <h2 th:text="#{plmEco.approval}">결재</h2>
+            <table class="hb-cmp-table" id="aprLines">
+                <thead><tr>
+                    <th th:text="#{plm.col.seq}">순서</th>
+                    <th th:text="#{plm.col.approver}">결재자</th>
+                    <th th:text="#{plm.col.lineType}">구분</th>
+                    <th th:text="#{plm.col.status}">상태</th>
+                    <th th:text="#{plm.col.comment}">의견</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <div class="hb-toolbar" id="lineTools" th:if="${actions.contains('SAVE')}">
+                <select id="lineUser" th:aria-label="#{plm.col.approver}"></select>
+                <select id="lineType" th:aria-label="#{plm.col.lineType}">
+                    <option value="APPROVE" th:text="#{plmEco.line.APPROVE}">결재</option>
+                    <option value="AGREE" th:text="#{plmEco.line.AGREE}">합의</option>
+                    <option value="REF" th:text="#{plmEco.line.REF}">참조</option>
+                </select>
+                <button type="button" id="addLineBtn" class="hb-btn-secondary" th:text="#{plmEco.addLine}">결재선 추가</button>
+                <button type="button" id="submitBtn" th:text="#{plmEco.submit}">상신</button>
+            </div>
+            <ul id="ecoSigns" class="hb-plain-list" th:aria-label="#{plm.signs}" hidden></ul>
+            <div class="hb-toolbar" id="actTools" hidden>
+                <input id="aprComment" maxlength="1000" th:aria-label="#{plm.col.comment}" th:placeholder="#{plm.col.comment}">
+                <button type="button" id="approveBtn" hidden th:text="#{plmEco.approve}">승인</button>
+                <button type="button" id="rejectBtn" class="hb-btn-danger-outline" hidden th:text="#{plmEco.reject}">반려</button>
+                <button type="button" id="withdrawBtn" class="hb-btn-secondary" hidden th:text="#{plmEco.withdraw}">회수</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="custSection" hidden>
+            <h2 th:text="#{plm.col.custApproval}">고객 승인</h2>
+            <form id="custForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{plm.col.status}">상태</span>
+                    <select data-field="custApprovalStatus">
+                        <option value="PENDING" th:text="#{code.PLM_CUST_APR.PENDING}">대기</option>
+                        <option value="APPROVED" th:text="#{code.PLM_CUST_APR.APPROVED}">승인</option>
+                        <option value="REJECTED" th:text="#{code.PLM_CUST_APR.REJECTED}">거절</option>
+                    </select></label>
+                <label><span th:text="#{plm.col.custApprovalRef}">고객 승인 번호</span><input data-field="custApprovalRef" maxlength="100"></label>
+                <label><span th:text="#{plm.col.custApprovedOn}">승인일</span>
+                    <input data-field="custApprovedOn" type="date" min="2000-01-01" max="2999-12-31"></label>
+            </form>
+            <div class="hb-toolbar"><button type="button" id="custBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{plmEco.custRecord}">고객 승인 기록</button></div>
+        </section>
+
+        <section class="hb-sub" id="ecrSection" hidden>
+            <h2 th:text="#{plmEco.ecrs}">연결된 요청</h2>
+            <ul id="ecrList"></ul>
+        </section>
+
+        <section class="hb-sub" id="fileSection" hidden>
+            <h2 th:text="#{plm.files}">첨부(도면·문서)</h2>
+            <ul id="files" class="hb-files"></ul>
+            <input type="file" id="fileInput" th:if="${actions.contains('SAVE')}" th:aria-label="#{plm.files}">
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.esign.js}"></script>
+<script th:src="@{/js/views/plm/plm-common.js}"></script>
+<script th:src="@{/js/views/plm/eco-extras.js}"></script>
+<script th:src="@{/js/views/plm/eco-mgt.js}"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- QMS 4M 고객 통지 판단 (docs/29_P3 52장). plm_* 는 읽지 않는다 — ECO 고객·PCN 은 PLM 계약 EcoLookup.custId·pcns -->
+<mapper namespace="io.smarthappy.module.qms.CustNotifyMapper">
+
+    <!-- 대상 규칙은 시정조치 기한 CSR(findCsrDue)과 같다: 적용 대상이 없으면 고객 전체, 있으면 품목 또는 그 품목 클래스 -->
+    <select id="matchedCsrs" resultType="io.smarthappy.module.qms.CustNotifyMapper$CsrReq">
+        select s.csr_id, s.csr_no, s.csr_rev, s.notify_req::text as notify_req_json
+          from qms_cust_csr s
+         where s.cust_id = #{custId} and s.use_yn = 'Y' and s.effective_from &lt;= #{on}
+           and s.notify_req &lt;&gt; '{}'::jsonb
+           and (not exists (select 1 from qms_cust_csr_target t where t.csr_id = s.csr_id)
+                <if test="itemIds != null and !itemIds.isEmpty()">
+                or exists (select 1 from qms_cust_csr_target t
+                            where t.csr_id = s.csr_id
+                              and (t.item_id in <foreach collection="itemIds" item="x" open="(" separator="," close=")">#{x}</foreach>
+                                   or t.item_class_id in (select m.item_class_id from mst_item m where m.item_id in
+                                       <foreach collection="itemIds" item="x" open="(" separator="," close=")">#{x}</foreach>)))
+                </if>)
+         order by s.csr_no, s.csr_rev, s.csr_id
+    </select>
+
+    <select id="findCust" resultType="io.smarthappy.module.qms.CustNotifyMapper$CustRef">
+        select cust_id, cust_cd, cust_nm from mst_cust where cust_id = #{custId}
+    </select>
+</mapper>

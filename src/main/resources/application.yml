@@ -1,0 +1,145 @@
+# 공통 설정. 비밀값은 여기에 두지 않는다 → 환경변수 또는 프로젝트 루트 .env (커밋 금지, 예시는 .env.example)
+spring:
+  messages:
+    basename: messages
+    encoding: UTF-8
+    fallback-to-system-locale: false
+  application:
+    name: yeonos
+  profiles:
+    default: local          # 프로필 미지정 시 운영 DB에 붙는 사고 방지
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    # 앱은 테이블 소유자가 아닌 계정으로 접속해야 RLS(회사별 행 격리)가 우회되지 않는다
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # 마이그레이션은 소유자 계정으로 실행
+    user: ${DB_OWNER_USER:yeonos_owner}
+    password: ${DB_OWNER_PASSWORD:}
+    placeholders:
+      app_role: ${DB_APP_USER:yeonos_app}
+  jooq:
+    sql-dialect: postgres   # jOOQ 시범(module.apqp, docs/43) — 방언을 연결에서 추측하지 않고 고정
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+  mail:
+    # SMTP(메일 알림, docs/36 18.3) — 값은 환경 변수로만(.env·서버 환경), 저장소·문서에 쓰지 않는다. 쓰려면 happyboot.mail.enabled 도 켠다
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    default-encoding: UTF-8
+    properties:
+      "[mail.smtp.auth]": ${SMTP_AUTH:true}
+      "[mail.smtp.starttls.enable]": ${SMTP_STARTTLS:true}
+      "[mail.smtp.starttls.required]": ${SMTP_STARTTLS:true}
+      "[mail.smtp.connectiontimeout]": 5000
+      "[mail.smtp.timeout]": 10000
+      "[mail.smtp.writetimeout]": 10000
+
+server:
+  port: ${SERVER_PORT:8090}
+  # 리버스 프록시(Caddy·nginx·IIS) 뒤에서 실제 접속 IP·https 를 알기 위함 — 시도 제한·접속 로그·HSTS·운영자 허용 IP 가 이 값을 쓴다.
+  # X-Forwarded-* 는 TRUSTED_PROXIES 에서 온 요청만 믿는다. 비우면 아무도 믿지 않는다(프록시 없이 직접 받는 배포).
+  # 형식: CIDR 목록(예 172.18.0.0/16) 또는 정규식. 공인 대역까지 넓히면 prod 기동 가드가 막는다 (docs/23 E6)
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      internal-proxies: ${TRUSTED_PROXIES:}
+  servlet:
+    session:
+      timeout: ${SESSION_TIMEOUT:30m}
+      cookie:
+        http-only: true
+        same-site: lax
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-exception: false
+
+mybatis:
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-handlers-package: io.smarthappy.platform.common.db.mybatis   # 전역 처리기(UUID — uuid 칸을 UUID 필드로 받으면 조용히 null 이던 함정)
+  configuration:
+    map-underscore-to-camel-case: true
+    call-setters-on-nulls: true
+    jdbc-type-for-null: 'NULL'
+    default-statement-timeout: 30
+    local-cache-scope: statement   # 1차 캐시는 문장 단위만 (같은 트랜잭션의 같은 조회가 캐시된 옛 값을 돌려주지 않게)
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true   # /actuator/health/liveness(프로세스) · /readiness(DB 포함) 분리 — 로드밸런서·컨테이너용
+        add-additional-paths: true   # /livez·/readyz 를 앱 포트에도 — 관리 포트를 나눠도(MANAGEMENT_SERVER_PORT) 로드밸런서가 앱 포트로 본다
+    prometheus:
+      # 운영 지표(docs/52 Y2). 개발·시험은 이 PC 에서만(read-only), 운영 프로필은 기본 none — 열려면 관리 포트 분리·내부 주소·토큰(ProdStartupGuard)
+      access: ${METRICS_ENDPOINT:read-only}
+  health:
+    mail:
+      enabled: ${MAIL_ENABLED:false}   # 메일을 안 쓰는 설치에서 빈 SMTP 주소로 health 가 DOWN 이 되지 않게
+
+logging:
+  pattern:
+    level: "%5p [%X{compCd:-}] [%X{reqId:-}]"   # 로그 줄마다 회사코드(TenantContext)·요청 ID(RequestIdFilter) — 운영은 JSON(application-prod)
+
+happyboot:
+  deploy:
+    mode: ${DEPLOY_MODE:saas}   # saas | onprem
+    comp-cd: ${DEPLOY_COMP_CD:}  # onprem 전용: 고정 회사코드
+  security:
+    max-login-fail: ${MAX_LOGIN_FAIL:5}          # 계정 연속 실패 잠금 횟수
+    lock-minutes: ${LOGIN_LOCK_MINUTES:15}       # 실패 잠금 자동 해제(분)
+    ip-comp-max-fail: ${LOGIN_IP_COMP_MAX_FAIL:20} # 같은 IP+회사코드 실패 허용(창 안)
+    ip-max-fail: ${LOGIN_IP_MAX_FAIL:100}        # 같은 IP 실패 허용(창 안)
+    ip-window-minutes: ${LOGIN_IP_WINDOW_MINUTES:10}
+    session-absolute-hours: ${SESSION_ABSOLUTE_HOURS:12} # 활동과 관계없이 세션 최대 수명
+  files:
+    root: ${FILE_ROOT:./data/files}   # 첨부 저장 루트 (웹 루트 밖, 백업 대상)
+  scheduling:
+    enabled: ${SCHEDULING_ENABLED:true} # 다중 인스턴스에서도 작업별 advisory lock 으로 한 곳만 실행
+  status-file: ${STATUS_FILE:./data/status.json}   # 장애 공지(운영자가 편집, 없으면 정상) — /status.json
+  push:
+    # Web Push(docs/45 9장 N7) — VAPID 키는 환경 변수로만(저장소·문서에 쓰지 않는다). 둘 다 비면 푸시 꺼짐
+    vapid-public-key: ${HAPPYBOOT_PUSH_VAPID_PUBLIC_KEY:}
+    vapid-private-key: ${HAPPYBOOT_PUSH_VAPID_PRIVATE_KEY:}
+    subject: ${HAPPYBOOT_PUSH_VAPID_SUBJECT:}
+    # 구독 엔드포인트로 허용하는 푸시 서비스 호스트(N6 — SSRF 막기). "*." 는 하위 도메인
+    allowed-hosts: ${HAPPYBOOT_PUSH_ALLOWED_HOSTS:fcm.googleapis.com,updates.push.services.mozilla.com,*.notify.windows.com,web.push.apple.com}
+  pda:
+    dir: ${PDA_APK_DIR:./data/pda}   # 현장 단말 APK 배포 파일(yeonos-pda.apk + release.json, 운영자가 놓는다) — docs/50 F1
+  ops:
+    allowed-ips: ${OPS_ALLOWED_IPS:127.0.0.1/32,::1/128}   # 운영자 콘솔 허용 IP (밖에서는 404)
+    secret-key: ${OPS_SECRET_KEY:}    # 운영자 MFA 비밀 암호화 키(Base64 32바이트) — 없으면 콘솔 비활성
+    idle-minutes: ${OPS_IDLE_MINUTES:15}
+    bootstrap-login: ${OPS_BOOTSTRAP_LOGIN:}        # 첫 운영자 (migrate·local 실행에서만, 운영자가 없을 때)
+    bootstrap-password: ${OPS_BOOTSTRAP_PASSWORD:}
+  mfa:
+    # 회사 사용자 MFA(TOTP) 비밀 봉인 키(Base64 32바이트, docs/36 14장) — 비우면 운영자 키(happyboot.ops.secret-key).
+    # 둘 다 없으면 MFA 가 필요한 로그인은 막힌다(fail-closed)
+    secret-key: ${MFA_SECRET_KEY:}
+  backup:
+    status-dir: ${BACKUP_STATUS_DIR:./data/backup-status}
+  metrics:
+    # 운영 지표 /actuator/prometheus (docs/52 Y2) — 허용 IP 밖·토큰 틀림은 404. 회사 꼬리표는 SaaS 에서만 켤 수 있고 기본 끔(Q2)
+    comp-tag: ${METRICS_COMP_TAG:false}
+    allowed-ips: ${METRICS_ALLOWED_IPS:127.0.0.1/32,::1/128}
+    token: ${METRICS_TOKEN:}
+  mail:
+    # 메일 알림(docs/36 18.3). 켜면 SMTP 서버(spring.mail.host)와 보내는 주소가 꼭 있어야 한다 — 없으면 기동 중단
+    enabled: ${MAIL_ENABLED:false}
+    from: ${MAIL_FROM:}
+    base-url: ${MAIL_BASE_URL:}   # 메일 본문의 열기 주소 앞부분(예 https://mes.example.com), 비우면 주소 줄 없음   # 백업·복원 시험 스크립트가 남기는 상태 파일 위치

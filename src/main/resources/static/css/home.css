@@ -1,0 +1,157 @@
+/*
+ * 홈 (home-main) 카드 — docs/37 5장. 색·크기는 tokens.css 의미 토큰만(DesignTokenGuardTest).
+ * 정상은 회색, 이상만 경고·알람색 + 기호·글자(docs/12 2.1·2.6). 카드 격자는 작업 영역 폭 기준 auto-fill(390 에서 1열).
+ * 홈은 대시보드 — 문서형 읽기 폭 상한(72rem, docs/15 R10)을 풀어 넓은 화면에서 오른쪽이 비지 않게 카드로 채운다.
+ */
+body.hb-home > * { max-width: none; }
+.hb-home-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+    gap: var(--hb-space-5);
+    margin-top: var(--hb-space-5);
+}
+.hb-home-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--hb-space-3);
+    min-width: 0;
+    padding: var(--hb-space-5) var(--hb-space-6);
+    background: var(--hb-bg-surface);
+    border: 1px solid var(--hb-border-subtle);
+    border-left: 4px solid var(--hb-border);
+    border-radius: var(--hb-radius-lg);
+    box-shadow: var(--hb-shadow-1);
+}
+.hb-home-card[data-tone="info"] { border-left-color: var(--hb-status-info-line); }
+.hb-home-card[data-tone="warn"] { border-left-color: var(--hb-status-warning-line); }
+.hb-home-card[data-tone="alert"] { border-left-color: var(--hb-status-danger-line); }
+
+.hb-home-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--hb-space-4); }
+.hb-home-card-head h2 { margin: 0; font-size: var(--hb-fs-lg); }
+/* 카드 상태 배지는 공통 hb-status(page.css, docs/40 부록 A) — 홈 전용 배지 클래스는 2026-10-22 에 끌어올림 */
+
+.hb-home-desc { margin: 0; font-size: var(--hb-fs-sm); color: var(--hb-text-subtle); }
+.hb-home-count { margin: 0; display: flex; align-items: baseline; gap: var(--hb-space-2); }
+.hb-home-num { font-size: var(--hb-fs-2xl); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--hb-text); }
+.hb-home-unit { color: var(--hb-text-subtle); }
+
+.hb-home-facts, .hb-home-items { list-style: none; margin: 0; padding: 0; }
+.hb-home-facts { display: flex; flex-wrap: wrap; gap: var(--hb-space-2) var(--hb-space-5); font-size: var(--hb-fs-sm); color: var(--hb-text-muted); }
+.hb-home-facts li { display: inline-flex; align-items: baseline; gap: var(--hb-space-2); }
+.hb-home-fact-num { font-variant-numeric: tabular-nums; color: var(--hb-text); }
+.hb-home-facts li[data-tone="warn"], .hb-home-facts li[data-tone="warn"] .hb-home-fact-num { color: var(--hb-status-warning-fg); }
+.hb-home-facts li[data-tone="alert"], .hb-home-facts li[data-tone="alert"] .hb-home-fact-num { color: var(--hb-status-danger-fg); }
+
+.hb-home-items { border-top: 1px solid var(--hb-border-subtle); }
+.hb-home-items li {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: var(--hb-space-2) 0 var(--hb-space-2) var(--hb-space-4);
+    border-bottom: 1px solid var(--hb-border-subtle);
+    border-left: 3px solid transparent;
+}
+.hb-home-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-2); min-width: 0; }
+.hb-home-items li[data-tone="warn"] { border-left-color: var(--hb-status-warning-line); }
+.hb-home-items li[data-tone="alert"] { border-left-color: var(--hb-status-danger-line); }
+.hb-home-item-title { font-size: var(--hb-fs-sm); overflow-wrap: anywhere; }
+.hb-home-item-detail {
+    font-size: var(--hb-fs-sm);
+    color: var(--hb-text-subtle);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.hb-home-open { align-self: flex-start; margin-top: auto; }
+.hb-home-empty { grid-column: 1 / -1; }
+.hb-page-tools #asOf { font-size: var(--hb-fs-sm); }
+/* 좁은 작업 영역(390): 머리 도구가 글자 단위로 접히지 않게 — 버튼 줄을 통째로 내린다 */
+.hb-home .hb-page-head { flex-wrap: wrap; }
+.hb-home .hb-page-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); }
+.hb-home .hb-page-tools button, .hb-page-tools #asOf { white-space: nowrap; }
+
+/* 2단계: 항목 번호 링크 · 카드 설정 대화상자 (docs/37 14장) */
+/* .hb-page button(채운 파란 버튼)보다 구체적으로 — 글자 링크 모양 */
+.hb-page button.hb-home-item-link, .hb-page button.hb-home-item-link:hover {
+    align-self: flex-start;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--hb-action);
+    font-weight: 700;
+    text-align: left;
+    text-decoration: underline;
+    cursor: pointer;
+}
+.hb-page button.hb-home-item-link:hover { text-decoration-thickness: 2px; }
+.hb-home-settings { width: min(520px, calc(100vw - 32px)); }
+.hb-home-set-list { list-style: none; margin: var(--hb-space-4) 0; padding: 0; border-top: 1px solid var(--hb-border-subtle); }
+.hb-home-set-list li {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: var(--hb-space-2) var(--hb-space-4);
+    padding: var(--hb-space-3) 0;
+    border-bottom: 1px solid var(--hb-border-subtle);
+}
+.hb-home-set-name { display: inline-flex; align-items: center; gap: var(--hb-space-3); }
+.hb-home-set-desc { grid-column: 1; font-size: var(--hb-fs-sm); }
+.hb-home-set-tools { grid-column: 2; grid-row: 1 / span 2; display: inline-flex; gap: var(--hb-space-2); }
+.hb-home-set-tools button { min-width: 32px; }
+
+/* ---------- 홈 카드 기본 세트 관리 (home-card-mgt, docs/37 15장) ---------- */
+.hb-home-mgt-title { margin: var(--hb-space-4) 0 var(--hb-space-2); font-size: var(--hb-fs-md); }
+.hb-home-grp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--hb-space-2); }
+/* .hb-page button(채운 파란 버튼)보다 구체적으로 — 2단계 항목 링크와 같은 함정 */
+.hb-page button.hb-home-grp {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0 var(--hb-space-4);
+    width: 100%;
+    min-height: var(--hb-target-min);
+    padding: var(--hb-space-3) var(--hb-space-4);
+    text-align: left;
+    color: var(--hb-text);
+    background: var(--hb-bg-surface);
+    border: 1px solid var(--hb-border-subtle);
+    border-left: 4px solid transparent;
+    border-radius: var(--hb-radius-md);
+    cursor: pointer;
+}
+.hb-page button.hb-home-grp:hover { background: var(--hb-bg-hover); }
+/* 고른 그룹 = 왼쪽 굵은 선 + 굵은 글자(색만으로 알리지 않는다) */
+.hb-page button.hb-home-grp[aria-pressed="true"] { border-left-color: var(--hb-action); background: var(--hb-action-faint); }
+.hb-home-grp[aria-pressed="true"] .hb-home-grp-name { font-weight: 700; }
+.hb-home-grp-name { grid-column: 1; overflow-wrap: anywhere; }
+.hb-home-grp .hb-muted { grid-column: 1; font-size: var(--hb-fs-sm); }
+.hb-home-grp-cnt { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: var(--hb-fs-sm); color: var(--hb-text-subtle); }
+/* 그룹이 화면 권한이 없어 보이지 않는 카드 — 흐리게 + 안내 글자 */
+.hb-home-set-off .hb-home-set-name { color: var(--hb-text-muted); }
+
+/* ---------- 4단계 (docs/37 16장): 카드 다시 읽기 · 숫자 링크 ---------- */
+.hb-page button.hb-home-reload { flex: 0 0 auto; min-width: var(--hb-target-min); min-height: var(--hb-target-min); padding: 0 var(--hb-space-2); }
+.hb-home-card-head h2 { flex: 1 1 auto; min-width: 0; }
+/* 숫자 링크 — 큰 숫자 그대로 + 밑줄(색만으로 링크를 알리지 않는다). .hb-page button 보다 구체적으로 */
+.hb-page button.hb-home-num-link, .hb-page button.hb-home-num-link:hover {
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--hb-action);
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    cursor: pointer;
+}
+.hb-page button.hb-home-num-link:hover { text-decoration-thickness: 3px; }
+
+/* ---------- 5단계 (docs/37 17장): 공장 선택 · 공장 카드 표시 ---------- */
+.hb-home-plant { display: inline-flex; align-items: center; gap: var(--hb-space-2); font-size: var(--hb-fs-sm); }
+.hb-home-plant[hidden] { display: none; }
+.hb-home-plant select { min-height: var(--hb-target-min); }
+.hb-home-plant-tag { margin: 0; font-size: var(--hb-fs-xs); color: var(--hb-text-subtle); }
+
+/* 되돌릴 수 없는 동작(세트·내 설정 지우기)은 도구줄·대화상자 바닥에서 저장과 떨어진 오른쪽 끝(docs/40 7장 P1 ④) */
+.hb-home-danger { margin-left: auto; }
+/* 좁은 폭에서 서랍 닫기(margin-left: auto)가 위험 버튼 바로 뒤에 붙게 — 자동 여백을 둘로 나누지 않는다 */
+.hb-page .hb-home-danger + .hb-drawer-close { margin-left: 0; }

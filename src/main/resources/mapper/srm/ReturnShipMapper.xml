@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 반품 출고 게이트 (SRM 2부 R4-4, docs/31 4.12.7) — 회사 범위는 RLS. 잠금 = 반품 → (교체 요구면) 발주 머리 → 발주 행 -->
+<mapper namespace="io.smarthappy.module.srm.link.ReturnShipMapper">
+
+    <sql id="retCols">
+        r.return_id, r.return_no, r.status, r.cust_id, r.plant_cd, r.lot_id, r.lot_no, r.item_id, r.unit_cd, r.qty, r.replace_yn, r.po_line_id,
+        r.ship_ref, i.unit_cd as base_unit, i.lot_ctrl_yn,
+        case when r.unit_cd = i.unit_cd then 1 else uc.factor end as factor,
+        coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = i.unit_cd),
+                 (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = i.unit_cd)) as base_scale,
+        pl.unit_cd as po_unit, case when pl.unit_cd = i.unit_cd then 1 else ucp.factor end as po_factor,
+        coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = pl.unit_cd),
+                 (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = pl.unit_cd)) as po_scale
+    </sql>
+
+    <sql id="retFrom">
+        from srm_return r
+        join mst_item i on i.item_id = r.item_id
+        left join mst_unit_conv uc on uc.item_id = r.item_id and uc.from_unit = r.unit_cd and uc.to_unit = i.unit_cd and uc.use_yn = 'Y'
+        left join srm_po_line pl on pl.po_line_id = r.po_line_id
+        left join mst_unit_conv ucp on ucp.item_id = r.item_id and ucp.from_unit = pl.unit_cd and ucp.to_unit = i.unit_cd and ucp.use_yn = 'Y'
+    </sql>
+
+    <select id="findByNo" resultType="io.smarthappy.module.srm.link.ReturnShipMapper$Ret">
+        select <include refid="retCols"/> <include refid="retFrom"/>
+         where r.return_no = #{returnNo} and r.status in ('CONFIRMED', 'SHIPPED')
+    </select>
+
+    <select id="lockReturn" resultType="io.smarthappy.module.srm.link.ReturnShipMapper$Ret" flushCache="true">
+        select <include refid="retCols"/> <include refid="retFrom"/>
+         where r.return_id = #{returnId}
+           for update of r
+    </select>
+
+    <select id="refUsed" resultType="boolean" flushCache="true">
+        select exists (select 1 from srm_return where ship_ref = #{trxRef})
+    </select>
+
+    <select id="receiptOfLot" resultType="string" flushCache="true">
+        select trx_ref from srm_po_receipt
+         where po_line_id = #{poLineId} and lot_id = #{lotId} and qty &gt; 0
+         order by receipt_id limit 1
+    </select>
+
+    <select id="netOfLot" resultType="java.math.BigDecimal" flushCache="true">
+        select coalesce(sum(qty), 0) from srm_po_receipt where po_line_id = #{poLineId} and lot_id = #{lotId}
+    </select>
+
+    <!-- 출고 때 되돌린 입고량(발주 단위, 양수) — 역분개는 이 값을 다시 입고(그 사이 환산표가 바뀌어도 같은 양) -->
+    <select id="reversedQty" resultType="java.math.BigDecimal" flushCache="true">
+        select -qty from srm_po_receipt where trx_ref = #{shipRef}
+    </select>
+
+    <select id="poNoOf" resultType="string">
+        select p.po_no from srm_po_line l join srm_po p on p.po_id = l.po_id where l.po_line_id = #{poLineId}
+    </select>
+
+    <update id="markShipped">
+        update srm_return
+           set status = 'SHIPPED', shipped_at = #{at}, ship_ref = #{trxRef}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where return_id = #{returnId} and status = 'CONFIRMED'
+    </update>
+
+    <update id="markUnshipped">
+        update srm_return
+           set status = 'CONFIRMED', shipped_at = null, ship_ref = null, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where return_id = #{returnId} and status = 'SHIPPED' and ship_ref = #{trxRef}
+    </update>
+</mapper>

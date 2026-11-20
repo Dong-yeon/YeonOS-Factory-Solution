@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 생산 입고 (P2 7a, docs/25 4.9). 회사 조건은 RLS. 대상 LOT = 지시의 마지막 공정 산출(실적·재작업 처리) -->
+<mapper namespace="io.smarthappy.module.production.ReceiptMapper">
+
+    <!-- 칸만(행마다 마지막 공정 hb_proc_qty·입고 합) — 목록은 woCols, grid 는 지연 조인 바깥에서 -->
+    <sql id="woSelect">
+        w.wo_id, w.wo_no, w.plant_cd, i.item_cd, i.item_nm, trim_scale(w.plan_qty)::text as plan_qty, w.unit_cd, w.status, w.plan_start,
+        (select trim_scale(q.good + q.disp_good)::text
+           from prd_wo_proc p cross join lateral hb_proc_qty(p.wo_proc_id) q
+          where p.wo_id = w.wo_id order by p.op_seq desc limit 1) as last_good_qty,
+        (select trim_scale(coalesce(sum(r.qty), 0))::text from prd_receipt r where r.wo_id = w.wo_id) as received_qty
+    </sql>
+
+    <sql id="woCols">
+        <include refid="woSelect"/>
+          from prd_wo w
+          join mst_item i on i.item_id = w.item_id
+    </sql>
+
+    <!-- 목록·grid 공통 조건(woCols 의 from 뒤) -->
+    <sql id="woWhere">
+         where w.plant_cd = #{plantCd}
+        <choose>
+            <when test="status != null">and w.status = #{status}</when>
+            <otherwise>and w.status in ('IN_PROGRESS', 'DONE')</otherwise>
+        </choose>
+        <if test="keyword != null">
+           and (w.wo_no ilike '%' || #{keyword} || '%' escape '\' or i.item_cd ilike '%' || #{keyword} || '%' escape '\')
+        </if>
+    </sql>
+
+    <select id="wos" resultType="io.smarthappy.module.production.ReceiptDtos$ReceiptWo">
+        select <include refid="woCols"/>
+        <include refid="woWhere"/>
+         order by w.plan_start desc, w.wo_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ①) — 정렬 허용 목록 enum 이름으로만(문자열 치환 없이), 마지막에 PK. 계산 칸(양품·입고)은 정렬 밖 -->
+    <!-- 지연 조인(docs/25 4.41, docs/qa offset M2): 안쪽 = wo_id 만 거름(검색어가 품목 코드도 보아 품목 조인)·정렬·offset,
+         바깥 = 그 한 쪽(50행)에만 hb_proc_qty·입고 합 -->
+    <select id="woPage" resultType="io.smarthappy.module.production.ReceiptDtos$ReceiptWo">
+        select <include refid="woSelect"/>
+          from (
+                select w.wo_id
+                  from prd_wo w
+                  join mst_item i on i.item_id = w.item_id
+                <include refid="woWhere"/>
+                 order by
+                 <foreach collection="page.sorts" item="s">
+                    <choose>
+                        <when test="s.key == 'WO_NO'">w.wo_no</when>
+                        <when test="s.key == 'ITEM_CD'">i.item_cd</when>
+                        <when test="s.key == 'STATUS'">w.status</when>
+                        <otherwise>w.plan_start</otherwise>
+                    </choose>
+                    <if test="s.desc"> desc</if>,
+                 </foreach>
+                 w.wo_id desc
+                 limit #{page.size} offset #{page.offset}
+               ) k
+          join prd_wo w on w.wo_id = k.wo_id
+          join mst_item i on i.item_id = w.item_id
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'WO_NO'">w.wo_no</when>
+                <when test="s.key == 'ITEM_CD'">i.item_cd</when>
+                <when test="s.key == 'STATUS'">w.status</when>
+                <otherwise>w.plan_start</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         w.wo_id desc
+    </select>
+
+    <select id="countWos" resultType="long">
+        select count(*) from prd_wo w join mst_item i on i.item_id = w.item_id
+        <include refid="woWhere"/>
+    </select>
+
+    <select id="wo" resultType="io.smarthappy.module.production.ReceiptDtos$ReceiptWo" flushCache="true" useCache="false">
+        select <include refid="woCols"/>
+         where w.wo_id = #{woId}
+    </select>
+
+    <!-- 마지막 공정의 산출 LOT(실적 양품 + 재작업 처리 양품) — 만든 양·순입고·남음 -->
+    <select id="lots" resultType="io.smarthappy.module.production.ReceiptDtos$ReceiptLot" flushCache="true" useCache="false">
+        with last as (
+            select p.wo_proc_id from prd_wo_proc p where p.wo_id = #{woId} order by p.op_seq desc limit 1
+        ), outs as (
+            select r.lot_id from prd_result r join last on last.wo_proc_id = r.wo_proc_id where r.lot_id is not null
+            union
+            select w.lot_id from prd_rework w join last on last.wo_proc_id = w.wo_proc_id where w.lot_id is not null
+        )
+        select l.lot_id, l.lot_no, trim_scale(l.qty_created)::text as qty_created,
+               trim_scale(coalesce(rc.received, 0))::text as received_qty,
+               trim_scale(l.qty_created - coalesce(rc.received, 0))::text as remain_qty,
+               l.hold_yn, l.occurred_at
+          from outs
+          join lot_master l on l.lot_id = outs.lot_id
+          left join (select lot_id, sum(qty) as received from prd_receipt where wo_id = #{woId} group by lot_id) rc on rc.lot_id = l.lot_id
+         order by l.occurred_at, l.lot_id
+    </select>
+
+    <select id="history" resultType="io.smarthappy.module.production.ReceiptDtos$ReceiptRow" flushCache="true" useCache="false">
+        select r.receipt_id, r.lot_id, l.lot_no, r.node_id, h.node_cd, trim_scale(r.qty)::text as qty, r.unit_cd, r.entry_method,
+               r.reversal_of_id, exists (select 1 from prd_receipt x where x.reversal_of_id = r.receipt_id) as reversed,
+               r.reason, r.occurred_at, r.recorded_by
+          from prd_receipt r
+          join lot_master l on l.lot_id = r.lot_id
+          join mst_equip_hier h on h.node_id = r.node_id
+         where r.wo_id = #{woId}
+         order by r.occurred_at desc, r.receipt_id desc
+    </select>
+
+    <select id="locations" resultType="io.smarthappy.module.production.ReceiptDtos$LocOption">
+        select h.node_id, h.node_cd, h.node_nm, h.node_type, p.node_cd as parent_cd
+          from mst_equip_hier h
+          left join mst_equip_hier p on p.node_id = h.parent_id
+         where h.plant_cd = #{plantCd} and h.node_type in ('WH', 'LOC') and h.use_yn = 'Y'
+         order by coalesce(p.node_cd, h.node_cd), h.node_type desc, h.node_cd
+    </select>
+
+    <sql id="refCols">
+        r.receipt_id, r.wo_id, r.lot_id, r.node_id, r.qty, r.reversal_of_id,
+        exists (select 1 from prd_receipt x where x.reversal_of_id = r.receipt_id) as reversed
+          from prd_receipt r
+    </sql>
+
+    <select id="findByReq" resultType="io.smarthappy.module.production.ReceiptDtos$ReceiptRef" flushCache="true" useCache="false">
+        select <include refid="refCols"/>
+         where r.client_req_id = #{req}
+    </select>
+
+    <select id="find" resultType="io.smarthappy.module.production.ReceiptDtos$ReceiptRef" flushCache="true" useCache="false">
+        select <include refid="refCols"/>
+         where r.receipt_id = #{id}
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into prd_receipt (comp_cd, plant_cd, wo_id, item_id, lot_id, node_id, qty, unit_cd, client_req_id, reason, occurred_at,
+                                 entry_method, recorded_by, reversal_of_id)
+        values (hb_current_comp(), #{f.plantCd}, #{f.woId}, #{f.itemId}, #{f.lotId}, #{f.nodeId}, #{f.qty}, #{f.unitCd}, #{f.clientReqId},
+                #{f.reason}, #{at}, #{f.entryMethod}, #{by}, #{f.reversalOfId})
+        returning receipt_id
+    </select>
+</mapper>

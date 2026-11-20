@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  업무 흐름 지도 (home-flow-map) — docs/46 12장. 흐름 하나를 고르면 화면 상자(버튼)와 화살표(SVG)로 그린다.
+  클릭 = 고르기(그 상자의 화살표 강조 + 그림판 아래 요약 띠 — 상자를 가리지 않음, 접을 수 있음), 요약의 [화면 열기] = 그 화면 탭(더블클릭 열기 없음). 상자는 끌어서(방향키로) 옮긴다 — 자리는 이 기기에 기억.
+  사용성 체크(docs/11 4.3): 주 사용자 = 모든 사무 사용자(WEB), 처음 쓸 때·업무 순서가 헷갈릴 때. 직접 치는 값 없음.
+  화살표 원본 = /js/common/help-flow.json(도움말 대화상자와 같음), 흐름 단계 = /js/common/flow-map.json, 이름·권한 = API.
+  화면 CSS 는 flow-map.css 를 본문 첫 줄에서 읽는다(page.css 공통 변경 회피).
+-->
+<body class="hb-page hb-page-scroll hb-fm" th:data-prog="${prog.progCd}">
+<link rel="stylesheet" th:href="@{/css/views/flow-map.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">업무 흐름 지도</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<div class="hb-fm-bar">
+    <label class="hb-fm-pick"><span th:text="#{flowMap.flow}">흐름</span>
+        <select id="flowSel" data-help-key="home-flow-map.flow">
+            <option value="F0" th:text="#{flowMap.f0}" th:data-desc="#{flowMap.f0.desc}">F0 기준정보 준비</option>
+            <option value="F1" th:text="#{flowMap.f1}" th:data-desc="#{flowMap.f1.desc}">F1 수주 → 생산 → 출하</option>
+            <option value="F2" th:text="#{flowMap.f2}" th:data-desc="#{flowMap.f2.desc}">F2 구매요청 → 입고 → 수입검사</option>
+            <option value="F3" th:text="#{flowMap.f3}" th:data-desc="#{flowMap.f3.desc}">F3 부적합 → 봉쇄 → 시정조치</option>
+            <option value="F4" th:text="#{flowMap.f4}" th:data-desc="#{flowMap.f4.desc}">F4 설비 — 고장과 예방</option>
+            <option value="F5" th:text="#{flowMap.f5}" th:data-desc="#{flowMap.f5.desc}">F5 설계변경</option>
+            <option value="F6" th:text="#{flowMap.f6}" th:data-desc="#{flowMap.f6.desc}">F6 신제품 개발(APQP·PPAP)</option>
+            <option value="F7" th:text="#{flowMap.f7}" th:data-desc="#{flowMap.f7.desc}">F7 재고 운영</option>
+            <option value="F8" th:text="#{flowMap.f8}" th:data-desc="#{flowMap.f8.desc}">F8 시스템 운영</option>
+        </select></label>
+    <fieldset class="hb-fm-kinds" data-help-key="home-flow-map.lines">
+        <legend th:text="#{flowMap.legend}">보일 선</legend>
+        <label><input type="checkbox" id="kindMain" checked><span class="hb-fm-key hb-fm-key-next" aria-hidden="true"></span><span th:text="#{flowMap.legend.next}">주 흐름</span></label>
+        <label><input type="checkbox" id="kindSkip"><span class="hb-fm-key hb-fm-key-skip" aria-hidden="true"></span><span th:text="#{flowMap.legend.skip}">단계 건너뜀</span></label>
+        <label><input type="checkbox" id="kindBack"><span class="hb-fm-key hb-fm-key-back" aria-hidden="true"></span><span th:text="#{flowMap.legend.back}">되돌아감</span></label>
+    </fieldset>
+    <div class="hb-fm-zoom" role="group" th:aria-label="#{flowMap.zoom}">
+        <button type="button" id="zoomOut" class="hb-btn-secondary hb-btn-small" th:aria-label="#{flowMap.zoomOut}" th:title="#{flowMap.zoomOut}">−</button>
+        <button type="button" id="zoomFit" class="hb-btn-secondary hb-btn-small" aria-pressed="true" th:title="#{flowMap.zoomFitTip}">맞춤</button>
+        <button type="button" id="zoomIn" class="hb-btn-secondary hb-btn-small" th:aria-label="#{flowMap.zoomIn}" th:title="#{flowMap.zoomIn}">+</button>
+    </div>
+    <button type="button" id="resetBtn" class="hb-btn-secondary" th:text="#{flowMap.reset}">자리 초기화</button>
+</div>
+<p id="flowDesc" class="hb-fm-desc"></p>
+<p class="hb-fm-hint" th:text="#{flowMap.hint}">클릭 = 고르기(아래 요약의 [화면 열기]로 탭) · 끌기(방향키) = 옮기기 · 회색 점선 = 권한 없음</p>
+<p id="msg" class="hb-msg" role="status"></p>
+
+<div class="hb-fm-body">
+    <div id="scroller" class="hb-fm-scroll">
+        <div id="canvas" class="hb-fm-canvas" aria-busy="true"></div>
+    </div>
+    <aside id="detail" class="hb-fm-detail" aria-live="polite" th:aria-label="#{flowMap.detail}"></aside>
+</div>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/home/flow-map.layout.js}"></script>
+<script th:src="@{/js/views/home/flow-map.js}"></script>
+</body>
+</html>

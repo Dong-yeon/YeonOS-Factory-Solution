@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  내시 수신 (sal-forecast) — P2 2단계 (docs/25 4.3). 고객이 보낸 예상 수요를 받을 때마다 새 버전으로 보관한다(덮어쓰지 않음).
+  거래처 → 버전 목록 → 버전 행 또는 이전 버전과 비교(늘어난·줄어든·사라진 수요).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">내시 수신</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<!-- 조회 영역(UI 단계 3 ②) — 거래처를 고르면 바로 버전 목록을 읽는다 -->
+<form id="search" class="hb-search" autocomplete="off">
+    <label><span th:text="#{salFcst.col.cust}">거래처</span> <select id="custSel" data-help-key="sal-forecast.cust"></select></label>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{import.button}">엑셀 올리기</button>
+        </div>
+        <div id="revGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <fieldset class="hb-seg" id="viewSeg">
+                <legend th:text="#{salFcst.view}">보기</legend>
+                <label><input type="radio" name="view" value="compare" checked><span th:text="#{salFcst.viewCompare}">이전 버전과 비교</span></label>
+                <label><input type="radio" name="view" value="lines"><span th:text="#{salFcst.viewLines}">이 버전 행</span></label>
+            </fieldset>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="revInfo" class="hb-muted" th:text="#{salFcst.selectRev}">왼쪽에서 버전을 고르세요.</p>
+        <div class="hb-toolbar" id="fromBox" hidden>
+            <label><span th:text="#{salFcst.compareWith}">비교 대상</span> <select id="fromSel"></select></label>
+            <label class="hb-check"><input type="checkbox" id="changedOnly" checked>
+                <span th:text="#{salFcst.changedOnly}">바뀐 것만</span></label>
+        </div>
+        <p id="summary" class="hb-muted"></p>
+        <table class="hb-cmp-table" id="compare" hidden>
+            <thead><tr>
+                <th th:text="#{salFcst.col.item}">품목</th>
+                <th th:text="#{salFcst.col.bucket}">기간</th>
+                <th class="hb-num" th:text="#{salFcst.col.fromQty}">이전</th>
+                <th class="hb-num" th:text="#{salFcst.col.toQty}">이번</th>
+                <th class="hb-num" th:text="#{salFcst.col.diff}">차이</th>
+                <th th:text="#{salFcst.col.firm}">확정</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+        <table class="hb-cmp-table" id="lines" hidden>
+            <thead><tr>
+                <th th:text="#{salFcst.col.item}">품목</th>
+                <th th:text="#{salFcst.col.bucket}">기간</th>
+                <th class="hb-num" th:text="#{salFcst.col.qty}">수량</th>
+                <th th:text="#{salFcst.col.firm}">확정</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/sales/forecast-mgt.js}"></script>
+</body>
+</html>

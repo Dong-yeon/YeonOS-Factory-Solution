@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- ERP 연계·업로드용 엑셀 (P2 7c, docs/25 4.11). 회사 조건은 RLS. 수량은 trim_scale(끝 0 없이) -->
+<mapper namespace="io.smarthappy.module.production.erp.ErpMapper">
+
+    <!-- 사용 중 ERP 시스템 하나(코드 순 첫째)의 품목 매핑 -->
+    <sql id="erpItem">
+        (select x.external_id
+           from mst_ext_id_map x
+          where x.entity_type = 'ITEM' and x.use_yn = 'Y' and x.internal_id = i.item_id
+            and x.system_id = (select s.system_id from mst_ext_system s where s.system_type = 'ERP' and s.use_yn = 'Y'
+                                order by s.system_cd limit 1))
+    </sql>
+
+    <!-- 지시 실적: 마지막 공정 판정의 유효 양품, 전 공정 판정 폐기 합 -->
+    <sql id="resultSelect">
+        select 'WO:' || w.wo_no as biz_key, (w.done_at at time zone #{zone})::date as day, w.done_at as occurred_at,
+               w.wo_no, i.item_cd, i.item_nm, <include refid="erpItem"/> as erp_item_cd,
+               trim_scale((select c.eff_good_qty from prd_wo_proc_close c join prd_wo_proc p on p.wo_proc_id = c.wo_proc_id
+                            where c.wo_id = w.wo_id order by p.op_seq desc limit 1)) as qty,
+               trim_scale((select coalesce(sum(c.scrap_qty), 0) from prd_wo_proc_close c where c.wo_id = w.wo_id)) as scrap_qty,
+               w.unit_cd, null as wh_cd, null as lot_no, 'KEY' as entry_method
+          from prd_wo w
+          join mst_item i on i.item_id = w.item_id
+    </sql>
+
+    <sql id="receiptSelect">
+        select 'RCV:' || r.receipt_id as biz_key, (r.occurred_at at time zone #{zone})::date as day, r.occurred_at,
+               w.wo_no, i.item_cd, i.item_nm, <include refid="erpItem"/> as erp_item_cd,
+               trim_scale(r.qty) as qty, null as scrap_qty, r.unit_cd, h.node_cd as wh_cd, l.lot_no, r.entry_method
+          from prd_receipt r
+          join prd_wo w on w.wo_id = r.wo_id
+          join mst_item i on i.item_id = r.item_id
+          join lot_master l on l.lot_id = r.lot_id
+          join mst_equip_hier h on h.node_id = r.node_id
+    </sql>
+
+    <select id="woResult" resultType="io.smarthappy.module.production.erp.ErpDtos$ErpRow">
+        <include refid="resultSelect"/>
+         where w.wo_id = #{woId}
+    </select>
+
+    <select id="receipt" resultType="io.smarthappy.module.production.erp.ErpDtos$ErpRow">
+        <include refid="receiptSelect"/>
+         where r.receipt_id = #{receiptId}
+    </select>
+
+    <sql id="rowsBody">
+        <choose>
+            <when test="kind == 'RESULT'">
+                <include refid="resultSelect"/>
+                 where w.done_at &gt;= #{fromAt} and w.done_at &lt; #{toAt}
+                 order by w.done_at, w.wo_id
+            </when>
+            <otherwise>
+                <include refid="receiptSelect"/>
+                 where r.occurred_at &gt;= #{fromAt} and r.occurred_at &lt; #{toAt}
+                 order by r.occurred_at, r.receipt_id
+            </otherwise>
+        </choose>
+        <if test="limit != null">limit #{limit}</if>
+    </sql>
+
+    <select id="rows" resultType="io.smarthappy.module.production.erp.ErpDtos$ErpRow">
+        <include refid="rowsBody"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.production.erp.ErpDtos$ErpRow" fetchSize="500">
+        <include refid="rowsBody"/>
+    </select>
+
+    <select id="count" resultType="long">
+        <choose>
+            <when test="kind == 'RESULT'">
+                select count(*) from prd_wo w where w.done_at &gt;= #{fromAt} and w.done_at &lt; #{toAt}
+            </when>
+            <otherwise>
+                select count(*) from prd_receipt r where r.occurred_at &gt;= #{fromAt} and r.occurred_at &lt; #{toAt}
+            </otherwise>
+        </choose>
+    </select>
+
+    <select id="unmapped" resultType="long">
+        <choose>
+            <when test="kind == 'RESULT'">
+                select count(*) from prd_wo w join mst_item i on i.item_id = w.item_id
+                 where w.done_at &gt;= #{fromAt} and w.done_at &lt; #{toAt} and <include refid="erpItem"/> is null
+            </when>
+            <otherwise>
+                select count(*) from prd_receipt r join mst_item i on i.item_id = r.item_id
+                 where r.occurred_at &gt;= #{fromAt} and r.occurred_at &lt; #{toAt} and <include refid="erpItem"/> is null
+            </otherwise>
+        </choose>
+    </select>
+
+    <select id="exports" resultType="io.smarthappy.module.production.erp.ErpDtos$ExportLog">
+        select export_id, kind, from_day, to_day, row_cnt, exported_at, exported_by
+          from prd_erp_export
+         where kind = #{kind} and from_day &lt;= #{to} and to_day &gt;= #{from}
+         order by exported_at desc, export_id desc
+         limit #{limit}
+    </select>
+
+    <insert id="insertExport">
+        insert into prd_erp_export (comp_cd, kind, from_day, to_day, row_cnt, exported_at, exported_by)
+        values (hb_current_comp(), #{kind}, #{from}, #{to}, #{rowCnt}, #{at}, #{by})
+    </insert>
+</mapper>

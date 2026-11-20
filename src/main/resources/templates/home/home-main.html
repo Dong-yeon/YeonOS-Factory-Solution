@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  홈 (home-main) — 홈화면 1단계 (docs/37). "내 할 일" 카드를 모아 그리기만 한다: 카드는 각 모듈의 HomeCardProvider 빈,
+  보이는 카드 = 링크 화면 조회 권한이 있는 것 + 개인 카드(결재 대기). 입력 칸이 없는 화면(hb.dirty·검색 패널 없음).
+  공통 head 조각에 홈 전용 CSS 를 넣지 않으려고 home.css 는 본문 첫 줄에서 읽는다(page.css 공통 변경 회피).
+-->
+<body class="hb-page hb-page-scroll hb-home" th:data-prog="${prog.progCd}">
+<link rel="stylesheet" th:href="@{/css/home.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">홈</h1>
+    <div class="hb-page-tools">
+        <label class="hb-home-plant" hidden id="plantBox"><span th:text="#{js.home.plant}">공장</span>
+            <select id="plantSel" data-help-key="home-main.plant"></select></label>
+        <span id="asOf" class="hb-muted" aria-live="polite"></span>
+        <span id="hiddenNote" class="hb-muted"></span>
+        <button type="button" id="refreshBtn" class="hb-btn-secondary" th:text="#{home.refresh}">새로 고침</button>
+        <button type="button" id="settingsBtn" class="hb-btn-secondary" th:text="#{home.settings}">카드 설정</button>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+<p class="hb-muted" th:text="#{home.guide}">지금 손댈 것만 셉니다.</p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+<p id="msg" class="hb-msg" role="status"></p>
+<div id="cards" class="hb-home-cards" aria-busy="true"></div>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/home/home-main.js}"></script>
+</body>
+</html>

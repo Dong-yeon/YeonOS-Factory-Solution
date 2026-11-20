@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  출하 검수 양식 (qms-preship-tpl) — docs/78. 대상 = 품목 또는 품목군 하나, 항목(분류·확인 내용·해당 없음 허용·사진 필수) 한 벌.
+  직접 치는 값 = 코드·이름·대상 코드·항목. 지우지 않는다(사용 중지). 고쳐도 이미 시작한 검수는 시작 때 사본 그대로.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">출하 검수 양식</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.preship.keyword}">코드·이름·대상</span>
+        <input name="keyword" maxlength="100" data-help-key="qms-preship-tpl.keyword"></label>
+    <label class="hb-check"><input type="checkbox" name="withUnused" value="true">
+        <span th:text="#{defect.withUnused}">사용 중지 포함</span></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="tplGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.preship.selectOrNew}">왼쪽에서 양식을 고르거나 신규를 누르세요.</p>
+        <form id="tplForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{qms.preship.col.tplCd}">양식 코드</span>
+                <input data-field="tplCd" maxlength="30" required spellcheck="false" data-help-key="qms-preship-tpl.tplCd"></label>
+            <label><span th:text="#{qms.preship.col.tplNm}">양식 이름</span>
+                <input data-field="tplNm" maxlength="100" required data-help-key="qms-preship-tpl.tplNm"></label>
+            <fieldset class="hb-seg" data-help-key="qms-preship-tpl.targetType">
+                <legend th:text="#{qms.preship.col.targetType}">대상</legend>
+                <label><input type="radio" name="targetType" value="ITEM" checked><span th:text="#{qms.preship.target.ITEM}">품목</span></label>
+                <label><input type="radio" name="targetType" value="CLASS"><span th:text="#{qms.preship.target.CLASS}">품목군</span></label>
+            </fieldset>
+            <label><span th:text="#{qms.preship.col.targetCd}">대상 코드</span>
+                <input data-field="itemCd" id="targetCd" maxlength="40" required spellcheck="false" data-help-key="qms-preship-tpl.targetCd"></label>
+            <label class="hb-wide"><span th:text="#{qms.preship.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+            <label><span th:text="#{qms.preship.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+        </form>
+        <div class="hb-toolbar">
+            <strong th:text="#{qms.preship.lines}">검수 항목</strong>
+            <button type="button" id="addLineBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{qms.preship.addLine}">항목 추가</button>
+        </div>
+        <p class="hb-muted" data-field="lines" th:text="#{qms.preship.linesHint}">순번 순으로 검수 화면에 나옵니다. [빼기] 한 항목은 사용 중지됩니다.</p>
+        <div id="lines"></div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/preship-tpl.js}"></script>
+</body>
+</html>

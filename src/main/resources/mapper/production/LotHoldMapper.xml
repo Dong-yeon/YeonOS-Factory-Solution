@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  LOT 보류 근거 (docs/25 4.19, V109). 회사 조건은 RLS. 근거를 바꾸면 lot_hold 트리거가 lot_master.hold_yn·hold_reason 을 맞춘다.
+  살아 있는 근거: uq_lot_hold_live, LOT 별 목록: ix_lot_hold_lot.
+-->
+<mapper namespace="io.smarthappy.module.production.LotHoldMapper">
+
+    <select id="lockLot" resultType="io.smarthappy.module.production.LotHoldMapper$HoldLot" flushCache="true" useCache="false">
+        select lot_id, lot_no, row_ver from lot_master where lot_id = #{lotId} for update
+    </select>
+
+    <sql id="cols">
+        h.hold_id, h.lot_id, h.source, h.ref_id, h.reason_cd, h.reason, h.held_at, h.held_by, h.released_at
+    </sql>
+
+    <select id="liveHold" resultType="io.smarthappy.module.production.LotHoldMapper$HoldRow" flushCache="true" useCache="false">
+        select <include refid="cols"/> from lot_hold h
+         where h.lot_id = #{lotId} and h.source = #{source} and h.released_at is null
+           and h.ref_id is not distinct from #{refId}::bigint
+           for update
+    </select>
+
+    <select id="findHold" resultType="io.smarthappy.module.production.LotHoldMapper$HoldRow" flushCache="true" useCache="false">
+        select <include refid="cols"/> from lot_hold h where h.hold_id = #{holdId}
+    </select>
+
+    <select id="insertHold" resultType="long" flushCache="true">
+        insert into lot_hold (comp_cd, lot_id, source, ref_id, reason_cd, reason, held_by)
+        values (hb_current_comp(), #{lotId}, #{source}, #{refId}, #{reasonCd}, #{reason}, #{by})
+        returning hold_id
+    </select>
+
+    <update id="release">
+        update lot_hold set released_at = now(), released_by = #{by}, release_reason = #{reason}
+         where hold_id = #{holdId} and released_at is null
+    </update>
+
+    <select id="liveHolds" resultType="io.smarthappy.module.production.LotHoldMapper$HoldRow">
+        select <include refid="cols"/> from lot_hold h
+         where h.lot_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+           and h.released_at is null
+         order by h.lot_id, h.held_at, h.hold_id
+    </select>
+</mapper>

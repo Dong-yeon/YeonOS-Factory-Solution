@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  평가 템플릿 (srm-eval-tmpl) — SRM 1부 S6 (docs/31 4.6, D10). BOM 리비전 규칙: 작성 중만 편집, [확정] = 항목 1+ · 가중치 합 100 ·
+  최소 점수 0 인 등급, 확정본은 바뀌지 않고 바꾸려면 [새 리비전]. 항목 = 배점 × 가중치 + 과락 점수, 입력 방식 사람/자동(지표).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">평가 템플릿</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{srm.evalTmpl.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="BOM_STATUS" data-blank="all"></select></label>
+    <label><span th:text="#{srm.evalTmpl.keyword}">코드·이름</span><input name="keyword" maxlength="100"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="tmplGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{srm.evalTmpl.select}">왼쪽에서 템플릿을 고르거나 신규를 누르세요.</p>
+        <p id="stateLine" class="hb-wide" role="status"></p>
+        <div class="hb-toolbar" id="actionBar">
+            <button type="button" class="hb-btn-secondary" data-act="release" data-need="APPROVE" hidden th:text="#{srm.evalTmpl.release}">확정</button>
+            <button type="button" class="hb-btn-secondary" data-act="new-rev" data-need="SAVE" hidden th:text="#{srm.evalTmpl.newRev}">새 리비전</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 저장·진행 줄과 떨어진 자리(docs/40 P1 ④) -->
+        <div class="hb-toolbar" id="dangerBar">
+            <button type="button" class="hb-btn-danger-outline" data-act="obsolete" data-need="APPROVE" hidden th:text="#{srm.evalTmpl.obsolete}">폐기</button>
+        </div>
+
+        <form id="tmplForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{srm.evalTmpl.col.tmplCd}">코드</span>
+                <input data-field="tmplCd" maxlength="30" data-help-key="srm-eval-tmpl.tmplCd"></label>
+            <label><span th:text="#{srm.evalTmpl.col.tmplNm}">이름</span><input data-field="tmplNm" maxlength="200"></label>
+            <label><span th:text="#{srm.evalTmpl.col.validFrom}">시작일</span><input data-field="validFrom" type="date"></label>
+            <label><span th:text="#{srm.evalTmpl.col.validTo}">끝일</span><input data-field="validTo" type="date"></label>
+            <label class="hb-wide"><span th:text="#{srm.evalTmpl.col.remark}">비고</span><input data-field="remark" maxlength="1000"></label>
+        </form>
+
+        <section class="hb-sub">
+            <h2 th:text="#{srm.evalTmpl.items}">항목</h2>
+            <p id="weightLine" class="hb-muted" role="status"></p>
+            <div id="itemsErrorBox" hidden><p id="itemsError" class="hb-field-error"></p></div>
+            <div id="items"></div>
+            <div class="hb-toolbar">
+                <button type="button" id="addItemBtn" class="hb-btn-secondary" th:text="#{srm.evalTmpl.addItem}">항목 추가</button>
+            </div>
+        </section>
+
+        <section class="hb-sub">
+            <h2 th:text="#{srm.evalTmpl.grades}">등급 구간</h2>
+            <div id="gradesErrorBox" hidden><p id="gradesError" class="hb-field-error"></p></div>
+            <div id="grades"></div>
+            <div class="hb-toolbar">
+                <button type="button" id="addGradeBtn" class="hb-btn-secondary" th:text="#{srm.evalTmpl.addGrade}">등급 추가</button>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/srm/srm-ui.js}"></script>
+<script th:src="@{/js/views/srm/eval-tmpl.js}"></script>
+</body>
+</html>

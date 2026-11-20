@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 로케이션 속성 (P4 W1, docs/30). 트리는 장비 계층 재귀 CTE 를 그대로 돌리고 창고·로케이션만 남긴다(구역 아래 창고 포함) -->
+<mapper namespace="io.smarthappy.module.wms.loc.LocAttrMapper">
+
+    <select id="findPlants" resultType="io.smarthappy.module.wms.loc.LocAttrDtos$PlantRow">
+        select plant_cd, plant_nm from sys_plant where use_yn = 'Y' order by sort_no, plant_cd
+    </select>
+
+    <select id="findLines" resultType="io.smarthappy.module.wms.loc.LocAttrDtos$LineOpt">
+        select n.node_id, n.node_type, n.node_cd, n.node_nm, wms_node_path(n.node_id) as path
+          from mst_equip_hier n
+         where n.plant_cd = #{plantCd} and n.node_type in ('LINE', 'CELL') and n.use_yn = 'Y'
+         order by path
+    </select>
+
+    <select id="plantExists" resultType="boolean">
+        select exists (select 1 from sys_plant where plant_cd = #{plantCd})
+    </select>
+
+    <!-- 속성 행이 없으면 기본값(V037 컬럼 기본값과 같게) -->
+    <sql id="attrCols">
+        (a.node_id is not null) as attr_set,
+        coalesce(a.loc_usage, 'STORAGE') as loc_usage, coalesce(a.stock_yn, 'Y') as stock_yn, coalesce(a.pick_seq, 0) as pick_seq,
+        coalesce(a.mix_item_yn, 'Y') as mix_item_yn, coalesce(a.mix_lot_yn, 'Y') as mix_lot_yn,
+        a.default_status, a.feed_node_id, a.remark, a.row_ver, a.updated_at, a.updated_by
+    </sql>
+
+    <!-- 공장 루트부터 경로·정렬 배열 — 장비 계층 화면(EquipMapper.findTree)과 같은 정렬 -->
+    <sql id="treeCte">
+        with recursive t as (
+            select n.node_id, (n.plant_cd || '/' || n.node_cd)::text as path,
+                   array[lpad(n.sort_no::text, 9, '0') || rpad(n.node_cd, 30)] as ord,
+                   case when n.node_type in ('WH', 'LOC') then 1 else 0 end as wlvl
+              from mst_equip_hier n
+             where n.plant_cd = #{plantCd} and n.parent_id is null
+               <if test="!withUnused">and n.use_yn = 'Y'</if>
+            union all
+            select n.node_id, t.path || '/' || n.node_cd, t.ord || (lpad(n.sort_no::text, 9, '0') || rpad(n.node_cd, 30)),
+                   t.wlvl + case when n.node_type in ('WH', 'LOC') then 1 else 0 end
+              from t join mst_equip_hier n on n.parent_id = t.node_id
+             where cardinality(t.ord) &lt; 20 <if test="!withUnused">and n.use_yn = 'Y'</if>
+        )
+    </sql>
+
+    <select id="findTree" resultType="io.smarthappy.module.wms.loc.LocAttrDtos$LocRow">
+        <include refid="treeCte"/>
+        select n.node_id, n.plant_cd, n.parent_id, n.node_type, n.node_cd, n.node_nm, n.use_yn, t.wlvl as lvl, t.path,
+               (select count(*) from mst_equip_hier c where c.parent_id = n.node_id) as child_cnt,
+               <include refid="attrCols"/>
+          from t join mst_equip_hier n on n.node_id = t.node_id
+          left join wms_loc_attr a on a.node_id = n.node_id
+         where n.node_type in ('WH', 'LOC')
+         order by t.ord
+    </select>
+
+    <!-- 노드 경로 = 위로 올라가며 붙인다(하나만) -->
+    <sql id="hitCols">
+        n.node_id, n.plant_cd, n.node_type, n.node_cd, n.node_nm, n.use_yn,
+        (with recursive up as (
+             select u.node_id, u.parent_id, u.node_cd::text as path, 1 as d from mst_equip_hier u where u.node_id = n.node_id
+             union all
+             select p.node_id, p.parent_id, p.node_cd || '/' || up.path, up.d + 1
+               from up join mst_equip_hier p on p.node_id = up.parent_id where up.d &lt; 20)
+         select n.plant_cd || '/' || path from up where parent_id is null) as path,
+        (a.node_id is not null) as attr_set, coalesce(a.loc_usage, 'STORAGE') as loc_usage, a.row_ver
+    </sql>
+
+    <select id="findNode" resultType="io.smarthappy.module.wms.loc.LocAttrDtos$NodeHit">
+        select <include refid="hitCols"/>
+          from mst_equip_hier n left join wms_loc_attr a on a.node_id = n.node_id
+         where n.node_id = #{nodeId}
+    </select>
+
+    <select id="findNodeByCode" resultType="io.smarthappy.module.wms.loc.LocAttrDtos$NodeHit">
+        select <include refid="hitCols"/>
+          from mst_equip_hier n left join wms_loc_attr a on a.node_id = n.node_id
+         where n.plant_cd = #{plantCd} and n.node_cd = #{nodeCd}
+    </select>
+
+    <select id="findItemByCode" resultType="io.smarthappy.module.wms.loc.LocAttrDtos$ItemHit">
+        select item_id, item_cd, item_nm, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="findDescendants" resultType="io.smarthappy.module.wms.loc.LocAttrDtos$NodeHit">
+        with recursive d as (
+            select n.node_id, array[lpad(n.sort_no::text, 9, '0') || rpad(n.node_cd, 30)] as ord
+              from mst_equip_hier n where n.parent_id = #{nodeId}
+            union all
+            select n.node_id, d.ord || (lpad(n.sort_no::text, 9, '0') || rpad(n.node_cd, 30))
+              from d join mst_equip_hier n on n.parent_id = d.node_id where cardinality(d.ord) &lt; 20
+        )
+        select n.node_id, n.plant_cd, n.node_type, n.node_cd, n.node_nm, n.use_yn,
+               (a.node_id is not null) as attr_set, coalesce(a.loc_usage, 'STORAGE') as loc_usage, a.row_ver
+          from d join mst_equip_hier n on n.node_id = d.node_id
+          left join wms_loc_attr a on a.node_id = n.node_id
+         where n.node_type in ('WH', 'LOC')
+         order by d.ord
+    </select>
+
+    <insert id="insertAttr">
+        insert into wms_loc_attr (node_id, comp_cd, loc_usage, stock_yn, pick_seq, mix_item_yn, mix_lot_yn, default_status, feed_node_id,
+                                  remark, created_by, updated_by)
+        values (#{nodeId}, hb_current_comp(), #{f.locUsage}, #{f.stockYn}, #{f.pickSeq}, #{f.mixItemYn}, #{f.mixLotYn},
+                #{f.defaultStatus}, #{f.feedNodeId}, #{f.remark}, #{by}, #{by})
+    </insert>
+
+    <update id="updateAttr">
+        update wms_loc_attr
+           set loc_usage = #{f.locUsage}, stock_yn = #{f.stockYn}, pick_seq = #{f.pickSeq}, mix_item_yn = #{f.mixItemYn},
+               mix_lot_yn = #{f.mixLotYn}, default_status = #{f.defaultStatus}, feed_node_id = #{f.feedNodeId}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where node_id = #{nodeId} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- 하위 적용: 용도·혼적·기본 상태만. 값이 같으면 고치지 않는다(감사·row_ver 를 헛되이 올리지 않게) -->
+    <insert id="upsertShared">
+        insert into wms_loc_attr (node_id, comp_cd, loc_usage, mix_item_yn, mix_lot_yn, default_status, created_by, updated_by)
+        values (#{nodeId}, hb_current_comp(), #{f.locUsage}, #{f.mixItemYn}, #{f.mixLotYn}, #{f.defaultStatus}, #{by}, #{by})
+        on conflict (node_id) do update
+           set loc_usage = excluded.loc_usage, mix_item_yn = excluded.mix_item_yn, mix_lot_yn = excluded.mix_lot_yn,
+               default_status = excluded.default_status,
+               -- 보급 라인은 하위에 퍼뜨리지 않는다. 용도가 LINESIDE 가 아니게 되면 비운다(ck_wms_loc_attr_feed)
+               feed_node_id = case when excluded.loc_usage = 'LINESIDE' then wms_loc_attr.feed_node_id end,
+               row_ver = wms_loc_attr.row_ver + 1, updated_at = now(), updated_by = excluded.updated_by
+         where (wms_loc_attr.loc_usage, wms_loc_attr.mix_item_yn, wms_loc_attr.mix_lot_yn, wms_loc_attr.default_status)
+               is distinct from (excluded.loc_usage, excluded.mix_item_yn, excluded.mix_lot_yn, excluded.default_status)
+    </insert>
+
+    <insert id="upsertPickSeq">
+        insert into wms_loc_attr (node_id, comp_cd, pick_seq, created_by, updated_by)
+        values (#{nodeId}, hb_current_comp(), #{seq}, #{by}, #{by})
+        on conflict (node_id) do update
+           set pick_seq = excluded.pick_seq, row_ver = wms_loc_attr.row_ver + 1, updated_at = now(), updated_by = excluded.updated_by
+         where wms_loc_attr.pick_seq &lt;&gt; excluded.pick_seq
+    </insert>
+
+    <select id="lockNode" resultType="string" flushCache="true">
+        select pg_advisory_xact_lock(hashtext('wms_loc_attr'), hashtext(#{nodeId}::text))::text
+    </select>
+</mapper>

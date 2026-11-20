@@ -1,0 +1,178 @@
+/*
+ * POP 키오스크 (docs/25 4.6, 24 7장 K) — 셸·메뉴 없음, 장갑 낀 손가락 기준.
+ * 누르는 대상은 48px 이상(키패드·확정은 64px), 글자는 한 단계 크게. 1280×800·800×1280·390 에서 가로 넘침 없음.
+ */
+html, body.hb-pop { height: 100%; }
+/* 현장 화면 표면(docs/40 P2, V-4) — 밝은 회색 바탕 + 흰 카드. 값은 의미 토큰만(DesignTokenGuardTest) */
+body.hb-pop[data-surface="pop"] { background: var(--hb-bg-muted); }
+body.hb-pop { margin: 0; font-family: var(--hb-font); font-size: var(--hb-fs-lg); color: var(--hb-text);
+    background: var(--hb-bg-page); overflow-x: hidden; }
+.hb-pop button { min-height: 48px; min-width: 48px; padding: 0 var(--hb-space-5); font: inherit; border-radius: var(--hb-radius-md);
+    border: 1px solid var(--hb-border-control); background: var(--hb-bg-surface); color: var(--hb-text); cursor: pointer; }
+.hb-pop button.hb-pop-primary { background: var(--hb-action); border-color: var(--hb-action); color: var(--hb-text-on-action);
+    font-weight: var(--hb-fw-semibold); }
+/* 되돌리기 어려운 동작(종료·정정·버리기) — 외곽선 위험 톤, 채우지 않는다(주동작과 헷갈리지 않게) */
+.hb-pop button.hb-pop-danger { background: var(--hb-bg-surface); border: 2px solid var(--hb-status-danger-fg); color: var(--hb-status-danger-fg);
+    font-weight: var(--hb-fw-semibold); }
+.hb-pop button:disabled { background: var(--hb-action-disabled); border-color: var(--hb-action-disabled); color: var(--hb-text-on-action); }
+.hb-pop button:focus-visible, .hb-pop input:focus-visible { outline: 3px solid var(--hb-focus); outline-offset: 2px; }
+
+/* 머리띠: 단말·작업장 | 작업일·근무조 | 작업자 | 언어·온라인 */
+.hb-pop-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3) var(--hb-space-5);
+    padding: var(--hb-space-3) var(--hb-space-5); background: var(--hb-brand-header); color: var(--hb-brand-panel-text); }
+.hb-pop-head .hb-pop-where { font-weight: var(--hb-fw-semibold); }
+.hb-pop-head .hb-pop-grow { flex: 1 1 auto; }
+.hb-pop-head button { background: transparent; color: inherit; border-color: var(--hb-on-header-line); }
+.hb-pop-net { display: inline-flex; align-items: center; gap: var(--hb-space-2); font-size: var(--hb-fs-md); }
+.hb-pop-net::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--hb-status-success-fg); }
+.hb-pop-net[data-online="false"]::before { background: var(--hb-status-danger-fg); }
+
+.hb-pop-main { padding: var(--hb-space-5); max-width: 1200px; margin: 0 auto; box-sizing: border-box; }
+.hb-pop-panel { display: flex; flex-direction: column; align-items: center; gap: var(--hb-space-5); padding: var(--hb-space-7) var(--hb-space-4);
+    text-align: center; }
+.hb-pop-panel[hidden] { display: none; }
+.hb-pop-big { font-size: var(--hb-fs-2xl); font-weight: var(--hb-fw-semibold); margin: 0; }
+/* 스캐너(키보드 웨지) 입력 칸 — 화면에는 안 보이고 항상 포커스. inputmode=none 이라 화면 키보드가 뜨지 않는다 */
+.hb-pop-scan { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+/* PIN: 점 표시 + 3×4 키패드 */
+.hb-pop-dots { display: flex; gap: var(--hb-space-3); min-height: 24px; }
+.hb-pop-dots span { width: 20px; height: 20px; border-radius: 50%; background: var(--hb-text); }
+.hb-pop-keypad { display: grid; grid-template-columns: repeat(3, minmax(64px, 96px)); gap: var(--hb-space-3); }
+.hb-pop-keypad button { min-height: 64px; font-size: var(--hb-fs-2xl); padding: 0; }
+.hb-pop-keypad button.hb-pop-primary { font-size: var(--hb-fs-lg); }
+
+/* 결과 피드백 — 색 + 글자 (3초). 자리는 늘 같은 높이(docs/40 P2) — 나타나고 사라질 때 아래 화면이 밀리지 않는다(누르려던 자리에 다른 버튼이 오지 않게) */
+.hb-pop-feedback { min-height: 2.6em; box-sizing: border-box; margin: 0 0 var(--hb-space-4); padding: var(--hb-space-3) var(--hb-space-4);
+    border: 1px solid transparent; border-radius: var(--hb-radius-md); font-size: var(--hb-fs-xl); font-weight: var(--hb-fw-semibold);
+    text-align: center; line-height: 1.3; }
+.hb-pop-feedback:empty { background: transparent; }
+.hb-pop-feedback[data-kind="ok"] { background: var(--hb-status-success-bg); color: var(--hb-status-success-fg); }
+.hb-pop-feedback[data-kind="error"] { background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+.hb-pop-feedback[data-kind="info"] { background: var(--hb-status-info-bg); color: var(--hb-status-info-fg); }
+
+/* 내 할 일 — 카드(표는 좁은 화면에서 넘친다) */
+.hb-pop-tasks { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--hb-space-4); }
+.hb-pop-task { background: var(--hb-bg-surface); border: 1px solid var(--hb-border); border-radius: var(--hb-radius-lg);
+    padding: var(--hb-space-4) var(--hb-space-5); display: grid; gap: var(--hb-space-2); min-width: 0; }
+.hb-pop-task h3 { margin: 0; font-size: var(--hb-fs-xl); overflow-wrap: anywhere; }
+.hb-pop-task p { margin: 0; overflow-wrap: anywhere; }
+.hb-pop-task .hb-pop-sub { color: var(--hb-text-muted); font-size: var(--hb-fs-md); }
+.hb-pop-gate { justify-self: start; padding: var(--hb-space-1) var(--hb-space-3); border-radius: var(--hb-radius-sm); font-size: var(--hb-fs-md);
+    font-weight: var(--hb-fw-semibold); }
+.hb-pop-gate[data-mode="OK"] { background: var(--hb-status-success-bg); color: var(--hb-status-success-fg); }
+.hb-pop-gate[data-mode="WARN"] { background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); }
+.hb-pop-gate[data-mode="BLOCK"] { background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+/* 일일 배정 자리(docs/25 4.56) — 순번·계획 시각. 경고 톤은 순서를 어기고 먼저 시작한 공정만(앞선 미착수 수는 글자만 — 뒤 순번 카드가 전부 노랗게 되지 않게) */
+.hb-pop-plan { margin: 0; font-size: var(--hb-fs-md); font-weight: var(--hb-fw-semibold); overflow-wrap: anywhere; }
+.hb-pop-plan[data-plan="none"] { color: var(--hb-text-muted); font-weight: var(--hb-fw-regular); }
+.hb-pop-plan[data-plan="early"] { justify-self: start; padding: var(--hb-space-1) var(--hb-space-3);
+    border-radius: var(--hb-radius-sm); background: var(--hb-status-warning-bg); color: var(--hb-status-warning-fg); }
+.hb-pop-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); margin-bottom: var(--hb-space-4); }
+.hb-pop-toolbar h2 { margin: 0; flex: 1 1 auto; font-size: var(--hb-fs-xl); }
+
+/* 활성화 화면(관리자가 처음 한 번) */
+.hb-pop-activate { max-width: 460px; margin: 0 auto; display: grid; gap: var(--hb-space-4); text-align: left; }
+.hb-pop-activate label { display: grid; gap: var(--hb-space-2); }
+.hb-pop-activate input { min-height: 48px; font: inherit; padding: 0 var(--hb-space-4); border: 1px solid var(--hb-border-control);
+    border-radius: var(--hb-radius-md); text-transform: uppercase; box-sizing: border-box; width: 100%; }
+
+@media (max-width: 599px) {
+    .hb-pop-main { padding: var(--hb-space-3); }
+    .hb-pop-tasks { grid-template-columns: 1fr; }
+    .hb-pop-head { padding: var(--hb-space-3); }
+}
+.hb-pop-sub { color: var(--hb-text-muted); }
+
+/* ---------- 5b 공정 화면 ---------- */
+.hb-pop-pending { padding: var(--hb-space-1) var(--hb-space-3); border-radius: var(--hb-radius-sm); background: var(--hb-status-warning-bg);
+    color: var(--hb-status-warning-fg); font-size: var(--hb-fs-md); font-weight: var(--hb-fw-semibold); }
+.hb-pop-pending[hidden] { display: none; }
+.hb-pop-head .hb-pop-rejected, .hb-pop-rejected { min-height: 48px; padding: var(--hb-space-1) var(--hb-space-3); border-radius: var(--hb-radius-sm);
+    background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); font-weight: var(--hb-fw-semibold); }
+.hb-pop-rejected[hidden] { display: none; }
+.hb-pop-rejected-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-2); }
+.hb-pop-rejected-row .hb-pop-reason { flex-basis: 100%; color: var(--hb-status-danger-fg); }
+.hb-pop-task { cursor: pointer; text-align: left; font: inherit; color: inherit; }
+/* 상태 = 공통 배지 hb-status(docs/40 부록 A.3) — 현장은 "작업 중" 도 색 없이 ● + 글자(V-1: 정상은 색을 쓰지 않는다) */
+.hb-pop .hb-status { font-size: var(--hb-fs-md); line-height: 1.8; font-weight: var(--hb-fw-semibold); }
+.hb-pop-task .hb-status { justify-self: start; }
+.hb-pop-gate:empty { display: none; }
+.hb-pop-actions { display: flex; flex-wrap: wrap; gap: var(--hb-space-3); margin: var(--hb-space-4) 0; }
+.hb-pop-actions button { min-height: 64px; min-width: 140px; font-size: var(--hb-fs-xl); }
+.hb-pop-actions .hb-pop-danger { margin-left: auto; }
+.hb-pop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--hb-space-3); }
+.hb-pop-grid button { min-height: 64px; }
+.hb-pop-grid button[aria-pressed="true"] { border: 3px solid var(--hb-action); }
+.hb-pop-text { display: flex; flex-direction: column; gap: var(--hb-space-2); }
+.hb-pop-text textarea { font: inherit; padding: var(--hb-space-3); min-height: 96px; width: 100%; box-sizing: border-box; }
+.hb-pop-card { background: var(--hb-bg-surface); border: 1px solid var(--hb-border); border-radius: var(--hb-radius-lg);
+    padding: var(--hb-space-4) var(--hb-space-5); margin: 0 0 var(--hb-space-4); display: grid; gap: var(--hb-space-4); }
+.hb-pop-card[hidden] { display: none; }
+.hb-pop-card h3 { margin: 0; font-size: var(--hb-fs-xl); }
+.hb-pop-entry { display: flex; flex-wrap: wrap; gap: var(--hb-space-5); align-items: flex-start; }
+.hb-pop-fields { display: grid; grid-template-columns: repeat(2, minmax(130px, 1fr)); gap: var(--hb-space-3); flex: 1 1 280px; }
+.hb-pop-field { display: grid; gap: var(--hb-space-1); min-height: 72px; text-align: left; padding: var(--hb-space-3) var(--hb-space-4); }
+.hb-pop-field b { font-size: var(--hb-fs-2xl); min-height: 1.2em; }
+.hb-pop-field[aria-pressed="true"] { border: 3px solid var(--hb-action); }
+.hb-pop-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--hb-space-2); }
+.hb-pop-list li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); padding: var(--hb-space-2) 0;
+    border-bottom: 1px solid var(--hb-border-subtle); overflow-wrap: anywhere; }
+.hb-pop-list li > span { flex: 1 1 200px; min-width: 0; }
+.hb-pop-list li .hb-pop-danger { margin-left: auto; }
+.hb-pop-list li.hb-pop-void { color: var(--hb-text-subtle); text-decoration: line-through; }
+.hb-pop-wide { width: 100%; min-height: 72px; font-size: var(--hb-fs-xl); }
+.hb-pop-choices select, .hb-pop-card select { min-height: 48px; font: inherit; padding: 0 var(--hb-space-3); max-width: 100%; }
+.hb-pop-judge[data-judge="NG"] { color: var(--hb-status-danger-fg); font-weight: var(--hb-fw-semibold); }
+.hb-pop-judge[data-judge="OK"] { color: var(--hb-status-success-fg); font-weight: var(--hb-fw-semibold); }
+
+/* 설비 점검(docs/25 4.58) — 항목마다 큰 양호/불량 버튼·수치 칸. 고른 버튼은 굵은 테두리 + 톤(색만으로 알리지 않게 글자가 그대로 남는다) */
+.hb-pop-checks { flex: 1 1 320px; min-width: 0; }
+.hb-pop-checks li > span:first-child { flex: 1 1 100%; font-weight: var(--hb-fw-semibold); }
+.hb-pop-checks small { font-weight: var(--hb-fw-regular); }
+.hb-pop-okng { display: flex; gap: var(--hb-space-4); flex: 1 1 100%; }
+.hb-pop-okng button { flex: 1 1 0; min-height: 64px; font-size: var(--hb-fs-xl); }
+.hb-pop-okng button[aria-pressed="true"][data-judge="OK"] { border: 3px solid var(--hb-status-success-fg); background: var(--hb-status-success-bg);
+    color: var(--hb-status-success-fg); font-weight: var(--hb-fw-semibold); }
+.hb-pop-okng button[aria-pressed="true"][data-judge="NG"] { border: 3px solid var(--hb-status-danger-fg); background: var(--hb-status-danger-bg);
+    color: var(--hb-status-danger-fg); font-weight: var(--hb-fw-semibold); }
+.hb-pop-checks .hb-pop-text { flex: 1 1 100%; }
+.hb-pop-list li .hb-pop-reason { flex-basis: 100%; margin: 0; color: var(--hb-status-danger-fg); }
+.hb-pop-list li .hb-pop-reason:empty { display: none; }
+.hb-pop-keypad[hidden], .hb-pop-tasks[hidden], .hb-pop-okng[hidden] { display: none; }
+
+/* 검사 입력(docs/25 4.57) — 특성 줄: 이름 + 판정 배지 / 규격·샘플 수 / 샘플 칸 / 계측기·저장. 규격 밖은 위험 톤 테두리 + 글자 */
+.hb-pop-insp-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); flex: 1 1 100%; }
+.hb-pop-insp-head h3, .hb-pop-insp-head b { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.hb-pop-insp-line > p { flex: 1 1 100%; margin: 0; }
+.hb-pop-insp-cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--hb-space-3); flex: 1 1 100%; }
+.hb-pop-insp-cells .hb-pop-okng { grid-column: 1 / -1; align-items: center; }
+.hb-pop-insp-cells .hb-pop-okng > span { min-width: 2ch; font-weight: var(--hb-fw-semibold); }
+.hb-pop-insp-saved { display: flex; align-items: center; min-height: 48px; padding: 0 var(--hb-space-4); border-radius: var(--hb-radius-md);
+    background: var(--hb-bg-muted); font-weight: var(--hb-fw-semibold); }
+.hb-pop-insp-saved[data-out="true"] { background: var(--hb-status-danger-bg); color: var(--hb-status-danger-fg); }
+.hb-pop-field[data-out="true"] { border: 3px solid var(--hb-status-danger-fg); color: var(--hb-status-danger-fg); }
+.hb-pop-insp-acts { display: flex; flex-wrap: wrap; gap: var(--hb-space-3); flex: 1 1 100%; }
+.hb-pop-insp-acts button { min-height: 56px; }
+.hb-pop-insp-acts .hb-pop-primary { margin-left: auto; min-width: 140px; }
+.hb-pop-insp-gauges { flex: 1 1 100%; }
+.hb-pop-insp-gauges:empty { display: none; }
+.hb-pop-insp-pad { display: grid; gap: var(--hb-space-3); }
+.hb-pop-insp-pad[hidden] { display: none; }
+.hb-pop-task[aria-disabled="true"] { cursor: default; color: var(--hb-text-muted); }
+
+/* 고장 신고 사진(docs/25 4.44) — 썸네일 + 상태 + 다시 보내기 */
+.hb-pop-photos { list-style: none; margin: 0 0 var(--hb-space-3); padding: 0; display: flex; flex-wrap: wrap; gap: var(--hb-space-3); }
+.hb-pop-photos li { display: flex; flex-direction: column; align-items: center; gap: var(--hb-space-1); width: 112px; }
+.hb-pop-photos img { width: 96px; height: 96px; object-fit: cover; border-radius: var(--hb-radius-md); border: 1px solid var(--hb-border); }
+.hb-pop-photos li[data-state="failed"] img { opacity: .5; }
+.hb-pop-photos button { min-height: 48px; width: 100%; }
+
+/* 키오스크 빠져나오기(hb.kiosk, docs/50 K4) — 오른쪽 위 구석 5초 길게 누르기 → 감독자 대화상자. APK(다리 있음)에서만 생긴다 */
+.hb-dialog.hb-kiosk-dialog { display: flex; flex-direction: column; align-items: center; gap: var(--hb-space-5); text-align: center; }
+.hb-dialog.hb-kiosk-dialog:not([open]) { display: none; }
+.hb-kiosk-pin { display: flex; flex-direction: column; align-items: center; gap: var(--hb-space-4); }
+.hb-kiosk-pin[hidden], .hb-kiosk-step[hidden] { display: none; }
+.hb-kiosk-msg { margin: 0; min-height: 1.5em; color: var(--hb-status-danger-fg); }
+.hb-kiosk-dialog > button { min-height: 48px; min-width: 120px; }

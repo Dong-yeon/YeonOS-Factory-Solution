@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  PMS 홈·포트폴리오 (pms-home) — PMS 5단계 (docs/32 PM5).
+  위: 내 할 일(내 작업·산출물·이슈·확정 안 한 공수일). 아래: 프로젝트 포트폴리오(단계·SOP 까지 남은 날·기준선 대비 지연·지연 작업·준비율·열린 이슈).
+  프로젝트를 고르면 인쇄용 보고서(게이트·지연·늦어진 작업·이슈·공수). 인쇄는 브라우저 인쇄([인쇄] 버튼) — 보고서 부분만 찍힌다.
+-->
+<body class="hb-page hb-page-app pms-home-page" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/pms.css}">
+<header class="hb-page-head pms-noprint">
+    <h1 th:text="${prog.name}">PMS 홈</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<section class="pms-noprint" id="todoBox">
+    <h2 th:text="#{pms.myTodo}">내 할 일</h2>
+    <div class="pms-todo">
+        <section class="pms-todo-col"><h3 th:text="#{pms.todo.tasks}">내 작업(지연·임박)</h3><ul class="pms-deps" id="todoTasks"></ul></section>
+        <section class="pms-todo-col"><h3 th:text="#{pms.todo.delivs}">내 산출물(임박)</h3><ul class="pms-deps" id="todoDelivs"></ul></section>
+        <section class="pms-todo-col"><h3 th:text="#{pms.todo.issues}">내 이슈</h3><ul class="pms-deps" id="todoIssues"></ul></section>
+        <section class="pms-todo-col"><h3 th:text="#{pms.todo.hours}">확정 안 한 공수일</h3><ul class="pms-deps" id="todoDays"></ul></section>
+    </div>
+</section>
+
+<section class="pms-noprint" id="portBox">
+    <h2 th:text="#{pms.portfolio}">포트폴리오</h2>
+    <form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+        <label><span th:text="#{pms.keyword}">번호·이름·고객</span><input name="keyword" maxlength="100"></label>
+        <label><span th:text="#{pms.col.projType}">유형</span><select name="projType" data-hb="select" data-code="PMS_PROJ_TYPE" data-blank="all"></select></label>
+        <fieldset class="hb-seg">
+            <legend th:text="#{pms.col.status}">상태</legend>
+            <label><input type="radio" name="status" value="" checked><span th:text="#{pms.status.OPEN}">진행 중</span></label>
+            <label><input type="radio" name="status" value="CLOSED"><span th:text="#{pms.status.CLOSED}">종료</span></label>
+            <label><input type="radio" name="status" value="ALL"><span th:text="#{common.all}">전체</span></label>
+        </fieldset>
+        <label class="hb-check"><input type="checkbox" name="mine" value="true"><span th:text="#{pms.mine}">내가 PM</span></label>
+        <div class="hb-sp-actions">
+            <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+            <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+        </div>
+    </form>
+    <div class="hb-toolbar">
+        <button type="button" id="excelBtn" class="hb-btn-secondary" th:if="${actions.contains('EXCEL')}" th:text="#{pms.excel}">엑셀 내려받기</button>
+    </div>
+    <!-- 상태별 막대(docs/32 4.15) — 조회 조건 그대로, 그림 라이브러리 없이 CSS -->
+    <figure class="pms-chart" id="portChart" data-help-key="pms-home.chart">
+        <figcaption class="hb-muted" th:text="#{pms.chart.title}">상태별 프로젝트 · 지연 작업이 있는 프로젝트</figcaption>
+        <ul class="pms-chart-rows" id="portChartRows"></ul>
+    </figure>
+    <!-- 연도·유형 막대(docs/32 4.20) — 같은 조회 조건. 연도 = 계획 시작 해(착수)·종료일 해(종료) -->
+    <div class="pms-chart-pair">
+        <figure class="pms-chart" id="portYear" data-help-key="pms-home.trend">
+            <figcaption class="hb-muted" th:text="#{pms.trend.yearTitle}">연도별 착수 · 종료</figcaption>
+            <ul class="pms-chart-rows" id="portYearRows"></ul>
+            <p class="hb-muted" id="portYearNote"></p>
+        </figure>
+        <figure class="pms-chart" id="portType">
+            <figcaption class="hb-muted" th:text="#{pms.trend.typeTitle}">유형별 프로젝트 · 진행 중</figcaption>
+            <ul class="pms-chart-rows" id="portTypeRows"></ul>
+        </figure>
+    </div>
+    <div id="portGrid" class="hb-grid-host pms-port-grid" data-help-key="pms-home.portfolio"></div>
+</section>
+
+<section class="pms-report" id="reportBox" hidden>
+    <div class="hb-toolbar pms-noprint">
+        <button type="button" id="printBtn" class="hb-btn-secondary" th:text="#{pms.print}">인쇄</button>
+        <button type="button" id="closeReportBtn" class="hb-btn-ghost" th:text="#{common.close}">닫기</button>
+    </div>
+    <h2 id="repTitle"></h2>
+    <p id="repSummary" class="hb-muted"></p>
+    <p id="repEffort" class="hb-muted"></p>
+    <h3 th:text="#{pms.rep.phases}">단계별 준비율</h3>
+    <ul class="pms-phases" id="repPhases"></ul>
+    <h3 th:text="#{pms.rep.gates}">게이트</h3>
+    <table class="hb-cmp-table" id="repGates"><thead><tr>
+        <th th:text="#{pms.col.wbs}">WBS</th><th th:text="#{pms.col.gate}">게이트</th><th th:text="#{pms.col.planDate}">계획일</th>
+        <th th:text="#{pms.col.readiness}">필수 산출물</th><th th:text="#{pms.col.lastReview}">마지막 심사</th>
+    </tr></thead><tbody></tbody></table>
+    <h3 th:text="#{pms.rep.late}">지연 작업(오늘 기준)</h3>
+    <table class="hb-cmp-table" id="repLate"><thead><tr>
+        <th th:text="#{pms.col.wbs}">WBS</th><th th:text="#{pms.col.taskNm}">작업</th><th th:text="#{pms.col.planEnd}">계획 종료</th>
+        <th th:text="#{pms.col.status}">상태</th>
+    </tr></thead><tbody></tbody></table>
+    <h3 th:text="#{pms.rep.slip}">기준선보다 늦어진 작업</h3>
+    <table class="hb-cmp-table" id="repSlip"><thead><tr>
+        <th th:text="#{pms.col.wbs}">WBS</th><th th:text="#{pms.col.taskNm}">작업</th><th th:text="#{pms.rep.baseEnd}">기준선 종료</th>
+        <th th:text="#{pms.col.planEnd}">지금 종료</th><th th:text="#{pms.col.slipDays}">기준선 대비</th>
+    </tr></thead><tbody></tbody></table>
+    <h3 th:text="#{pms.rep.issues}">열린 이슈</h3>
+    <table class="hb-cmp-table" id="repIssues"><thead><tr>
+        <th th:text="#{pms.col.issueNo}">번호</th><th th:text="#{pms.col.issueTitle}">제목</th><th th:text="#{pms.col.severity}">심각도</th>
+        <th th:text="#{pms.col.owner}">담당</th><th th:text="#{pms.col.due}">기한</th>
+    </tr></thead><tbody></tbody></table>
+    <h3 th:text="#{pms.rep.hours}">공수(시간)</h3>
+    <table class="hb-cmp-table" id="repHours"><thead><tr>
+        <th th:text="#{pms.col.category}">분류</th><th th:text="#{pms.rep.confirmed}">확정</th><th th:text="#{pms.rep.draft}">작성 중</th>
+    </tr></thead><tbody></tbody></table>
+    <p id="repFoot" class="hb-muted"></p>
+</section>
+
+<p id="msg" class="hb-msg pms-noprint" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/pms/pms-ui.js}"></script>
+<script th:src="@{/js/views/pms/pms-home.js}"></script>
+</body>
+</html>

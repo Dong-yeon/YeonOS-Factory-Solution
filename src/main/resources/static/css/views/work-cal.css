@@ -1,0 +1,20 @@
+/*
+ * 공장 휴일 달력 화면 전용 (docs/25 4.15) — 공통 page.css 를 고치지 않는다(docs/29 2.4). 값은 tokens.css 의 의미 토큰만.
+ * 쉬는 날 = 회색 바탕, 예외(휴일·특근) = 사유 글자, 고른 날 = 테두리.
+ */
+.wcal { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.wcal th { padding: 4px; font-weight: 600; color: var(--hb-text-muted); background: var(--hb-bg-subtle); border: 1px solid var(--hb-border-subtle); }
+.wcal td { height: 64px; padding: 4px; vertical-align: top; border: 1px solid var(--hb-border-subtle); background: var(--hb-bg-surface); cursor: pointer; }
+.wcal td:focus-visible { outline: 2px solid var(--hb-focus); outline-offset: -2px; }
+.wcal td.wcal-out { cursor: default; background: var(--hb-bg-muted); }
+.wcal td.wcal-off { background: var(--hb-bg-muted); color: var(--hb-text-muted); }
+.wcal td.wcal-exc .wcal-note { color: var(--hb-status-warning-fg); }
+.wcal td[aria-selected="true"] { box-shadow: inset 0 0 0 2px var(--hb-brand-accent); }
+.wcal-day { font-weight: 600; }
+.wcal-note, .wcal-shifts { display: block; font-size: 0.85em; overflow-wrap: anywhere; }
+.wcal-shifts { color: var(--hb-text-subtle); }
+/* 이 달 예외 목록(hb.grid) — 달력 아래라 높이를 정해 준다(그리드 안에서 스크롤).
+   달력·목록은 제 높이를 지키고(줄이면 달력 마지막 주가 잘린다) 낮은 화면에서는 목록 쪽 전체가 스크롤 */
+.wcal-main { overflow-y: auto; }
+.wcal-main > .hb-replace-host, .wcal-main > .hb-sub { flex: none; }
+.wcal-rows { height: 280px; }

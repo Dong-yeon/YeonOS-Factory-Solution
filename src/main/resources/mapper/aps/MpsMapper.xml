@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- MPS 기준생산계획 (docs/38 16장). 회사 조건은 RLS — comp_cd 를 적지 않는다(INSERT 는 hb_current_comp()). 지시·입고는 읽기만 -->
+<mapper namespace="io.smarthappy.module.aps.MpsMapper">
+
+    <select id="findPlants" resultType="io.smarthappy.module.master.equip.EquipDtos$PlantRow">
+        select p.plant_cd, p.plant_nm, p.time_zone, p.sort_no, p.use_yn, p.row_ver from sys_plant p
+         where p.use_yn = 'Y' order by p.sort_no, p.plant_cd
+    </select>
+
+    <!-- ================================================================ MPS 품목 -->
+
+    <!-- 안전재고·로트는 계획 기준정보(aps_item_param, 사용 중 행 — docs/38 17장). 행이 없으면 0·EX -->
+    <sql id="paramJoin">
+        left join aps_item_param p on p.plant_cd = m.plant_cd and p.item_id = m.item_id and p.use_yn = 'Y'
+    </sql>
+
+    <sql id="itemCols">
+        m.mps_item_id, m.plant_cd, m.item_id, i.item_cd, i.item_nm, i.unit_cd, trim_scale(coalesce(p.safety_qty, 0))::text as safety_qty,
+        coalesce(p.lot_rule, 'EX') as lot_rule, trim_scale(p.lot_qty)::text as lot_qty, trim_scale(p.lot_mult)::text as lot_mult, m.remark, m.use_yn, m.row_ver, m.updated_at, m.updated_by
+    </sql>
+
+    <select id="findItems" resultType="io.smarthappy.module.aps.MpsDtos$ItemRow">
+        select <include refid="itemCols"/>
+          from aps_mps_item m join mst_item i on i.item_id = m.item_id
+        <include refid="paramJoin"/>
+        <where>
+            <if test="plantCd != null">m.plant_cd = #{plantCd}</if>
+        </where>
+         order by m.use_yn desc, m.plant_cd, i.item_cd, m.mps_item_id
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.aps.MpsDtos$ItemRow" flushCache="true" useCache="false">
+        select <include refid="itemCols"/>
+          from aps_mps_item m join mst_item i on i.item_id = m.item_id
+        <include refid="paramJoin"/>
+         where m.mps_item_id = #{id}
+    </select>
+
+    <select id="lookupItem" resultType="io.smarthappy.module.aps.MpsDtos$ItemLookup">
+        select item_id, item_cd, unit_cd, proc_type, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="insertItem" resultType="long" flushCache="true">
+        insert into aps_mps_item (comp_cd, plant_cd, item_id, remark, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{plantCd}, #{itemId}, #{remark}, #{useYn}, #{by}, #{by})
+        returning mps_item_id
+    </select>
+
+    <update id="updateItem">
+        update aps_mps_item
+           set remark = #{remark}, use_yn = #{useYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where mps_item_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <!-- ================================================================ 계산 입력 -->
+
+    <select id="plantUseYn" resultType="string">
+        select use_yn from sys_plant where plant_cd = #{plantCd}
+    </select>
+
+    <!-- 그 공장 사용 중 MPS 품목(품목도 사용 중), 품목 코드 순 — 결정적 -->
+    <select id="findMpsItems" resultType="io.smarthappy.module.aps.MpsDtos$MpsItemSrc">
+        select m.item_id, i.item_cd, i.unit_cd, coalesce(p.safety_qty, 0) as safety_qty, coalesce(p.lot_rule, 'EX') as lot_rule, p.lot_qty, p.lot_mult
+          from aps_mps_item m join mst_item i on i.item_id = m.item_id
+        <include refid="paramJoin"/>
+         where m.plant_cd = #{plantCd} and m.use_yn = 'Y' and i.use_yn = 'Y'
+         order by i.item_cd
+    </select>
+
+    <!-- 열린 지시 공급(M6): 남은 = 계획 수량 − 생산 입고 순수량(역분개는 음수 그대로), 계획 완료일 ≤ 마지막 날 -->
+    <select id="findWoSupply" resultType="io.smarthappy.module.aps.MpsDtos$WoSupplySrc">
+        select x.item_id, x.plan_end, x.remain_qty from (
+            select w.item_id, w.plan_end,
+                   w.plan_qty - coalesce((select sum(r.qty) from prd_receipt r where r.wo_id = w.wo_id), 0) as remain_qty
+              from prd_wo w
+             where w.plant_cd = #{plantCd} and w.status in ('PLANNED', 'RELEASED', 'IN_PROGRESS') and w.plan_end &lt;= #{last}
+               and w.item_id in <foreach collection="itemIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ) x
+         where x.remain_qty &gt; 0
+         order by x.item_id, x.plan_end
+    </select>
+
+    <select id="findCurrent" resultType="io.smarthappy.module.aps.MpsDtos$MpsRow" flushCache="true" useCache="false">
+        select m.mps_id, m.mps_no, m.plant_cd, m.horizon_start, m.horizon_days, m.status, m.row_ver
+          from aps_mps m where m.plant_cd = #{plantCd} and m.status = 'FIRMED'
+    </select>
+
+    <select id="findFirmedCells" resultType="io.smarthappy.module.aps.MpsDtos$FirmedCellSrc">
+        select r.item_id, c.bucket_date, c.plan_qty
+          from aps_mps_cell c join aps_mps_row r on r.mps_row_id = c.mps_row_id
+         where c.mps_id = #{mpsId}
+    </select>
+
+    <!-- ================================================================ 저장 -->
+
+    <select id="insertMps" resultType="long" flushCache="true">
+        insert into aps_mps (comp_cd, mps_no, plant_cd, mps_nm, horizon_start, horizon_days, fence_days, fence_end, base_mps_id, item_cnt,
+                             calculated_by, created_by, updated_by)
+        values (hb_current_comp(), #{m.mpsNo}, #{m.plantCd}, #{m.mpsNm}, #{m.horizonStart}, #{m.horizonDays}, #{m.fenceDays}, #{m.fenceEnd},
+                #{m.baseMpsId}, #{m.itemCnt}, #{by}, #{by}, #{by})
+        returning mps_id
+    </select>
+
+    <select id="insertRow" resultType="long" flushCache="true">
+        insert into aps_mps_row (comp_cd, mps_id, item_id, unit_cd, stock_qty, safety_qty, lot_rule, lot_qty, lot_mult)
+        values (hb_current_comp(), #{mpsId}, #{r.itemId}, #{r.unitCd}, #{r.stockQty}, #{r.safetyQty}, #{r.lotRule}, #{r.lotQty}, #{r.lotMult})
+        returning mps_row_id
+    </select>
+
+    <insert id="insertCells">
+        insert into aps_mps_cell (comp_cd, mps_id, mps_row_id, bucket_date, demand_order, demand_fcst, past_due_qty, supply_wo,
+                                  prop_qty, base_qty, fenced_yn, plan_qty)
+        values
+        <foreach collection="cells" item="c" separator=",">
+            (hb_current_comp(), #{mpsId}, #{c.mpsRowId}, #{c.bucketDate}, #{c.demandOrder}, #{c.demandFcst}, #{c.pastDueQty}, #{c.supplyWo},
+             #{c.propQty}, #{c.baseQty}, #{c.fencedYn}, #{c.baseQty})
+        </foreach>
+    </insert>
+
+    <!-- ================================================================ 조회 -->
+
+    <sql id="mpsCols">
+        m.mps_id, m.mps_no, m.plant_cd, p.plant_nm, m.mps_nm, m.horizon_start, m.horizon_days, m.fence_days, m.fence_end, m.base_mps_id,
+        b.mps_no as base_mps_no, m.status, m.item_cnt, m.calculated_at, m.calculated_by, m.firmed_at, m.firmed_by, m.superseded_at,
+        m.discard_reason, m.row_ver
+    </sql>
+
+    <select id="findList" resultType="io.smarthappy.module.aps.MpsDtos$MpsRow">
+        select <include refid="mpsCols"/>
+          from aps_mps m
+          join sys_plant p on p.plant_cd = m.plant_cd
+          left join aps_mps b on b.mps_id = m.base_mps_id
+         where m.calculated_at &gt;= #{from} and m.calculated_at &lt; #{to}
+           <if test="plantCd != null">and m.plant_cd = #{plantCd}</if>
+         order by m.calculated_at desc, m.mps_id desc
+         limit #{limit}
+    </select>
+
+    <select id="findMps" resultType="io.smarthappy.module.aps.MpsDtos$MpsRow" flushCache="true" useCache="false">
+        select <include refid="mpsCols"/>
+          from aps_mps m
+          join sys_plant p on p.plant_cd = m.plant_cd
+          left join aps_mps b on b.mps_id = m.base_mps_id
+         where m.mps_id = #{id}
+    </select>
+
+    <select id="findRows" resultType="io.smarthappy.module.aps.MpsDtos$RowSrc" flushCache="true" useCache="false">
+        select r.mps_row_id, r.item_id, i.item_cd, i.item_nm, r.unit_cd, trim_scale(r.stock_qty)::text as stock_qty,
+               trim_scale(r.safety_qty)::text as safety_qty, r.lot_rule, trim_scale(r.lot_qty)::text as lot_qty, trim_scale(r.lot_mult)::text as lot_mult
+          from aps_mps_row r join mst_item i on i.item_id = r.item_id
+         where r.mps_id = #{id}
+         order by i.item_cd
+    </select>
+
+    <select id="findCells" resultType="io.smarthappy.module.aps.MpsDtos$CellSrc" flushCache="true" useCache="false">
+        select c.mps_cell_id, c.mps_row_id, c.bucket_date, trim_scale(c.demand_order)::text as demand_order,
+               trim_scale(c.demand_fcst)::text as demand_fcst, trim_scale(c.past_due_qty)::text as past_due_qty,
+               trim_scale(c.supply_wo)::text as supply_wo, trim_scale(c.prop_qty)::text as prop_qty,
+               trim_scale(c.base_qty)::text as base_qty, c.fenced_yn, trim_scale(c.plan_qty)::text as plan_qty, c.chg_reason
+          from aps_mps_cell c
+         where c.mps_id = #{id}
+         order by c.mps_row_id, c.bucket_date
+    </select>
+
+    <!-- ================================================================ 편집·확정·폐기 -->
+
+    <select id="lockMps" resultType="string" flushCache="true" useCache="false">
+        select status from aps_mps where mps_id = #{id} for update
+    </select>
+
+    <!-- 같은 공장 확정을 트랜잭션 끝까지 줄 세운다 — 현행 확정 판정이 동시에 같은 값을 보지 않게 -->
+    <select id="lockFirmPlant" resultType="string" flushCache="true" useCache="false">
+        select pg_advisory_xact_lock(hashtext('aps_mps_firm'), hashtext(#{plantCd}))::text
+    </select>
+
+    <select id="lockCells" resultType="io.smarthappy.module.aps.MpsDtos$CellLock" flushCache="true" useCache="false">
+        select c.mps_cell_id, trim_scale(c.base_qty)::text as base_qty, c.fenced_yn, trim_scale(c.plan_qty)::text as plan_qty,
+               c.chg_reason, r.unit_cd
+          from aps_mps_cell c join aps_mps_row r on r.mps_row_id = c.mps_row_id
+         where c.mps_id = #{mpsId}
+           and c.mps_cell_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by c.mps_cell_id
+           for update of c
+    </select>
+
+    <update id="updateCell">
+        update aps_mps_cell set plan_qty = #{planQty}, chg_reason = #{reason} where mps_cell_id = #{id}
+    </update>
+
+    <update id="touch">
+        update aps_mps set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where mps_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="supersede">
+        update aps_mps set status = 'SUPERSEDED', superseded_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where mps_id = #{id} and status = 'FIRMED'
+    </update>
+
+    <update id="firm">
+        update aps_mps set status = 'FIRMED', firmed_at = now(), firmed_by = #{by}, row_ver = row_ver + 1, updated_at = now(),
+               updated_by = #{by}
+         where mps_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="discard">
+        update aps_mps set status = 'DISCARDED', discard_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where mps_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+</mapper>

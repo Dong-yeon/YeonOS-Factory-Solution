@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- ASN 조회 계약 구현 (SRM → WMS, docs/31 4.11) — 회사 범위는 RLS. 대상 상태 SENT·PARTIAL_RECEIVED·RECEIVED -->
+<mapper namespace="io.smarthappy.module.srm.link.AsnQueryMapper">
+
+    <!-- a 별칭 필요: 행 수·남은 행 수(덜 받은 행 수 = 트리거가 유지하는 칸, docs/31 5.6·V185) -->
+    <sql id="headCols">
+        a.asn_id, a.asn_no, a.cust_id, c.cust_cd, c.cust_nm, a.plant_cd, a.supplier_ref, a.ship_date, a.eta_date, a.status,
+        (select count(*) from srm_asn_line l where l.asn_id = a.asn_id)::int as line_cnt, a.open_line_cnt
+    </sql>
+
+    <select id="expected" resultType="io.smarthappy.module.srm.link.AsnQueryMapper$Head">
+        select <include refid="headCols"/>
+          from srm_asn a join mst_cust c on c.cust_id = a.cust_id
+         where a.plant_cd = #{plantCd}
+           and a.status in ('SENT', 'PARTIAL_RECEIVED')
+           and a.open_line_cnt &gt; 0
+        <if test="from != null">and a.eta_date &gt;= #{from}</if>
+        <if test="to != null">and a.eta_date &lt;= #{to}</if>
+         order by a.eta_date, a.asn_no
+         limit #{limit}
+    </select>
+
+    <select id="findByKey" resultType="io.smarthappy.module.srm.link.AsnQueryMapper$Head">
+        select <include refid="headCols"/>
+          from srm_asn a join mst_cust c on c.cust_id = a.cust_id
+         where a.status in ('SENT', 'PARTIAL_RECEIVED', 'RECEIVED')
+           and (a.asn_no = #{key}
+                or (a.supplier_ref = #{key} and not exists (select 1 from srm_asn b where b.asn_no = #{key})))
+         order by a.asn_id
+         limit 2
+    </select>
+
+    <select id="lines" resultType="io.smarthappy.module.srm.link.AsnQueryMapper$Line">
+        select l.asn_line_id, l.line_no, l.po_line_id, p.po_id, p.po_no, pl.line_no as po_line_no, l.item_id, i.item_cd, pl.item_nm,
+               l.unit_cd, l.qty, r.recv as recv_qty, greatest(l.qty - r.recv, 0) as remain_qty,
+               l.supplier_lot_no, l.mfg_date, l.expiry_date
+          from srm_asn_line l
+          join srm_po_line pl on pl.po_line_id = l.po_line_id
+          join srm_po p on p.po_id = pl.po_id
+          join mst_item i on i.item_id = l.item_id
+          cross join lateral (select coalesce(sum(x.qty), 0) as recv from srm_po_receipt x where x.asn_line_id = l.asn_line_id) r
+         where l.asn_id = #{asnId}
+         order by l.line_no
+    </select>
+</mapper>

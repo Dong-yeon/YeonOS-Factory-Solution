@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설비 프로필 (cms-equip-profile) — CMS 1부 C1 (docs/33 D15). 설비(P1) 1:1 보전 정보: 중요도 A/B/C·핵심 설비(IATF 8.5.1.5)·기본 보전 담당.
+  상세 아래는 설비 이력 카드(지금 설치된 금형·지그·게이지, 그 설비의 작업지시) — 점검·예비품은 C2·C4 에서 더한다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설비 프로필</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="cms-equip-card" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.col.plant}">공장</span><select name="plantCd" id="plantSearch"></select></label>
+    <label><span th:text="#{cms.profile.keyword}">설비 코드·이름</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.profile.col.criticality}">중요도</legend>
+        <label><input type="radio" name="criticality" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="criticality" value="A"><span>A</span></label>
+        <label><input type="radio" name="criticality" value="B"><span>B</span></label>
+        <label><input type="radio" name="criticality" value="C"><span>C</span></label>
+    </fieldset>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.profile.col.keyEquip}">핵심 설비</legend>
+        <label><input type="radio" name="keyOnly" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="keyOnly" value="Y"><span th:text="#{cms.profile.keyOnly}">핵심만</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div id="equipGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.profile.select}">왼쪽에서 설비를 고르세요.</p>
+        <div id="profileBox" hidden>
+        <form id="profileForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{cms.profile.col.criticality}">중요도</span>
+                <select data-field="criticality" data-hb="select" data-code="CMS_CRIT"
+                        data-help-key="cms-equip-profile.criticality"></select></label>
+            <label><span th:text="#{cms.profile.col.keyEquip}">핵심 설비</span>
+                <select data-field="keyEquipYn" data-help-key="cms-equip-profile.keyEquipYn">
+                    <option value="N" th:text="#{yn.N}">아니오</option>
+                    <option value="Y" th:text="#{cms.profile.keyYes}">핵심 설비</option>
+                </select></label>
+            <label><span th:text="#{cms.profile.col.owner}">보전 담당</span>
+                <select data-field="ownerLoginId" id="ownerSel" data-help-key="cms-equip-profile.owner"></select></label>
+            <label><span th:text="#{cms.profile.col.idealCt}">이론 사이클(초/개)</span>
+                <input data-field="idealCtSec" inputmode="decimal" maxlength="12" th:placeholder="#{cms.profile.idealCtHint}"></label>
+            <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+        </div>
+
+        <section class="hb-sub" id="card" hidden>
+            <p><a id="cardLink" class="hb-btn-secondary hb-link-btn" href="/page/cms-equip-card" th:text="#{cms.profile.openCard}">이력 카드 열기</a></p>
+            <h2 th:text="#{cms.profile.installed}">지금 설치된 금형·지그·게이지</h2>
+            <table class="hb-cmp-table hb-plant-table" id="installed">
+                <thead><tr>
+                    <th th:text="#{cms.profile.col.asset}">자산</th>
+                    <th th:text="#{cms.profile.col.assetType}">유형</th>
+                    <th th:text="#{cms.profile.col.installedAt}">설치</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <h2 th:text="#{cms.profile.history}">작업지시 이력(최근 1년)</h2>
+            <p id="historySum" class="hb-muted"></p>
+            <table class="hb-cmp-table hb-plant-table" id="history">
+                <thead><tr>
+                    <th th:text="#{cms.mwo.col.mwoNo}">번호</th>
+                    <th th:text="#{cms.mwo.col.type}">유형</th>
+                    <th th:text="#{cms.mwo.col.title}">제목</th>
+                    <th th:text="#{cms.mwo.col.status}">상태</th>
+                    <th th:text="#{cms.mwo.col.reportedAt}">신고</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/equip-profile-mgt.js}"></script>
+</body>
+</html>

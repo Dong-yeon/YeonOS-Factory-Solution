@@ -1,0 +1,207 @@
+/* APS 생산 계획 간트 (aps-plan, docs/38). 색은 의미 토큰만(tokens.css), 막대 위치·폭은 JS 가 CSSOM 으로 넣는다.
+   가로 스크롤은 .aps-gantt 상자 안에서만 — 좁은 화면에서도 페이지는 넘치지 않는다. */
+
+.aps-summary {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--hb-space-1) var(--hb-space-3);
+    margin: var(--hb-space-3) 0;
+    font-size: var(--hb-fs-sm);
+}
+.aps-summary[hidden] { display: none; }
+.aps-summary dt { color: var(--hb-text-muted); }
+.aps-summary dd { margin: 0; overflow-wrap: anywhere; }
+
+.aps-gantt-section { margin-top: var(--hb-space-4); }
+.aps-gantt-section .hb-toolbar { flex-wrap: wrap; }
+.aps-gantt-section .hb-toolbar h2 { margin: 0 var(--hb-space-3) 0 0; }
+
+.aps-legend { display: inline-flex; align-items: center; gap: var(--hb-space-1); font-size: var(--hb-fs-sm); color: var(--hb-text-muted); }
+.aps-legend .aps-legend-swatch { position: static; display: inline-block; width: 18px; height: 12px; min-width: 0; padding: 0; }
+
+.aps-gantt {
+    --aps-label-w: 168px;
+    --aps-row-h: 30px;
+    max-width: 100%;
+    max-height: 70vh;
+    overflow: auto;
+    border: 1px solid var(--hb-border);
+    border-radius: var(--hb-radius-sm);
+    background: var(--hb-bg-surface);
+}
+.aps-g-inner { position: relative; min-width: 100%; }
+
+.aps-g-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    height: 28px;
+    background: var(--hb-bg-subtle);
+    border-bottom: 1px solid var(--hb-border);
+}
+.aps-g-corner,
+.aps-g-label {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    flex: 0 0 var(--aps-label-w);
+    width: var(--aps-label-w);
+    padding: 0 var(--hb-space-2);
+    background: var(--hb-bg-subtle);
+    border-right: 1px solid var(--hb-border);
+    font-size: var(--hb-fs-sm);
+    line-height: var(--aps-row-h);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.aps-g-corner { line-height: 28px; color: var(--hb-text-muted); }
+.aps-g-axis { position: relative; flex: 1 1 auto; }
+.aps-g-day {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    padding-left: var(--hb-space-1);
+    border-left: 1px solid var(--hb-border);
+    font-size: var(--hb-fs-xs);
+    line-height: 28px;
+    color: var(--hb-text-muted);
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.aps-g-body { position: relative; }
+.aps-g-shade {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--aps-label-w);
+    right: 0;
+    pointer-events: none;
+}
+.aps-g-off { position: absolute; top: 0; bottom: 0; background: var(--hb-bg-muted); }
+.aps-legend .aps-g-off { position: static; }
+
+.aps-g-row { position: relative; display: flex; min-height: var(--aps-row-h); height: var(--aps-row-h); border-bottom: 1px solid var(--hb-border-subtle); }
+.aps-g-track { position: relative; flex: 1 1 auto; }
+
+.aps-g-bar {
+    position: absolute;
+    top: 4px;
+    height: calc(var(--aps-row-h) - 8px);
+    min-width: 3px;
+    min-height: 0;
+    padding: 0 2px;
+    border: 1px solid var(--hb-action);
+    border-radius: var(--hb-radius-sm);
+    background: var(--hb-action-subtle);
+    color: var(--hb-text);
+    font-size: var(--hb-fs-xs);
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
+    cursor: pointer;
+}
+.aps-g-bar.aps-g-late {
+    border-color: var(--hb-status-warning-line);
+    background: var(--hb-status-warning-bg);
+    color: var(--hb-status-warning-fg);
+}
+.aps-g-bar:focus-visible { outline: 2px solid var(--hb-focus); outline-offset: 1px; z-index: 1; }
+.aps-g-bar.aps-g-hl { outline: 2px solid var(--hb-focus); z-index: 1; }
+.aps-g-bar.aps-g-dim { opacity: 0.35; }
+
+td.aps-warn { color: var(--hb-status-warning-fg); background: var(--hb-status-warning-bg); }
+
+/* 결과 표는 열이 많아 좁은 화면에서 상자 안에서만 가로 스크롤 */
+.aps-table-scroll { max-width: 100%; overflow-x: auto; }
+.aps-table-scroll .hb-cmp-table { min-width: 640px; }
+
+/* 2단계: 반영 미리보기·계획 비교 */
+.aps-gantt-section[hidden] { display: none; }
+.aps-stale { margin: 0 0 var(--hb-space-3); padding-left: var(--hb-space-4); color: var(--hb-status-warning-fg); font-size: var(--hb-fs-sm); }
+.aps-stale[hidden], #staleBox[hidden], #cmpBox[hidden] { display: none; }
+.aps-cmp-bar { margin-top: var(--hb-space-4); }
+.aps-cmp-bar label { display: inline-flex; align-items: center; gap: var(--hb-space-1); font-size: var(--hb-fs-sm); }
+.aps-cmp-bar select { min-width: 0; max-width: 100%; }
+td.aps-changed { font-weight: 600; }
+p.aps-warn { color: var(--hb-status-warning-fg); }
+
+/* 이 화면은 목록·상세 아래에 간트·반영·비교 구역이 이어진다 — 공통 앱 화면(본문 높이 고정 + 넘침 숨김)이면 아래 구역이 자라면서
+   목록·상세(flex 1, min-height 0)가 높이 0 으로 눌린다(2단계 브라우저 확인에서 발견). 화면 전체를 세로로 스크롤하고 목록·상세는 높이를 고정 */
+body.hb-page-app.aps-page { height: auto; min-height: 100vh; overflow-x: hidden; overflow-y: auto; }
+.aps-page .hb-split { flex: 0 0 auto; height: min(560px, 75vh); }
+.aps-page .aps-gantt-section { flex: 0 0 auto; }
+
+/* 3단계: 수동 고정 — 고정으로 잡힌 막대(굵은 테두리), 알림 있는 막대(점선 바깥선), 지금 고정(점선 막대), 끌기 */
+.aps-g-bar.aps-g-pinned { border-width: 2px; font-weight: 600; }
+.aps-g-bar.aps-g-warn { outline: 2px dashed var(--hb-status-warning-line); outline-offset: 1px; }
+.aps-g-bar.aps-g-draggable { cursor: grab; touch-action: none; }
+.aps-g-bar.aps-g-dragging { cursor: grabbing; opacity: 0.85; z-index: 2; }
+.aps-g-bar.aps-g-moving { outline: 3px solid var(--hb-focus); z-index: 2; }
+.aps-g-ghost {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    border: 2px dashed var(--hb-action);
+    border-radius: var(--hb-radius-sm);
+    color: var(--hb-text-muted);
+    font-size: var(--hb-fs-xs);
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    pointer-events: none;
+}
+.aps-legend .aps-g-ghost { position: static; display: inline-block; }
+
+/* 4단계: 공장 휴일 달력 — 쉬는 날 머리 */
+.aps-g-day.aps-g-day-off { color: var(--hb-status-warning-fg); font-weight: 600; }
+
+/* 5단계 ②: 자재 부족 공정 — 막대 아래 굵은 경고 줄 */
+.aps-g-bar.aps-g-matshort { box-shadow: inset 0 -3px 0 var(--hb-status-warning-line); }
+.aps-inline { display: inline-flex; align-items: center; gap: var(--hb-space-1); }
+
+/* 납기 답변(6단계 CTP) 대화상자 */
+.hb-dialog.aps-ctp-dialog { width: min(720px, 96vw); }
+.aps-ctp-answer { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hb-space-3); margin: var(--hb-space-4) 0; }
+
+/* ---------- 기준생산계획 MPS (aps-mps, docs/38 16장) ---------- */
+.aps-mps-list tr.aps-mps-pick, #itemTable tr.aps-mps-pick { cursor: pointer; }
+.aps-mps-list tr.aps-mps-pick:focus-visible, #itemTable tr.aps-mps-pick:focus-visible { outline: 2px solid var(--hb-focus); outline-offset: -2px; }
+.aps-mps-list tr.aps-mps-picked td { background: var(--hb-action-subtle); }
+.aps-mps-scroll { max-height: 70vh; }
+.aps-mps-grid th, .aps-mps-grid td { white-space: nowrap; }
+.aps-mps-grid .aps-mps-itemcell { vertical-align: top; min-width: 160px; text-align: left; }
+.aps-mps-grid tbody.aps-mps-item { border-top: 2px solid var(--hb-border); }
+.aps-mps-grid .aps-mps-planline td, .aps-mps-grid .aps-mps-planline th { font-weight: 600; }
+.aps-mps-fenced { background: var(--hb-bg-muted); }
+.aps-mps-neg { color: var(--hb-status-danger-fg); background: var(--hb-status-danger-bg); }
+.aps-mps-low { color: var(--hb-status-warning-fg); background: var(--hb-status-warning-bg); }
+.aps-mps-pastdue { box-shadow: inset 3px 0 0 var(--hb-status-warning-line); }
+.aps-mps-edited { box-shadow: inset 0 -2px 0 var(--hb-action); }
+.aps-mps-input { width: 80px; text-align: right; font-size: var(--hb-fs-sm); padding: var(--hb-space-1); }
+.aps-mps-input.hb-invalid { border-color: var(--hb-status-danger-line); }
+
+/* 부족 → 구매 요청 고름 칸 (8단계, docs/38 17.4) */
+.aps-pick-col { width: 2.25rem; text-align: center; }
+#prLines td:first-child { min-width: 10rem; }
+
+/* 일일 작업 배정표 (9단계, docs/38 18.5) — 자원이 바뀌는 첫 행에 선, [인쇄]는 배정표만 */
+.aps-dispatch-form { margin-bottom: var(--hb-space-2); }
+#dispatchRows tr.aps-dispatch-first td { border-top: 2px solid var(--hb-border); }
+@media print {
+    body.aps-print-dispatch { height: auto; overflow: visible; }
+    body.aps-print-dispatch > :not(#dispatchSection) { display: none; }
+    body.aps-print-dispatch .aps-dispatch-form { display: none; }
+    body.aps-print-dispatch .aps-table-scroll { overflow: visible; max-height: none; }
+    body.aps-print-dispatch #dispatchRows tr { break-inside: avoid; }
+}
+
+/* ---------- MRP 자재소요계획 (docs/38 19장) ---------- */
+#orderTable tr.aps-mps-pick, #excTable tr.aps-mps-pick, #elemTable tr.aps-mps-pick, #mrpList tr.aps-mps-pick { cursor: pointer; }
+#orderTable tr.aps-mps-pick:focus-visible, #excTable tr.aps-mps-pick:focus-visible, #elemTable tr.aps-mps-pick:focus-visible,
+#mrpList tr.aps-mps-pick:focus-visible { outline: 2px solid var(--hb-focus); outline-offset: -2px; }
+#elemTable tr.aps-mrp-order td { font-weight: 600; }
+#pegTable tr.aps-mps-picked td, #mrpList tr.aps-mps-picked td { background: var(--hb-action-subtle); }

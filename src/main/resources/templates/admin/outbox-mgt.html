@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  연계 현황·실패 재전송 (sys-outbox) — docs/36 19장 (docs/49 6장 1·W-2). 회사 전체 아웃박스(라벨 인쇄·ERP·메일·알림·SRM 통지)를 자기 회사 것만(RLS).
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자·연계 담당(WEB). 홈 카드 "연계 실패" 를 봤을 때, ERP·프린터가 멈췄다 돌아온 뒤.
+  직접 치는 값 = 업무 키 앞부분, 종결 사유. 재시도(SAVE)·수동 종결(FN1)은 실패(FAIL)만 — 서버가 상태를 다시 본다(이미 처리면 409).
+  요청 본문은 사람 정보 키를 가려 보인다(DB 원문은 그대로). 응답은 저장하지 않는다(Q-O1). 엑셀 없음.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/sys-outbox.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">연계 현황</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="srm-notify" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <div data-hb="dateRange" th:data-label="#{sysOutbox.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,yesterday,last7,last30,thisMonth" data-default="last7" data-max="today" data-max-days="92"></div>
+    <label><span th:text="#{sysOutbox.col.topic}">주제</span>
+        <select name="topic" id="topicSel"><option value="" th:text="#{common.all}">전체</option></select></label>
+    <label><span th:text="#{sysOutbox.col.status}">상태</span>
+        <select name="status" data-help-key="sys-outbox.status">
+            <option value="" th:text="#{common.all}">전체</option>
+            <option value="FAIL" th:text="#{outboxStatus.FAIL}">실패</option>
+            <option value="NEW" th:text="#{outboxStatus.NEW}">대기</option>
+            <option value="SENDING" th:text="#{outboxStatus.SENDING}">보내는 중</option>
+            <option value="SENT" th:text="#{outboxStatus.SENT}">보냄</option>
+            <option value="CANCELED" th:text="#{outboxStatus.CANCELED}">취소</option>
+            <option value="CLOSED_MANUAL" th:text="#{outboxStatus.CLOSED_MANUAL}">수동 종결</option>
+        </select></label>
+    <label><span th:text="#{sysOutbox.col.bizKey}">업무 키</span>
+        <input name="bizKey" maxlength="100" spellcheck="false" data-help-key="sys-outbox.bizKey"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div id="outboxGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            <button type="button" id="retryBtn" hidden th:if="${actions.contains('SAVE')}" data-help-key="sys-outbox.retry"
+                    th:text="#{sysOutbox.retry}">재시도</button>
+            <button type="button" id="printJobBtn" class="hb-btn-secondary" hidden th:text="#{sysOutbox.openPrintJobs}">인쇄 이력 열기</button>
+        </div>
+        <p id="detailHead" class="hb-muted" th:text="#{sysOutbox.pick}">왼쪽에서 행을 고르세요.</p>
+        <div id="detailBody" hidden>
+            <dl class="hb-info">
+                <dt th:text="#{sysOutbox.col.status}">상태</dt><dd id="dStatus"></dd>
+                <dt th:text="#{sysOutbox.col.topic}">주제</dt><dd id="dTopic"></dd>
+                <dt th:text="#{sysOutbox.col.bizKey}">업무 키</dt><dd id="dBizKey"></dd>
+                <dt th:text="#{sysOutbox.messageId}">메시지 ID</dt><dd id="dMessageId"></dd>
+                <dt th:text="#{sysOutbox.col.createdAt}">만든 시각</dt><dd id="dCreated"></dd>
+                <dt th:text="#{sysOutbox.col.tries}">시도</dt><dd id="dTries"></dd>
+                <dt th:text="#{sysOutbox.col.nextRetryAt}">다음 시도</dt><dd id="dNext"></dd>
+                <dt th:text="#{sysOutbox.col.sentAt}">보낸 시각</dt><dd id="dSent"></dd>
+                <dt th:text="#{sysOutbox.retried}">재시도</dt><dd id="dRetried"></dd>
+                <dt th:text="#{sysOutbox.closed}">수동 종결</dt><dd id="dClosed"></dd>
+            </dl>
+            <h3 th:text="#{sysOutbox.col.lastError}">마지막 오류</h3>
+            <pre id="dError" class="hb-ob-pre"></pre>
+            <h3 th:text="#{sysOutbox.payload}">요청 내용</h3>
+            <p class="hb-muted" th:text="#{sysOutbox.payloadNote}">사람 정보(이름·연락처·주소·메일)는 가려 보입니다. 응답은 저장하지 않습니다.</p>
+            <pre id="dPayload" class="hb-ob-pre"></pre>
+
+            <div id="closeBox" class="hb-ob-close" hidden th:if="${actions.contains('FN1')}">
+                <h3 th:text="#{sysOutbox.close}">수동 종결</h3>
+                <p class="hb-muted" id="closeNote"></p>
+                <label><span th:text="#{sysOutbox.closeReason}">종결 사유</span>
+                    <textarea id="closeReason" rows="3" maxlength="500" data-help-key="sys-outbox.closeReason"></textarea></label>
+                <div id="lineTools" class="hb-ob-lines" hidden>
+                    <label><span th:text="#{sysOutbox.lineUser}">결재자</span><select id="lineUser"></select></label>
+                    <label><span th:text="#{sysOutbox.lineType}">종류</span>
+                        <select id="lineType">
+                            <option value="APPROVE" th:text="#{js.sysOutbox.line.APPROVE}">결재</option>
+                            <option value="AGREE" th:text="#{js.sysOutbox.line.AGREE}">합의</option>
+                            <option value="REF" th:text="#{js.sysOutbox.line.REF}">참조</option>
+                        </select></label>
+                    <button type="button" id="addLineBtn" class="hb-btn-secondary" th:text="#{sysOutbox.addLine}">결재선 추가</button>
+                    <table class="hb-cmp-table" id="lineTable"><tbody></tbody></table>
+                </div>
+                <div class="hb-toolbar">
+                    <button type="button" id="closeBtn" class="hb-btn-danger-outline" th:text="#{sysOutbox.closeBtn}">종결</button>
+                </div>
+            </div>
+        </div>
+    </aside>
+</div>
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.text.js}"></script>
+<script th:src="@{/js/common/hb.dialog.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/outbox-mgt.js}"></script>
+</body>
+</html>

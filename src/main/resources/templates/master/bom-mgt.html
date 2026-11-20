@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  BOM 관리 (mst-bom) — P1 3a (docs/18 B1~B8). 목록 = BOM 머리(모품목 × 리비전), 상세 = 머리 폼 + 구성 행 폼 목록(B4).
+  사용성 체크(docs/11 4.3): 주 사용자 = 생산기술·생산관리 담당(WEB, 마우스·키보드). 처음 이관은 엑셀 올리기,
+  일상 변경은 "새 리비전 → 바뀐 행만 수정 → 확정"(docs/18 §10.1).
+  직접 치는 값 = 모품목·자품목 코드·소요량·단위·손실률·대체 그룹(설계·공정 정보라 서버가 채울 수 없음).
+  서버가 채우는 값 = 리비전(비우면 A0, A1 …), 시작일(비우면 오늘), 단위(비우면 자품목 기본 단위), 투입 방식(LOT 관리면 출고 지시).
+  예외 = 확정본 수정(새 리비전으로), 순환(행 오류), 같은 날 겹치는 확정본(오류), 환산 없는 단위(확정 거부).
+  버튼 노출은 편의, 판정은 API 의 @ProgAuth (확정 = APPROVE, 폐기 = DELETE).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">BOM 관리</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="mst-bom-tree,mst-bom-where,mst-bom-replace" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{mstBom.col.itemCd}">모품목 코드</span>
+        <input name="itemCd" maxlength="40" data-help-key="mst-bom.searchItemCd"></label>
+    <label><span th:text="#{mstBom.col.itemNm}">모품목명</span>
+        <input name="itemNm" maxlength="200"></label>
+    <label><span th:text="#{mstBom.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="BOM_STATUS" data-blank="all"></select></label>
+    <label class="hb-check"><input type="checkbox" name="withObsolete" value="true">
+        <span th:text="#{mstBom.withObsolete}">폐기 포함</span></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:text="#{import.button}">엑셀 올리기</button>
+        </div>
+        <div id="bomGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="releaseBtn" th:if="${actions.contains('APPROVE')}" th:text="#{mstBom.release}">확정</button>
+            <button type="button" id="newRevBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{mstBom.newRev}">새 리비전</button>
+            <button type="button" id="compareBtn" class="hb-btn-secondary" th:text="#{mstBom.compare}">비교</button>
+            <button type="button" id="copyBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{mstBom.copy}">다른 품목으로 복사</button>
+            <button type="button" id="toTreeBtn" class="hb-btn-secondary" hidden th:title="#{bomUi.toTree.mgtHint}" th:text="#{bomUi.toTree}">전개</button>
+            <button type="button" id="toWhereBtn" class="hb-btn-secondary" hidden th:title="#{bomUi.toWhere.mgtHint}" th:text="#{bomUi.toWhere}">역전개</button>
+            <div class="hb-danger-zone">
+                <button type="button" id="obsoleteBtn" class="hb-btn-danger-outline" th:if="${actions.contains('DELETE')}" th:text="#{mstBom.obsolete}">폐기</button>
+            </div>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{mstBom.selectOrNew}">왼쪽에서 BOM 을 고르거나 신규를 누르세요.</p>
+
+        <form id="bomForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{mstBom.col.itemCd}">모품목 코드</span>
+                <input data-field="itemCd" maxlength="40" required data-help-key="mst-bom.itemCd"></label>
+            <label class="hb-wide-2"><span th:text="#{mstBom.col.itemNm}">모품목명</span>
+                <output id="itemNm" class="hb-output"></output></label>
+            <label><span th:text="#{mstBom.col.rev}">리비전</span>
+                <input data-field="rev" maxlength="4" data-help-key="mst-bom.rev"></label>
+            <label><span th:text="#{mstBom.col.status}">상태</span>
+                <output id="status" class="hb-output"></output></label>
+            <label><span th:text="#{mstBom.col.baseQty}">기준 수량</span>
+                <input data-field="baseQty" data-hb="number" data-scale="6" data-pad="false" data-min="0.000001"
+                       data-max="999999999999.999999" data-help-key="mst-bom.baseQty"></label>
+            <label><span th:text="#{mstBom.col.validFrom}">시작일</span>
+                <input data-field="validFrom" type="date" data-help-key="mst-bom.validFrom"></label>
+            <label><span th:text="#{mstBom.col.validTo}">종료일</span>
+                <output id="validTo" class="hb-output"></output></label>
+            <label><span th:text="#{mstBom.col.changeNo}">변경 번호</span>
+                <input data-field="changeNo" maxlength="30"></label>
+            <label class="hb-wide"><span th:text="#{mstBom.col.changeReason}">변경 사유</span>
+                <input data-field="changeReason" maxlength="500"></label>
+            <label class="hb-wide"><span th:text="#{mstBom.col.remark}">비고</span>
+                <textarea data-field="remark" maxlength="1000" rows="2"></textarea></label>
+        </form>
+
+        <section class="hb-sub" id="lineSection" hidden>
+            <h2 th:text="#{mstBom.lines}">구성 행</h2>
+            <p class="hb-muted" id="lineHint" th:text="#{mstBom.linesHint}">소요량은 모품목 기준 수량만큼 만들 때의 양입니다.</p>
+            <div id="lines" class="hb-rows hb-bom-lines" role="list"></div>
+            <div class="hb-toolbar" id="lineTools" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="addLineBtn" class="hb-btn-secondary" th:text="#{mstBom.addLine}">행 추가</button>
+                <button type="button" id="saveLinesBtn" th:text="#{mstBom.saveLines}">행 저장</button>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/master/bom-ui.js}"></script>
+<script th:src="@{/js/views/master/bom-mgt.js}"></script>
+</body>
+</html>

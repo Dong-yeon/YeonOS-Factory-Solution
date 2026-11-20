@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 특성 마스터·불량 유형·용어 사전 (P1 6단계, docs/21). 특성 목록·건수·엑셀은 같은 조건·정렬 조각 -->
+<mapper namespace="io.smarthappy.module.master.quality.QualityMapper">
+
+    <!-- ================================================================ 특성 -->
+
+    <sql id="charCols">
+        c.char_id, c.char_type, c.item_id, i.item_cd, i.item_nm, c.proc_id, p.proc_cd, p.proc_nm, c.char_no, c.char_nm,
+        c.data_type, c.unit_cd, c.unit_nm, c.scale, c.nominal, c.lsl, c.usl, c.special_cls, c.source, c.drawing_no, c.drawing_rev,
+        c.sort_no, c.use_yn, c.remark, c.row_ver, c.updated_at, c.updated_by
+    </sql>
+
+    <sql id="charFrom">
+        from qms_char c
+        left join mst_item i on i.item_id = c.item_id
+        left join mst_proc p on p.proc_id = c.proc_id
+    </sql>
+
+    <sql id="charWhere">
+        <include refid="charFrom"/>
+        <where>
+            <if test="q.itemCdLike != null">and i.item_cd like #{q.itemCdLike} escape '\'</if>
+            <if test="q.keywordLike != null">and (c.char_nm ilike #{q.keywordLike} escape '\' or i.item_nm ilike #{q.keywordLike} escape '\'
+                or c.char_no ilike #{q.keywordLike} escape '\')</if>
+            <if test="q.procId != null">and c.proc_id = #{q.procId}</if>
+            <if test="q.charType != null">and c.char_type = #{q.charType}</if>
+            <if test="q.specialCls != null">and c.special_cls = #{q.specialCls}</if>
+            <if test="!q.withUnused">and c.use_yn = 'Y'</if>
+        </where>
+    </sql>
+
+    <sql id="charOrder">
+        order by
+        <foreach collection="q.page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ITEM_CD'">coalesce(i.item_cd, '')</when>
+                <when test="s.key == 'CHAR_NO'">c.sort_no, c.char_no</when>
+                <when test="s.key == 'CHAR_NM'">c.char_nm</when>
+                <when test="s.key == 'SPECIAL_CLS'">c.special_cls</when>
+                <otherwise>c.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        c.char_id
+    </sql>
+
+    <select id="findChars" resultType="io.smarthappy.module.master.quality.QualityDtos$CharRow">
+        select <include refid="charCols"/> <include refid="charWhere"/> <include refid="charOrder"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="countChars" resultType="long">
+        select count(*) <include refid="charWhere"/>
+    </select>
+
+    <select id="cursorChars" resultType="io.smarthappy.module.master.quality.QualityDtos$CharRow" fetchSize="1000">
+        select <include refid="charCols"/> <include refid="charWhere"/> <include refid="charOrder"/>
+    </select>
+
+    <select id="findChar" resultType="io.smarthappy.module.master.quality.QualityDtos$CharRow">
+        select <include refid="charCols"/> <include refid="charFrom"/> where c.char_id = #{id}
+    </select>
+
+    <select id="insertChar" resultType="long" flushCache="true">
+        insert into qms_char (comp_cd, char_type, item_id, proc_id, char_no, char_nm, data_type, unit_cd, unit_nm, scale, nominal, lsl,
+                              usl, special_cls, source, drawing_no, drawing_rev, sort_no, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.charType}, #{f.itemId}, #{f.procId}, #{f.charNo}, #{f.charNm}, #{f.dataType},
+                #{f.unitCd}, #{f.unitNm}, #{f.scale}, #{f.nominal}, #{f.lsl}, #{f.usl}, #{f.specialCls}, #{f.source}, #{f.drawingNo},
+                #{f.drawingRev}, #{f.sortNo}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning char_id
+    </select>
+
+    <!-- 유형·품목은 바꾸지 않는다(다른 특성이 됨) -->
+    <update id="updateChar">
+        update qms_char
+           set proc_id = #{f.procId}, char_no = #{f.charNo}, char_nm = #{f.charNm}, data_type = #{f.dataType},
+               unit_cd = #{f.unitCd}, unit_nm = #{f.unitNm}, scale = #{f.scale}, nominal = #{f.nominal}, lsl = #{f.lsl}, usl = #{f.usl},
+               special_cls = #{f.specialCls}, source = #{f.source}, drawing_no = #{f.drawingNo}, drawing_rev = #{f.drawingRev},
+               sort_no = #{f.sortNo}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where char_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <select id="findItemByCd" resultType="io.smarthappy.module.master.quality.QualityDtos$ItemLookup">
+        select item_id, item_cd, item_nm, spec, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="findProcByCd" resultType="io.smarthappy.module.master.quality.QualityDtos$ProcLookup">
+        select proc_id, proc_cd, proc_nm, use_yn from mst_proc where proc_cd = #{procCd}
+    </select>
+
+    <select id="findProcs" resultType="io.smarthappy.module.master.quality.QualityDtos$ProcLookup">
+        select proc_id, proc_cd, proc_nm, use_yn from mst_proc where use_yn = 'Y' order by sort_no, proc_cd
+    </select>
+
+    <select id="codeUsable" resultType="boolean">
+        select exists (select 1 from sys_code where grp_cd = #{grp} and code = #{code} and use_yn = 'Y')
+            or exists (select 1 from sys_comp_code where grp_cd = #{grp} and code = #{code} and use_yn = 'Y')
+    </select>
+
+    <!-- ================================================================ 불량 유형 -->
+
+    <sql id="defectCols">defect_id, defect_cd, defect_nm, cat_cd, sort_no, use_yn, remark, row_ver, updated_at, updated_by</sql>
+
+    <!-- 표준 상위 순서(DEFECT_CAT sort_no) → 회사 순서 -->
+    <select id="findDefects" resultType="io.smarthappy.module.master.quality.QualityDtos$DefectRow">
+        select <include refid="defectCols"/> from qms_defect d
+        <where><if test="useYn != null">d.use_yn = #{useYn}</if></where>
+        order by (select k.sort_no from sys_code k where k.grp_cd = 'DEFECT_CAT' and k.code = d.cat_cd), d.sort_no, d.defect_cd
+    </select>
+
+    <!-- 그리드(UI 단계 3 ①): 기존 목록과 같은 조건 + 빠른 찾기(코드·이름). 정렬 허용 열은 DefectSort, 끝 키 defect_id -->
+    <sql id="defectGridWhere">
+        from qms_defect d
+        <where>
+            <if test="useYn != null">and d.use_yn = #{useYn}</if>
+            <if test="kw != null">and (d.defect_cd ilike #{kw} escape '\' or d.defect_nm ilike #{kw} escape '\')</if>
+        </where>
+    </sql>
+
+    <select id="findDefectPage" resultType="io.smarthappy.module.master.quality.QualityDtos$DefectRow">
+        select <include refid="defectCols"/> <include refid="defectGridWhere"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CAT'">(select k.sort_no from sys_code k where k.grp_cd = 'DEFECT_CAT' and k.code = d.cat_cd)</when>
+                <when test="s.key == 'DEFECT_CD'">d.defect_cd</when>
+                <when test="s.key == 'DEFECT_NM'">d.defect_nm</when>
+                <when test="s.key == 'SORT_NO'">d.sort_no</when>
+                <otherwise>d.updated_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        d.defect_id
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countDefects" resultType="long">
+        select count(*) <include refid="defectGridWhere"/>
+    </select>
+
+    <select id="findDefect" resultType="io.smarthappy.module.master.quality.QualityDtos$DefectRow">
+        select <include refid="defectCols"/> from qms_defect where defect_id = #{id}
+    </select>
+
+    <select id="insertDefect" resultType="long" flushCache="true">
+        insert into qms_defect (comp_cd, defect_cd, defect_nm, cat_cd, sort_no, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{f.defectCd}, #{f.defectNm}, #{f.catCd}, #{f.sortNo}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning defect_id
+    </select>
+
+    <update id="updateDefect">
+        update qms_defect
+           set defect_nm = #{f.defectNm}, cat_cd = #{f.catCd}, sort_no = #{f.sortNo}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where defect_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 용어 사전 -->
+
+    <select id="findTerms" resultType="io.smarthappy.module.master.quality.QualityDtos$TermRow">
+        select t.term_cd, t.category, t.term_ko, t.term_en, t.def_ko, t.def_en,
+               (select count(*) from mst_term_alias a where a.term_cd = t.term_cd and a.use_yn = 'Y') as alias_cnt
+          from sys_term t
+         order by t.sort_no, t.term_cd
+    </select>
+
+    <!-- 용어 그리드: 전역 sys_term + 이 회사 동의어 수(RLS). 빠른 찾기 = 코드·한글·영문·이 회사 사용 중 동의어. 끝 키 term_cd -->
+    <sql id="termGridWhere">
+        from sys_term t
+        <where>
+            <if test="kw != null">and (t.term_cd ilike #{kw} escape '\' or t.term_ko ilike #{kw} escape '\' or t.term_en ilike #{kw} escape '\'
+                or exists (select 1 from mst_term_alias a where a.term_cd = t.term_cd and a.use_yn = 'Y' and a.alias ilike #{kw} escape '\'))</if>
+        </where>
+    </sql>
+
+    <select id="findTermPage" resultType="io.smarthappy.module.master.quality.QualityDtos$TermRow">
+        select t.term_cd, t.category, t.term_ko, t.term_en, t.def_ko, t.def_en,
+               (select count(*) from mst_term_alias a where a.term_cd = t.term_cd and a.use_yn = 'Y') as alias_cnt
+        <include refid="termGridWhere"/>
+        order by
+        <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CATEGORY'">t.category</when>
+                <when test="s.key == 'TERM_CD'">t.term_cd</when>
+                <when test="s.key == 'TERM_KO'">t.term_ko</when>
+                <when test="s.key == 'TERM_EN'">t.term_en</when>
+                <when test="s.key == 'ALIAS_CNT'">alias_cnt</when>
+                <otherwise>t.sort_no</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+        </foreach>
+        t.term_cd
+        limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countTerms" resultType="long">
+        select count(*) <include refid="termGridWhere"/>
+    </select>
+
+    <select id="termExists" resultType="boolean">
+        select exists (select 1 from sys_term where term_cd = #{termCd})
+    </select>
+
+    <sql id="aliasCols">alias_id, term_cd, alias, lang, use_yn, row_ver, updated_at, updated_by</sql>
+
+    <select id="findAliases" resultType="io.smarthappy.module.master.quality.QualityDtos$AliasRow">
+        select <include refid="aliasCols"/> from mst_term_alias where term_cd = #{termCd} order by use_yn desc, alias
+    </select>
+
+    <select id="findAlias" resultType="io.smarthappy.module.master.quality.QualityDtos$AliasRow">
+        select <include refid="aliasCols"/> from mst_term_alias where alias_id = #{id}
+    </select>
+
+    <select id="insertAlias" resultType="long" flushCache="true">
+        insert into mst_term_alias (comp_cd, term_cd, alias, lang, use_yn, created_by, updated_by)
+        values (hb_current_comp(), #{f.termCd}, #{f.alias}, #{f.lang}, #{f.useYn}, #{by}, #{by})
+        returning alias_id
+    </select>
+
+    <update id="updateAlias">
+        update mst_term_alias
+           set alias = #{f.alias}, lang = #{f.lang}, use_yn = #{f.useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where alias_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+</mapper>

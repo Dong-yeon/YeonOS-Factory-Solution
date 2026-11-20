@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  현장 단말(POP) 진입 (prd-pop) — docs/36 21장. 사무 메뉴에서 공정 단말 화면(/pop)으로 들어가는 안내 화면.
+  창고 단말(wms-pda, wms/pda-entry.html)과 JS(views/production/terminal-entry.js)를 같이 쓴다 — 다른 것은 data-kind 뿐.
+  사용성 체크(docs/11 4.3): 주 사용자 = 현장 반장·관리자(WEB, 태블릿 브라우저에서 메뉴로 들어온 경우 포함). 직접 치는 칸 없음.
+  POP 보안 분리(docs/25 4.6) 유지 — 이 화면은 단말 로그인을 대신하지 않는다. 단말 화면은 새 탭에서 등록 단말 쿠키 + 작업자 배지로.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}"
+      data-kind="pop">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">현장 단말(POP)</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<section class="hb-narrow">
+    <p th:text="#{termEntry.pop.intro}">작업장 태블릿에서 쓰는 공정 단말 화면(작업 시작·실적·투입·고장 신고)을 새 탭으로 엽니다.</p>
+    <p class="hb-msg" id="deviceState" role="status" th:text="#{termEntry.checking}">이 기기 상태를 확인하는 중…</p>
+    <div class="hb-toolbar">
+        <button type="button" id="openBtn" th:text="#{termEntry.pop.open}">단말 화면 열기</button>
+        <button type="button" id="activateBtn" class="hb-btn-secondary" th:text="#{termEntry.activate}" hidden>이 기기 등록</button>
+    </div>
+
+    <section class="hb-section">
+        <h2 th:text="#{termEntry.howTo}">처음 쓰는 기기라면</h2>
+        <ol>
+            <li th:text="#{termEntry.pop.step1}">관리자가 "POP 단말 관리" 에서 이 작업장 단말을 등록하고 등록 코드(24시간)를 받습니다.</li>
+            <li th:text="#{termEntry.step2}">이 기기에서 [이 기기 등록] 을 눌러 회사 코드와 등록 코드를 넣습니다. 등록하면 이 브라우저의 사무 로그인이 끝납니다.</li>
+            <li th:text="#{termEntry.step3}">등록되면 [단말 화면 열기] 로 들어가 작업자 배지를 찍습니다(사무 로그인과 따로).</li>
+        </ol>
+    </section>
+
+    <section class="hb-section" id="linkBox" hidden>
+        <h2 th:text="#{termEntry.links}">관리 화면</h2>
+        <ul>
+            <li id="terminalMgtItem" hidden><a th:href="@{/page/sys-terminal}" th:text="#{prog.sysTerminal}">POP 단말 관리</a></li>
+            <li id="pdaAppItem" hidden><a th:href="@{/page/sys-pda-app}" th:text="#{prog.sysPdaApp}">현장 단말 앱</a></li>
+        </ul>
+    </section>
+</section>
+
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/production/terminal-entry.js}"></script>
+</body>
+</html>

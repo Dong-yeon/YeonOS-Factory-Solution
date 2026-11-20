@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 부족 → 구매 요청 (docs/38 17.4). 회사 조건은 RLS. APS 는 aps_plan_pr 에만 쓴다 — srm_* 는 읽기만 -->
+<mapper namespace="io.smarthappy.module.aps.ApsPrMapper">
+
+    <select id="findPlan" resultType="io.smarthappy.module.aps.ApsPrDtos$PlanHead" flushCache="true" useCache="false">
+        select plan_id, plan_no, plant_cd, status, time_zone, purged_at is not null as purged
+          from aps_plan where plan_id = #{id}
+    </select>
+
+    <select id="lockPlan" resultType="string" flushCache="true" useCache="false">
+        select status from aps_plan where plan_id = #{id} for update
+    </select>
+
+    <!--
+      고른 자재 줄 — 이 계획의 것만(다른 계획·회사 id 는 안 나온다).
+      linked = 살아 있는 연결: 요청이 취소·반려가 아니고 요청 줄이 아직 있음(작성 중 줄 삭제·취소된 요청은 다시 만들 수 있다)
+    -->
+    <select id="findMats" resultType="io.smarthappy.module.aps.ApsPrDtos$MatSrc" flushCache="true" useCache="false">
+        select m.plan_mat_id, m.wo_id, x.wo_no, m.op_seq, m.item_id, i.item_cd, i.item_nm, i.proc_type, i.use_yn as item_use_yn,
+               m.unit_cd, m.short_qty, m.need_at,
+               exists (select 1 from aps_plan_pr k join srm_pr r on r.pr_id = k.pr_id
+                        where k.plan_mat_id = m.plan_mat_id and r.status not in ('CANCELLED', 'REJECTED')
+                          and exists (select 1 from srm_pr_line l where l.pr_line_id = k.pr_line_id)) as linked
+          from aps_plan_mat m
+          join aps_plan_wo x on x.plan_wo_id = m.plan_wo_id
+          join mst_item i on i.item_id = m.item_id
+         where m.plan_id = #{planId}
+           and m.plan_mat_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by i.item_cd, m.need_at nulls last, m.plan_mat_id
+    </select>
+
+    <!-- 품목마다 주 공급원: 사용 중, 협력사 거래 BLOCKED 아님, 우선순위 → 거래처 코드 순 첫 행 -->
+    <select id="findSources" resultType="io.smarthappy.module.aps.ApsPrDtos$SourceSrc">
+        select distinct on (s.item_id) s.item_id, s.cust_id, c.cust_cd, c.cust_nm, s.lead_days, s.moq, s.order_mult
+          from srm_source s
+          join srm_supplier p on p.cust_id = s.cust_id
+          join mst_cust c on c.cust_id = s.cust_id
+         where s.use_yn = 'Y' and p.trade_status &lt;&gt; 'BLOCKED'
+           and s.item_id in <foreach collection="itemIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by s.item_id, s.priority, c.cust_cd
+    </select>
+
+    <select id="findPrLines" resultType="io.smarthappy.module.aps.ApsPrDtos$PrLineRef" flushCache="true" useCache="false">
+        select pr_line_id, item_id, line_no from srm_pr_line where pr_id = #{prId} order by line_no
+    </select>
+
+    <select id="findPrNo" resultType="string" flushCache="true" useCache="false">
+        select pr_no from srm_pr where pr_id = #{prId}
+    </select>
+
+    <insert id="insertLinks">
+        insert into aps_plan_pr (comp_cd, plan_id, plan_mat_id, wo_id, op_seq, item_id, short_qty, pr_id, pr_line_id, created_by)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{planId}, #{r.planMatId}, #{r.woId}, #{r.opSeq}, #{r.itemId}, #{r.shortQty}, #{prId}, #{r.prLineId}, #{by})
+        </foreach>
+    </insert>
+</mapper>

@@ -1,0 +1,133 @@
+# YeonOS 공개 데모 (docs/23). VM 의 /opt/yeonos 에서 실행한다 — 값은 같은 폴더 .env(커밋 금지, .env.example 참고)
+#   docker compose run --rm migrate   스키마 적용(소유자 계정, 끝나면 종료)
+#   docker compose up -d              DB·앱·Caddy
+#
+# 이미지는 태그 + 다이제스트로 고정한다(docs/67 F10 — Actions 를 SHA 로 고정하는 것과 같은 결, ImagePinGuardTest).
+# 올릴 때: `docker buildx imagetools inspect <이미지>:<태그>` 의 Digest(여러 아키텍처 목록의 다이제스트)로 바꾸고 데모에서 확인.
+# PostgreSQL 보안 마이너는 30일 안에 반영(docs/05 4.9).
+name: yeonos-demo
+
+# 모든 컨테이너 공통: 권한 상승 금지 + 기본 권한(capability) 전부 뺀 뒤 필요한 것만
+x-hardening: &hardening
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
+x-app: &app
+  <<: *hardening
+  build: .
+  image: yeonos-demo:current
+  # 앱은 비루트(uid 10001)라 권한이 하나도 필요 없다. 루트 파일 시스템은 읽기 전용, 쓰기는 /data(볼륨)와 /tmp(메모리)만
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+  environment: &app-env
+    DB_URL: jdbc:postgresql://db:5432/yeonos
+    TZ: UTC
+
+services:
+  db:
+    <<: *hardening
+    image: postgres:16-alpine@sha256:81e77a4833487b8132fe4b00bedd39dc3f74b8641e387f19312a48f7de218c2e
+    # 공식 이미지 entrypoint 가 데이터 폴더 소유자를 맞추고 postgres 사용자로 내려간다(su-exec) — 그 몫만
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_SUPERUSER_PASSWORD:?}
+      DB_OWNER_PASSWORD: ${DB_OWNER_PASSWORD:?}
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?}
+      DB_BACKUP_PASSWORD: ${DB_BACKUP_PASSWORD:?}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+      - ./init-roles.sql:/init-roles.sql:ro
+    networks: [internal]
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d yeonos"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # 마이그레이션 전용 실행 — 소유자 자격증명은 이 컨테이너에만 (01 7.1)
+  migrate:
+    <<: *app
+    profiles: [tools]
+    command: ["--spring.profiles.active=migrate"]
+    environment:
+      <<: *app-env
+      DB_OWNER_USER: yeonos_owner
+      DB_OWNER_PASSWORD: ${DB_OWNER_PASSWORD:?}
+      # 루트 파일 시스템이 읽기 전용이라 기본 위치(./data = /app/data)에 폴더를 못 만든다 — 마이그레이션은 파일을 쓰지 않으니 메모리 쪽으로
+      FILE_ROOT: /tmp/files
+      STATUS_FILE: /tmp/status.json
+      BACKUP_STATUS_DIR: /tmp/backup-status
+      PDA_APK_DIR: /tmp/pda
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [internal]
+
+  app:
+    <<: *app
+    restart: unless-stopped
+    command: ["--spring.profiles.active=prod,demo"]
+    environment:
+      <<: *app-env
+      DB_APP_USER: yeonos_app
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?}
+      DB_POOL_SIZE: "5"
+      DEMO_PASSWORD: ${DEMO_PASSWORD:?}
+      # 관리자 MFA 비밀 봉인 키(Base64 32바이트) — 없으면 운영 기동 가드가 기동을 멈춘다(docs/36 14.4.1 #3, docs/67 F4).
+      # 운영자 콘솔 키(OPS_SECRET_KEY)는 데모에 주지 않는다 — 콘솔을 쓰지 않으니 키도 나누지 않는다
+      MFA_SECRET_KEY: ${MFA_SECRET_KEY:?MFA_SECRET_KEY 를 .env 에 넣으세요(openssl rand -base64 32, 한 번만 만들고 바꾸지 않기)}
+      # Caddy 만 프록시로 믿는다 (E6) — 아래 고정 IP
+      TRUSTED_PROXIES: 172.30.0.10/32
+      FILE_ROOT: /data/files
+      STATUS_FILE: /data/status.json
+      BACKUP_STATUS_DIR: /data/backup-status
+      PDA_APK_DIR: /data/pda   # 기본값 ./data/pda 는 읽기 전용 루트(/app) 안이라 볼륨으로
+    volumes:
+      - app-data:/data
+    depends_on:
+      db: { condition: service_healthy }
+    networks:
+      internal:
+        ipv4_address: 172.30.0.20
+    ports:
+      - "127.0.0.1:8090:8090"   # VM 안에서만(배포 스크립트의 readiness 확인용)
+    mem_limit: 900m
+
+  caddy:
+    <<: *hardening
+    image: caddy:2@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c
+    cap_add: [NET_BIND_SERVICE]   # 80·443 열기만
+    read_only: true
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      internal:
+        ipv4_address: 172.30.0.10
+    mem_limit: 128m
+
+networks:
+  internal:
+    ipam:
+      config:
+        # 고정 IP(.10 Caddy · .20 앱)는 아래 동적 범위 밖에 둔다 — Docker 는 동적 IP 를 돌려 가며 주므로,
+        # 매일 초기화로 db·migrate 가 여러 번 만들어지면 언젠가 고정 IP 와 겹쳐 기동이 실패한다
+        - subnet: 172.30.0.0/24
+          ip_range: 172.30.0.128/25
+
+volumes:
+  db-data:
+  app-data:
+  caddy-data:
+  caddy-config:

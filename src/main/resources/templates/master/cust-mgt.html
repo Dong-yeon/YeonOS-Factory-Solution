@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  거래처관리 (mst-cust) — P0 8단계 표준 참조 화면.
+  사용성 체크(docs/11 4.3): 주 사용자 = 사무실 구매·영업 담당(WEB, 마우스·키보드).
+  직접 치는 값 = 코드·이름·구분·사업자번호·연락처(외부 정보라 서버가 채울 수 없음). 회사·작성자·일시는 서버가.
+  예외 = 거래 중단(사용 안 함 — 삭제 아님), 같은 이름 다른 코드(코드로 구분), 사업자번호 없음(해외·개인).
+  버튼 노출은 편의, 판정은 API 의 @ProgAuth.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">거래처관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<!-- 조회 조건 = hb.searchPanel (docs/16 6.6): 라벨 왼쪽 인라인(I11), Enter = 조회, 첫 조건 자동 포커스는 처음 열 때만(I12) -->
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{mstCust.col.custCd}">거래처코드</span>
+        <input name="custCd" maxlength="30" data-help-key="mst-cust.searchCustCd"></label>
+    <label><span th:text="#{mstCust.col.custNm}">거래처명</span>
+        <input name="custNm" maxlength="200" data-help-key="mst-cust.searchCustNm"></label>
+    <label><span th:text="#{mstCust.col.custType}">구분</span>
+        <select name="custType" data-hb="select" data-code="CUST_TYPE" data-blank="all"></select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{mstCust.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y" checked><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <!-- 작업 영역이 좁아 상세가 서랍일 때만 보이는 신규 버튼 (docs/15 R3) -->
+        <!-- 목록 도구: 엑셀 올리기(P1 2단계) · 서랍 모드 신규(docs/15 R3) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:text="#{common.new}">신규</button>
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:text="#{import.button}">엑셀 올리기</button>
+        </div>
+        <div id="custGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <div class="hb-danger-zone">
+                <button type="button" id="disableBtn" class="hb-btn-danger-outline" th:if="${actions.contains('DELETE')}" th:text="#{mstCust.disable}">사용 중지</button>
+            </div>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{mstCust.selectOrNew}">왼쪽에서 거래처를 고르거나 신규를 누르세요.</p>
+
+        <form id="custForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{mstCust.col.custCd}">거래처코드</span>
+                <input data-field="custCd" maxlength="30" required data-help-key="mst-cust.custCd"></label>
+            <label><span th:text="#{mstCust.col.custNm}">거래처명</span>
+                <input data-field="custNm" maxlength="200" required data-help-key="mst-cust.custNm"></label>
+            <label><span th:text="#{mstCust.col.custType}">구분</span>
+                <select data-field="custType" data-hb="select" data-code="CUST_TYPE" data-help-key="mst-cust.custType"></select></label>
+            <label><span th:text="#{mstCust.col.bizNo}">사업자번호</span>
+                <input data-field="bizNo" maxlength="12" inputmode="numeric" data-help-key="mst-cust.bizNo"></label>
+            <label><span th:text="#{mstCust.col.ceoNm}">대표자</span>
+                <input data-field="ceoNm" maxlength="100"></label>
+            <label><span th:text="#{mstCust.col.tel}">전화</span>
+                <input data-field="tel" maxlength="30" inputmode="tel"></label>
+            <label><span th:text="#{mstCust.col.email}">메일</span>
+                <input data-field="email" maxlength="200" type="email"></label>
+            <label class="hb-wide"><span th:text="#{mstCust.col.addr}">주소</span>
+                <input data-field="addr" maxlength="500"></label>
+            <label class="hb-wide"><span th:text="#{mstCust.col.remark}">비고</span>
+                <textarea data-field="remark" maxlength="1000" rows="2"></textarea></label>
+            <label><span th:text="#{mstCust.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+        </form>
+
+        <section class="hb-sub" id="contactSection" hidden>
+            <h2 th:text="#{mstCust.contacts}">담당자</h2>
+            <div id="contacts" class="hb-rows"></div>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="addContactBtn" class="hb-btn-secondary" th:text="#{mstCust.addContact}">담당자 추가</button>
+                <button type="button" id="saveContactsBtn" th:text="#{mstCust.saveContacts}">담당자 저장</button>
+            </div>
+        </section>
+
+        <section class="hb-sub" id="fileSection" hidden>
+            <h2 th:text="#{mstCust.files}">첨부</h2>
+            <ul id="files" class="hb-files"></ul>
+            <input type="file" id="fileInput" th:if="${actions.contains('SAVE')}" th:aria-label="#{mstCust.files}">
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/master/cust-mgt.js}"></script>
+</body>
+</html>

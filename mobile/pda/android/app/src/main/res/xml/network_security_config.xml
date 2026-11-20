@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  https 만(docs/50 S3). 사내 인증서(사설 CA)를 단말에 사용자 인증서로 깐 경우를 위해 사용자 CA 도 믿는다(S6).
+  서버 주소는 첫 실행 때 정해져 도메인별 설정을 미리 쓸 수 없다 — 앱이 여는 곳은 저장한 서버 하나뿐(MainActivity allowNavigation).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

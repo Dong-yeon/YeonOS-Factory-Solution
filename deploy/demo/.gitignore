@@ -1,0 +1,5 @@
+# VM 에서 배포 때 채워지는 파일 — 커밋하지 않는다
+.env
+smarthappy.jar
+init-roles.sql
+*.log

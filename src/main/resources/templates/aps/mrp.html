@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${prog.name}">자재소요계획(MRP)</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/css/aps.css}">
+</head>
+<!--
+  자재소요계획 MRP (aps-mrp) — APS 10단계 (docs/38 19장). 현행 확정 MPS + 열린 지시 소요 + 안전재고 → BOM 다단 전개 → 계획 주문(제안만).
+  [계산] = 새 실행 기록(지시·구매 요청은 만들지 않음 — AP-4). 계획 주문 표 · 예외(당김·밀기·취소·줄임·늦음) · 품목 표 → 재고/소요 목록 → 페깅 사슬.
+  표 DOM 은 JS createElement·textContent(인라인 style 없음, CSP 유지).
+-->
+<body class="hb-page hb-page-app aps-page" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}"
+      data-table-menu="">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">자재소요계획(MRP)</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{apsMrp.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,last7,last30,thisMonth" data-default="last30" data-max-days="366"></div>
+    <label><span th:text="#{apsMrp.col.plant}">공장</span><select name="plantCd" id="plantSel"></select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{apsMrp.new}">새 MRP</button>
+            <span id="listCount" class="hb-muted"></span>
+        </div>
+        <div class="aps-table-scroll">
+            <table class="hb-cmp-table aps-mps-list" id="mrpList">
+                <thead><tr>
+                    <th th:text="#{apsMrp.col.mrpNo}">MRP 번호</th>
+                    <th th:text="#{apsMrp.col.plant}">공장</th>
+                    <th th:text="#{apsMrp.col.horizon}">기간</th>
+                    <th th:text="#{apsMrp.col.mps}">확정 MPS</th>
+                    <th class="hb-num" th:text="#{apsMrp.col.orderCnt}">계획 주문</th>
+                    <th class="hb-num" th:text="#{apsMrp.col.excCnt}">예외</th>
+                    <th th:text="#{apsMrp.col.status}">상태</th>
+                    <th th:text="#{apsMrp.col.calculatedAt}">계산 시각</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{apsMrp.new}">새 MRP</button>
+            <button type="button" id="calcBtn" th:if="${actions.contains('SAVE')}" th:text="#{apsMrp.calc}">계산</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="discardBtn" class="hb-btn-danger-outline" hidden th:text="#{apsMrp.discard}">폐기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{apsMrp.selectOrNew}">왼쪽에서 MRP 실행을 고르거나 새로 계산하세요.</p>
+        <form id="mrpForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{apsMrp.col.plant}">공장</span><select data-field="plantCd" id="formPlant"></select></label>
+            <label><span th:text="#{apsMrp.col.horizonDays}">일수</span>
+                <input data-field="horizonDays" data-hb="number" data-scale="0" data-min="7" data-max="92" data-pad="false" inputmode="numeric" data-help-key="aps-mrp.horizonDays"></label>
+            <label class="hb-wide"><span th:text="#{apsMrp.col.mrpNm}">이름</span><input data-field="mrpNm" maxlength="100"></label>
+        </form>
+        <p id="noMps" class="aps-warn" hidden th:text="#{apsMrp.noMps}">확정 MPS 가 없어 독립 수요 없이 계산했습니다(열린 지시 소요·안전재고만).</p>
+        <dl id="summary" class="aps-summary" hidden></dl>
+        <p class="hb-muted" th:text="#{apsMrp.ruleNote}">수요 = 확정 MPS + 열린 지시의 남은 자재 + 안전재고. 기존 재고·지시·발주를 먼저 쓰고(늦으면 당김 메시지) 모자라면 계획 주문. 계산은 지시·구매 요청을 만들지 않습니다.</p>
+    </aside>
+</div>
+
+<section class="hb-sub" id="orderSection" hidden>
+    <div class="hb-toolbar">
+        <h2 th:text="#{apsMrp.orders}">계획 주문</h2>
+        <label><span th:text="#{apsMrp.col.kind}">종류</span>
+            <select id="kindSel">
+                <option value="" th:text="#{apsMrp.kind.all}">전체</option>
+                <option value="MPS" th:text="#{apsMrp.kind.MPS}">MPS 계획</option>
+                <option value="PLAN" th:text="#{apsMrp.kind.PLAN}">계획 주문</option>
+            </select></label>
+        <span id="orderCount" class="hb-muted"></span>
+    </div>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="orderTable">
+            <thead><tr>
+                <th th:text="#{apsMrp.col.item}">품목</th>
+                <th th:text="#{apsMrp.col.kind}">종류</th>
+                <th class="hb-num" th:text="#{apsMrp.col.qty}">수량</th>
+                <th th:text="#{apsMrp.col.startDate}">시작일</th>
+                <th th:text="#{apsMrp.col.dueDate}">완료일</th>
+                <th th:text="#{apsMrp.col.mark}">표시</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub" id="excSection" hidden>
+    <div class="hb-toolbar">
+        <h2 th:text="#{apsMrp.excs}">예외 메시지</h2>
+        <span id="excCount" class="hb-muted"></span>
+    </div>
+    <p class="hb-muted" th:text="#{apsMrp.excNote}">예외는 알림만 합니다 — 지시·발주 날짜는 각 화면에서 사람이 바꿉니다.</p>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="excTable">
+            <thead><tr>
+                <th th:text="#{apsMrp.col.item}">품목</th>
+                <th th:text="#{apsMrp.col.exc}">예외</th>
+                <th th:text="#{apsMrp.col.ref}">대상</th>
+                <th th:text="#{apsMrp.col.curDate}">지금 날짜</th>
+                <th th:text="#{apsMrp.col.sugDate}">제안 날짜</th>
+                <th class="hb-num" th:text="#{apsMrp.col.qty}">수량</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub" id="itemSection" hidden>
+    <div class="hb-toolbar"><h2 th:text="#{apsMrp.items}">계획 품목</h2></div>
+    <p class="hb-muted" th:text="#{apsMrp.itemNote}">저차 코드(BOM 단계) 순. 품목을 고르면 재고/소요 목록을 봅니다.</p>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="itemTable">
+            <thead><tr>
+                <th class="hb-num" th:text="#{apsMrp.col.llc}">단계</th>
+                <th th:text="#{apsMrp.col.item}">품목</th>
+                <th th:text="#{apsMrp.col.procType}">조달</th>
+                <th class="hb-num" th:text="#{apsMrp.col.stock}">가용 재고</th>
+                <th class="hb-num" th:text="#{apsMrp.col.safety}">안전재고</th>
+                <th th:text="#{apsMrp.col.lot}">로트</th>
+                <th th:text="#{apsMrp.col.lead}">리드타임</th>
+                <th class="hb-num" th:text="#{apsMrp.col.orderQty}">계획 주문</th>
+                <th class="hb-num" th:text="#{apsMrp.col.excCnt}">예외</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub" id="listSection" hidden>
+    <div class="hb-toolbar"><h2 id="listTitle" th:text="#{apsMrp.list}">재고/소요 목록</h2></div>
+    <p class="hb-muted" th:text="#{apsMrp.listNote}">날짜 순(같은 날은 공급 먼저). 예상 재고 = 이 줄까지 공급 − 수요. 줄을 고르면 페깅을 위로 따라갑니다.</p>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="elemTable">
+            <thead><tr>
+                <th th:text="#{apsMrp.col.date}">날짜</th>
+                <th th:text="#{apsMrp.col.kind}">종류</th>
+                <th th:text="#{apsMrp.col.ref}">대상</th>
+                <th class="hb-num" th:text="#{apsMrp.col.supply}">공급</th>
+                <th class="hb-num" th:text="#{apsMrp.col.demand}">수요</th>
+                <th class="hb-num" th:text="#{apsMrp.col.pab}">예상 재고</th>
+                <th th:text="#{apsMrp.col.peg}">페깅</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub" id="pegSection" hidden>
+    <div class="hb-toolbar"><h2 id="pegTitle" th:text="#{apsMrp.peg}">페깅 — 이 소요가 어디서 왔나</h2></div>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="pegTable">
+            <thead><tr>
+                <th class="hb-num" th:text="#{apsMrp.col.depth}">단계</th>
+                <th th:text="#{apsMrp.col.item}">품목</th>
+                <th th:text="#{apsMrp.col.kind}">종류</th>
+                <th th:text="#{apsMrp.col.date}">날짜</th>
+                <th class="hb-num" th:text="#{apsMrp.col.qty}">수량</th>
+                <th class="hb-num" th:text="#{apsMrp.col.pegQty}">이은 수량</th>
+                <th th:text="#{apsMrp.col.ref}">대상</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/aps/mrp.js}"></script>
+</body>
+</html>

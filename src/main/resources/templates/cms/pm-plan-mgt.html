@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  예방점검 계획 (cms-pm-plan) — CMS 1부 C2·C3 (docs/33 4.3·4.4, D4~D7). 대상 × 점검표 × 실행 방식 × 주기(달력 또는 사용량).
+  사용량 주기는 대상의 카운터 누적이 다음 예정 사용량(− 선행)에 닿으면 예정이 생긴다(카운터 입력 때 바로, 그리고 매시 정기 작업).
+  한 계획에 열린 예정은 하나 — 끝나거나 건너뛰면 다음 예정일을 계산한다. 정기 작업이 매시 예정을 만들고, "지금 생성"도 같은 일을 한다.
+  고정(FIXED) = 달력에 박힌 날, 완료 기준(FLOAT) = 마지막으로 한 날부터 간격.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/cms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">예방점검 계획</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.col.plant}">공장</span><select name="plantCd" id="plantSearch"></select></label>
+    <label><span th:text="#{cms.plan.keyword}">계획·대상</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y" checked><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="genBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{cms.plan.generate}">지금 생성</button>
+            <button type="button" id="calToggle" class="hb-btn-secondary" aria-pressed="false" aria-controls="calBox" th:text="#{cms.cal.toggle}">달력 보기</button>
+        </div>
+        <div id="planGrid" class="hb-grid-host"></div>
+        <section id="calBox" class="pmcal-box" hidden th:aria-label="#{cms.cal.title}">
+            <div class="hb-toolbar">
+                <button type="button" id="calPrev" class="hb-btn-secondary" th:aria-label="#{cms.cal.prev}">‹</button>
+                <label class="hb-inline"><span th:text="#{cms.cal.month}">달</span><input type="month" id="calMonth"></label>
+                <button type="button" id="calNext" class="hb-btn-secondary" th:aria-label="#{cms.cal.next}">›</button>
+                <span id="calInfo" class="hb-muted" data-help-key="cms-pm-plan.calendar"></span>
+            </div>
+            <p class="hb-muted" th:text="#{cms.cal.legend}">점선 = 예상(아직 만들지 않은 예정, 매번 예정일에 했다고 보고 계산) · 실선 = 생성된 예정. 사용량 기준 계획은 날짜를 예측하지 않습니다 — 생성된(열린·끝난) 예정만.</p>
+            <table class="pmcal" id="calTable">
+                <thead><tr>
+                    <th th:text="#{cms.cal.dow.1}">월</th><th th:text="#{cms.cal.dow.2}">화</th><th th:text="#{cms.cal.dow.3}">수</th>
+                    <th th:text="#{cms.cal.dow.4}">목</th><th th:text="#{cms.cal.dow.5}">금</th><th th:text="#{cms.cal.dow.6}">토</th>
+                    <th th:text="#{cms.cal.dow.7}">일</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <ol id="calList" class="pmcal-list"></ol>
+        </section>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{cms.plan.selectOrNew}">왼쪽에서 계획을 고르거나 신규를 누르세요.</p>
+        <p id="stateLine" class="hb-muted"></p>
+        <form id="planForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{cms.plan.col.planCd}">계획 코드</span><input data-field="planCd" maxlength="60" required></label>
+            <label class="hb-wide-2"><span th:text="#{cms.plan.col.planNm}">계획 이름</span><input data-field="planNm" maxlength="100" required></label>
+            <label><span th:text="#{cms.mwo.col.targetType}">대상 종류</span>
+                <select data-field="targetType">
+                    <option value="EQUIP" th:text="#{cms.mwo.equip}">설비</option>
+                    <option value="ASSET" th:text="#{cms.mwo.asset}">금형·지그</option>
+                </select></label>
+            <label><span th:text="#{cms.mwo.col.target}">대상</span>
+                <input data-field="targetCd" maxlength="30" list="targetList"></label>
+            <datalist id="targetList"></datalist>
+            <label class="hb-wide"><span th:text="#{cms.plan.col.tmpl}">점검표</span>
+                <select data-field="tmplCd" id="tmplSel" data-help-key="cms-pm-plan.tmplCd"></select></label>
+            <label><span th:text="#{cms.plan.col.execMode}">실행 방식</span>
+                <select data-field="execMode" data-hb="select" data-code="CMS_EXEC_MODE" data-help-key="cms-pm-plan.execMode"></select></label>
+            <label><span th:text="#{cms.plan.col.cycleType}">주기 종류</span>
+                <select data-field="cycleType" data-hb="select" data-code="CMS_CYCLE_TYPE" data-help-key="cms-pm-plan.cycleType"></select></label>
+            <label><span th:text="#{cms.plan.col.basis}">기준</span>
+                <select data-field="scheduleBasis" data-hb="select" data-code="CMS_SCHED_BASIS" data-help-key="cms-pm-plan.scheduleBasis"></select></label>
+            <label data-cycle="CAL"><span th:text="#{cms.plan.col.interval}">간격</span>
+                <input data-field="calInterval" data-hb="number" data-scale="0" data-min="1" data-max="999" data-pad="false"></label>
+            <label data-cycle="CAL"><span th:text="#{cms.plan.col.unit}">단위</span>
+                <select data-field="calUnit" data-hb="select" data-code="CMS_CAL_UNIT"></select></label>
+            <label data-cycle="CAL"><span th:text="#{cms.plan.col.anchor}">첫 예정일</span><input type="date" data-field="anchorDate" data-help-key="cms-pm-plan.anchorDate"></label>
+            <label data-cycle="CAL"><span th:text="#{cms.plan.col.lead}">선행일(비우면 정책)</span>
+                <input data-field="leadDays" data-hb="number" data-scale="0" data-min="0" data-max="90" data-pad="false" data-help-key="cms-pm-plan.leadDays"></label>
+            <label class="hb-wide" data-cycle="USAGE" hidden><span th:text="#{cms.plan.col.counter}">카운터</span>
+                <select data-field="counterCd" id="counterSel" data-help-key="cms-pm-plan.counterCd"></select></label>
+            <label data-cycle="USAGE" hidden><span th:text="#{cms.plan.col.usageInterval}">사용량 간격</span>
+                <input data-field="usageInterval" inputmode="decimal" maxlength="24"></label>
+            <label data-cycle="USAGE" hidden><span th:text="#{cms.plan.col.anchorUsage}">첫 예정 사용량(누적)</span>
+                <input data-field="anchorUsage" inputmode="decimal" maxlength="24" data-help-key="cms-pm-plan.anchorUsage"></label>
+            <label data-cycle="USAGE" hidden><span th:text="#{cms.plan.col.usageLead}">선행 사용량</span>
+                <input data-field="usageLead" inputmode="decimal" maxlength="24" data-help-key="cms-pm-plan.usageLead"></label>
+            <label><span th:text="#{cms.mwo.col.assignee}">담당</span><select data-field="assigneeLoginId"></select></label>
+            <label><span th:text="#{cms.plan.col.est}">예상(분)</span>
+                <input data-field="estMinutes" data-hb="number" data-scale="0" data-min="1" data-max="10080" data-pad="false"></label>
+            <label><span th:text="#{cms.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{cms.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        </form>
+        <section class="hb-sub">
+            <h2 th:text="#{cms.plan.preview}">앞으로 예정(12회)</h2>
+            <div class="hb-toolbar">
+                <button type="button" id="previewBtn" class="hb-btn-secondary" th:text="#{cms.plan.previewBtn}">예정 보기</button>
+            </div>
+            <p id="preview" class="hb-muted"></p>
+        </section>
+        <section class="hb-sub" th:if="${actions.contains('SAVE')}">
+            <h2 th:text="#{cms.plan.bulk}">클래스 일괄 만들기</h2>
+            <p class="hb-muted" th:text="#{cms.plan.bulkGuide}">위 점검표·주기로, 고른 클래스의 사용 중 설비마다 계획을 만듭니다(코드 = 점검표코드-설비코드). 만든 뒤에는 각각 고칩니다.</p>
+            <div id="bulkBox">
+                <form id="bulkForm" class="hb-form" autocomplete="off">
+                    <label><span th:text="#{cms.fail.col.equipClass}">설비 클래스</span><select data-field="classCd" id="bulkClass"></select></label>
+                    <div class="hb-toolbar">
+                        <button type="button" id="bulkBtn" class="hb-btn-secondary" th:text="#{cms.plan.bulkBtn}">일괄 만들기</button>
+                    </div>
+                </form>
+            </div>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/pm-plan-mgt.js}"></script>
+</body>
+</html>

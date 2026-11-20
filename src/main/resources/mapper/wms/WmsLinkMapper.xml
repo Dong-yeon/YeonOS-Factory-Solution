@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 다른 모듈에 내주는 재고 읽기 (docs/30 13장). 읽기만, 잠그지 않는다 -->
+<mapper namespace="io.smarthappy.module.wms.link.WmsLinkMapper">
+
+    <!--
+      가용 = 가용 정의 하나(AvailSql: AVAILABLE · 출하 대기·검사·폐기 칸 아님 — 2026-10-29 F2·F-a 로 STAGING·QC 칸이 빠짐)
+      · 보류 아닌 LOT(LOT 없음 포함).
+    -->
+    <select id="availableQty" resultType="io.smarthappy.module.wms.link.WmsLinkMapper$ItemQty">
+        select s.item_id, sum(s.qty) as qty
+          from inv_stock s
+          left join lot_master lm on lm.lot_id = s.lot_id
+         where s.plant_cd = #{plantCd}
+           and s.item_id in
+               <foreach collection="itemIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+           and s.qty &gt; 0
+           and (s.lot_id is null or lm.hold_yn = 'N')
+           and <include refid="io.smarthappy.module.wms.inv.AvailSql.available"/>
+         group by s.item_id
+    </select>
+
+    <!-- 품목별 출하 예약(열린 지시의 미피킹 합, AvailSql.openShipReserve) — 예약이 있는 품목만 -->
+    <select id="reservedQty" resultType="io.smarthappy.module.wms.link.WmsLinkMapper$ItemQty">
+        select r.item_id, sum(r.qty) as qty
+          from (<include refid="io.smarthappy.module.wms.inv.AvailSql.openShipReserve"/>) r
+         where r.plant_cd = #{plantCd}
+           and r.item_id in <foreach collection="itemIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         group by r.item_id
+        having sum(r.qty) &gt; 0
+    </select>
+
+    <select id="shippedByLine" resultType="io.smarthappy.module.wms.link.WmsLinkMapper$LineQty">
+        select l.order_line_id, -sum(t.qty) as qty
+          from inv_trx t
+          join wms_ship_pick p on p.pick_id = t.src_id
+          join wms_ship_line l on l.ship_line_id = p.ship_line_id
+         where t.src_type = 'SHIP_PICK' and t.trx_type = 'SHIP'
+           and l.order_line_id in <foreach collection="lineIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         group by l.order_line_id
+    </select>
+    <!--
+      LOT 이 나간 출하(docs/57) — LOT → 피킹(ix_wms_ship_pick_lot) → SHIP 원장(출처 색인 ix_inv_trx_src, 역분개 행도 원 행의 출처 그대로)
+      → 지시·고객. 순 수량 = SHIP 합의 부호 반대, 0 이면 빠짐(출하 취소분). 팔레트는 그 LOT 피킹이 담긴 것
+    -->
+    <select id="shipsByLots" resultType="io.smarthappy.module.wms.link.WmsLinkMapper$LotShipRow">
+        select p.lot_id, s.ship_id, s.ship_no, s.plant_cd, s.cust_id, c.cust_cd, c.cust_nm, s.shipped_at, l.item_id,
+               -sum(t.qty) as qty, max(t.unit_cd) as unit_cd,
+               string_agg(distinct pl.pallet_no, E'\t') as pallet_nos, string_agg(distinct pl.sscc, E'\t') as ssccs
+          from wms_ship_pick p
+          join inv_trx t on t.comp_cd = p.comp_cd and t.src_type = 'SHIP_PICK' and t.src_id = p.pick_id and t.trx_type = 'SHIP'
+          join wms_ship_line l on l.ship_line_id = p.ship_line_id
+          join wms_ship s on s.ship_id = l.ship_id
+          join mst_cust c on c.cust_id = s.cust_id
+          left join wms_pallet pl on pl.pallet_id = p.pallet_id
+         where p.lot_id in <foreach collection="lotIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         group by p.lot_id, s.ship_id, s.ship_no, s.plant_cd, s.cust_id, c.cust_cd, c.cust_nm, s.shipped_at, l.item_id
+        having sum(t.qty) &lt;&gt; 0
+         order by p.lot_id, s.shipped_at, s.ship_id
+    </select>
+
+    <!-- LOT 이 있는 곳(docs/57) — 가용 정의 없이 모든 상태·칸 용도, 수량 > 0 -->
+    <select id="stockByLots" resultType="io.smarthappy.module.wms.link.ShipQuery$LotStockRow">
+        select s.lot_id, s.plant_cd, s.node_id, wms_node_path(s.node_id) as path, a.loc_usage, s.stock_status, s.qty
+          from inv_stock s
+          left join wms_loc_attr a on a.node_id = s.node_id
+         where s.lot_id in <foreach collection="lotIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+           and s.qty &gt; 0
+         order by s.lot_id, s.plant_cd, path
+    </select>
+
+    <!-- 클레임(8D)에 묶인 고객 반품(docs/29_P3 44장) — capa_no 는 btrim 후 정확히 같음(R-8 사람이 적은 값), 취소 포함, RLS 회사 범위 -->
+    <select id="custReturns" resultType="io.smarthappy.module.wms.link.ShipQuery$CustReturn">
+        select r.rtn_id, r.rtn_no, r.status, c.cust_cd, c.cust_nm, i.item_cd, i.item_nm, lm.lot_no, r.qty, r.unit_cd, r.reason_cd,
+               r.ncr_id, r.ncr_no, r.capa_no, r.received_at
+          from wms_cust_rtn r
+          join mst_cust c on c.cust_id = r.cust_id
+          join mst_item i on i.item_id = r.item_id
+          left join lot_master lm on lm.lot_id = r.lot_id
+         <where>
+           <trim prefix="(" suffix=")" prefixOverrides="or">
+             <if test="capaNo != null">btrim(r.capa_no) = #{capaNo}</if>
+             <if test="ncrIds != null and !ncrIds.isEmpty()">
+               or r.ncr_id in <foreach collection="ncrIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+             </if>
+           </trim>
+         </where>
+         order by r.received_at desc, r.rtn_id desc
+         limit #{limit}
+    </select>
+
+    <!-- LOT 상태별 수량(docs/30 12.15.8 WB-3) — 공장 스위치는 서비스가 거른다 -->
+    <select id="lotQty" resultType="io.smarthappy.module.wms.link.WmsLinkMapper$LotQty">
+        select s.plant_cd, s.stock_status, sum(s.qty) as qty
+          from inv_stock s
+         where s.lot_id = #{lotId} and s.qty &lt;&gt; 0
+         group by s.plant_cd, s.stock_status
+    </select>
+    <!-- QC 재고가 남은 LOT(docs/30 12.15.6 "검사 만들기") — 공장 스위치는 서비스가 본다. 키셋(lot_id) + limit 은 서비스가 상한+1 -->
+    <select id="qcLots" resultType="io.smarthappy.module.wms.link.StockQuery$QcLot">
+        select s.lot_id, lm.lot_no, s.item_id, sum(s.qty) as qc_qty
+          from inv_stock s
+          join lot_master lm on lm.lot_id = s.lot_id
+         where s.plant_cd = #{plantCd}
+           and s.stock_status = 'QC'
+           and s.lot_id is not null
+           <if test="afterLotId != null">and s.lot_id &gt; #{afterLotId}</if>
+         group by s.lot_id, lm.lot_no, s.item_id
+        having sum(s.qty) &gt; 0
+         order by s.lot_id
+         limit #{limit}
+    </select>
+</mapper>

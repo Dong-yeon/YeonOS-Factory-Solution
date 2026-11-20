@@ -1,0 +1,313 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 출하 (P4 2부 B6a, docs/30 12.7) — 회사 범위는 RLS. 영업 표는 읽지 않는다(영업 계약 OrderLineQuery) -->
+<mapper namespace="io.smarthappy.module.wms.ship.ShipMapper">
+
+    <select id="plantExists" resultType="boolean">
+        select exists (select 1 from sys_plant where plant_cd = #{plantCd})
+    </select>
+
+    <select id="stageNodes" resultType="io.smarthappy.module.wms.ship.ShipDtos$NodeOpt">
+        select n.node_id, wms_node_path(n.node_id) as path, a.loc_usage
+          from mst_equip_hier n join wms_loc_attr a on a.node_id = n.node_id
+         where n.plant_cd = #{plantCd} and n.node_type = 'LOC' and a.loc_usage = 'STAGING' and n.use_yn = 'Y'
+         order by path
+    </select>
+
+    <select id="custIdByCode" resultType="long">
+        select cust_id from mst_cust where cust_cd = #{custCd} and use_yn = 'Y' and cust_type in ('SALES', 'BOTH')
+    </select>
+
+    <!-- 지시 만들기 줄 세우기(QA W-1) — 같은 수주 행으로 동시에 만드는 지시가 남은 수량을 차례로 읽게. 영업 표를 잠그지 않는다(advisory, 트랜잭션 범위) -->
+    <select id="lockOrderLineForShip" resultType="int" flushCache="true">
+        select 1 from (select pg_advisory_xact_lock(hashtextextended('WMS_SHIP_OL:' || #{key}, 0))) x
+    </select>
+
+    <!-- 수주 행별로 열린 출하 지시에 잡힌 지시 수량(남은 수량 = 수주 − 출하 − 이것, 계산은 서비스) -->
+    <select id="heldByOrderLine" resultType="io.smarthappy.module.wms.ship.ShipMapper$Held">
+        select sl.order_line_id, sum(sl.qty) as qty
+          from wms_ship_line sl join wms_ship s on s.ship_id = sl.ship_id
+         where s.status in ('DRAFT', 'PICKING')
+           and sl.order_line_id in <foreach collection="lineIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         group by sl.order_line_id
+    </select>
+
+    <sql id="headCols">
+        s.ship_id, s.ship_no, s.plant_cd, s.cust_id, c.cust_cd, c.cust_nm, s.stage_node_id, wms_node_path(s.stage_node_id) as stage_path,
+        s.plan_date, s.status, s.remark, s.shipped_at, s.shipped_by, s.cancel_reason, s.row_ver, s.created_at, s.created_by,
+        <!-- 운송 정보(docs/58) — 1:0..1, 머리 row_ver 와 따로 -->
+        tr.carrier_nm, tr.vehicle_no, tr.tracking_no, tr.row_ver as transport_row_ver, tr.updated_at as transport_at, tr.updated_by as transport_by,
+        (select count(*) from wms_ship_line l where l.ship_id = s.ship_id) as line_count,
+        <!-- 출하 특이사항(docs/56) — 걸린 규칙 수·확인 필수 미확인 수(열린 지시만 — 출하·취소된 지시는 소급하지 않음), 조건은 ShipNoteMapper 한 곳 -->
+        (select count(distinct n.note_id) from wms_ship_line l join mst_item i on i.item_id = l.item_id
+           join wms_ship_note n on <include refid="io.smarthappy.module.wms.shipnote.ShipNoteMapper.matchOn"/>
+          where l.ship_id = s.ship_id) as note_cnt,
+        (select count(distinct n.note_id) from wms_ship_line l join mst_item i on i.item_id = l.item_id
+           join wms_ship_note n on <include refid="io.smarthappy.module.wms.shipnote.ShipNoteMapper.matchOn"/>
+          where l.ship_id = s.ship_id and n.ack_required_yn = 'Y' and s.status in ('DRAFT', 'PICKING')
+            and not <include refid="io.smarthappy.module.wms.shipnote.ShipNoteMapper.ackedNow"/>) as note_open_cnt
+    </sql>
+
+    <select id="findShips" resultType="io.smarthappy.module.wms.ship.ShipDtos$ShipHead">
+        select <include refid="headCols"/>
+          from wms_ship s join mst_cust c on c.cust_id = s.cust_id left join wms_ship_transport tr on tr.ship_id = s.ship_id
+         where s.plant_cd = #{plantCd}
+        <if test="status != null"> and s.status = #{status}</if>
+        <if test="from != null"> and s.plan_date &gt;= #{from}</if>
+        <if test="to != null"> and s.plan_date &lt;= #{to}</if>
+         order by s.plan_date desc, s.ship_id desc
+         limit #{limit}
+    </select>
+
+    <!-- 출하 목록 그리드(UI 단계 3 ①) — 조건은 findShips 와 같다, 페이징·정렬(허용 열 enum)·마지막에 ship_id -->
+    <sql id="shipGridWhere">
+          from wms_ship s join mst_cust c on c.cust_id = s.cust_id left join wms_ship_transport tr on tr.ship_id = s.ship_id
+         where s.plant_cd = #{plantCd}
+        <if test="status != null"> and s.status = #{status}</if>
+        <if test="from != null"> and s.plan_date &gt;= #{from}</if>
+        <if test="to != null"> and s.plan_date &lt;= #{to}</if>
+    </sql>
+
+    <select id="findShipPage" resultType="io.smarthappy.module.wms.ship.ShipDtos$ShipHead">
+        select <include refid="headCols"/> <include refid="shipGridWhere"/>
+         order by
+        <foreach collection="page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'SHIP_NO'">s.ship_no</when>
+                <when test="o.key == 'CUST_CD'">c.cust_cd</when>
+                <when test="o.key == 'STATUS'">s.status</when>
+                <when test="o.key == 'CREATED_AT'">s.created_at</when>
+                <otherwise>s.plan_date</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        s.ship_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countShips" resultType="long">select count(*) <include refid="shipGridWhere"/></select>
+
+    <select id="findShip" resultType="io.smarthappy.module.wms.ship.ShipDtos$ShipHead">
+        select <include refid="headCols"/> from wms_ship s join mst_cust c on c.cust_id = s.cust_id left join wms_ship_transport tr on tr.ship_id = s.ship_id where s.ship_id = #{id}
+    </select>
+
+    <select id="lockShip" resultType="io.smarthappy.module.wms.ship.ShipDtos$ShipHead" flushCache="true">
+        select s.ship_id, s.ship_no, s.plant_cd, s.cust_id, s.stage_node_id, s.plan_date, s.status, s.row_ver
+          from wms_ship s where s.ship_id = #{id} for update
+    </select>
+
+    <select id="findLines" resultType="io.smarthappy.module.wms.ship.ShipDtos$ShipLine">
+        select l.ship_line_id, l.line_no, l.order_line_id, l.item_id, i.item_cd, i.item_nm,
+               i.unit_cd, i.lot_ctrl_yn, l.qty,
+               coalesce((select sum(p.qty) from wms_ship_pick p where p.ship_line_id = l.ship_line_id and p.status in ('PICKED', 'SHIPPED')), 0) as picked_qty,
+               coalesce((select sum(p.qty) from wms_ship_pick p where p.ship_line_id = l.ship_line_id and p.status = 'SHIPPED'), 0) as shipped_qty
+          from wms_ship_line l
+          join mst_item i on i.item_id = l.item_id
+         where l.ship_id = #{id}
+         order by l.line_no
+    </select>
+
+    <select id="findPicks" resultType="io.smarthappy.module.wms.ship.ShipDtos$ShipPick">
+        select p.pick_id, p.ship_line_id, p.from_node_id, wms_node_path(p.from_node_id) as from_path, p.lot_id,
+               (select m.lot_no from lot_master m where m.lot_id = p.lot_id) as lot_no, p.qty, p.status, p.created_at, p.created_by,
+               p.pallet_id, (select t.pallet_no from wms_pallet t where t.pallet_id = p.pallet_id) as pallet_no
+          from wms_ship_pick p join wms_ship_line l on l.ship_line_id = p.ship_line_id
+         where l.ship_id = #{id}
+         order by l.line_no, p.pick_id
+    </select>
+
+    <select id="insertShip" resultType="long" flushCache="true">
+        insert into wms_ship (comp_cd, plant_cd, ship_no, cust_id, stage_node_id, plan_date, remark, created_by, updated_by)
+        values (hb_current_comp(), #{plantCd}, #{shipNo}, #{custId}, #{stageNodeId}, #{planDate}, #{remark}, #{by}, #{by})
+        returning ship_id
+    </select>
+
+    <insert id="insertLine">
+        insert into wms_ship_line (comp_cd, ship_id, line_no, order_line_id, item_id, qty, created_by, updated_by)
+        values (hb_current_comp(), #{shipId}, #{lineNo}, #{orderLineId}, #{itemId}, #{qty}, #{by}, #{by})
+    </insert>
+
+    <update id="updateStatus">
+        update wms_ship set status = #{to}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ship_id = #{id} and status = #{from}
+    </update>
+
+    <update id="markShipped">
+        update wms_ship set status = 'SHIPPED', shipped_at = now(), shipped_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ship_id = #{id} and status = 'PICKING'
+    </update>
+
+    <update id="markUnshipped">
+        update wms_ship set status = 'PICKING', shipped_at = null, shipped_by = null, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ship_id = #{id} and status = 'SHIPPED'
+    </update>
+
+    <select id="liveCustRtnOf" resultType="string" flushCache="true">
+        select r.rtn_no from wms_cust_rtn r where r.ship_id = #{id} and r.status = 'RECEIVED' order by r.rtn_id limit 1
+    </select>
+
+    <update id="markCancelled">
+        update wms_ship set status = 'CANCELLED', cancel_reason = #{reason}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ship_id = #{id} and status = 'DRAFT'
+    </update>
+
+    <select id="insertPick" resultType="long" flushCache="true">
+        insert into wms_ship_pick (comp_cd, ship_line_id, from_node_id, lot_id, qty, created_by, updated_by)
+        values (hb_current_comp(), #{shipLineId}, #{fromNodeId}, #{lotId}, #{qty}, #{by}, #{by})
+        returning pick_id
+    </select>
+
+    <update id="setPickStatus">
+        update wms_ship_pick set status = #{to}, updated_at = now(), updated_by = #{by}
+         where status = #{from}
+           and pick_id in <foreach collection="pickIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </update>
+
+    <select id="picksOf" resultType="io.smarthappy.module.wms.ship.ShipDtos$PickRow">
+        select p.pick_id, p.ship_line_id, l.order_line_id, l.item_id, i.item_cd, i.item_nm, i.unit_cd, p.lot_id,
+               (select m.lot_no from lot_master m where m.lot_id = p.lot_id) as lot_no, p.qty, p.from_node_id, p.status,
+               p.pallet_id, t.pallet_no, t.sscc
+          from wms_ship_pick p
+          join wms_ship_line l on l.ship_line_id = p.ship_line_id
+          join mst_item i on i.item_id = l.item_id
+          left join wms_pallet t on t.pallet_id = p.pallet_id
+         where l.ship_id = #{shipId}
+        <if test="status != null"> and p.status = #{status}</if>
+         order by l.line_no, p.pick_id
+    </select>
+
+    <select id="liveMoveOf" resultType="long">
+        select t.trx_id from inv_trx t
+         where t.src_type = 'SHIP_PICK' and t.src_id = #{pickId} and t.trx_type = 'MOVE_OUT' and t.reversal_of_id is null
+           and not exists (select 1 from inv_trx r where r.reversal_of_id = t.trx_id)
+    </select>
+
+    <select id="liveShipsOf" resultType="io.smarthappy.module.wms.ship.ShipDtos$ShipTrx">
+        select t.trx_id, p.pick_id, l.order_line_id, t.qty
+          from inv_trx t
+          join wms_ship_pick p on p.pick_id = t.src_id
+          join wms_ship_line l on l.ship_line_id = p.ship_line_id
+         where t.src_type = 'SHIP_PICK' and t.trx_type = 'SHIP' and t.reversal_of_id is null and l.ship_id = #{shipId}
+           and not exists (select 1 from inv_trx r where r.reversal_of_id = t.trx_id)
+         order by t.trx_id
+    </select>
+
+    <select id="lotIdByNo" resultType="long">
+        select lot_id from lot_master where item_id = #{itemId} and lot_no = #{lotNo}
+    </select>
+
+    <!-- 노드 용도(속성 없으면 STORAGE, 조상이 SCRAP 이면 SCRAP) — 이 공장 노드가 아니면 null -->
+    <select id="nodeUsage" resultType="string">
+        with recursive up as (
+            select n.node_id, n.parent_id, 1 as lv from mst_equip_hier n where n.node_id = #{nodeId}
+            union all
+            select p.node_id, p.parent_id, u.lv + 1 from up u join mst_equip_hier p on p.node_id = u.parent_id where u.lv &lt; 20
+        )
+        select case when exists (select 1 from up join wms_loc_attr x on x.node_id = up.node_id where x.loc_usage = 'SCRAP') then 'SCRAP'
+                    else coalesce(a.loc_usage, 'STORAGE') end
+          from mst_equip_hier n left join wms_loc_attr a on a.node_id = n.node_id
+         where n.node_id = #{nodeId} and n.plant_cd = #{plantCd}
+    </select>
+
+    <!-- 피킹 출발 칸이 꺼낼 수 있는 칸인가 — 가용 정의 하나(AvailSql) -->
+    <select id="pickableLoc" resultType="boolean">
+        select <include refid="io.smarthappy.module.wms.inv.AvailSql.availLoc"/> from (select #{nodeId}::bigint as node_id) s
+    </select>
+
+    <!-- 다른 칸(12.7.5) — 가용 정의 하나(AvailSql: STAGING·QC·SCRAP 상위 포함 제외). 200칸까지 -->
+    <select id="pickStock" resultType="io.smarthappy.module.wms.ship.ShipDtos$StockRow">
+        select s.node_id, wms_node_path(s.node_id) as path, s.lot_id, lm.lot_no, s.qty, coalesce(lm.hold_yn, 'N') as hold_yn
+          from inv_stock s
+          left join lot_master lm on lm.lot_id = s.lot_id
+          left join wms_loc_attr a on a.node_id = s.node_id
+         where s.item_id = #{itemId} and s.plant_cd = #{plantCd} and s.qty &gt; 0
+           and s.node_id &lt;&gt; #{stageNodeId}
+           and <include refid="io.smarthappy.module.wms.inv.AvailSql.available"/>
+           <if test="nodeId != null">
+           and s.node_id in (
+               with recursive sc as (
+                   select node_id, 1 as lv from mst_equip_hier where node_id = #{nodeId}
+                   union all
+                   select c.node_id, sc.lv + 1 from sc join mst_equip_hier c on c.parent_id = sc.node_id where sc.lv &lt; 20
+               )
+               select node_id from sc)
+           </if>
+           <if test="lotId != null">and s.lot_id = #{lotId}</if>
+         order by path, lm.lot_no nulls first
+         limit 200
+    </select>
+
+    <!-- ================================================================ 팔레트 (B6b, docs/30 12.10) -->
+    <select id="findPallets" resultType="io.smarthappy.module.wms.ship.ShipDtos$Pallet">
+        select t.pallet_id, t.pallet_no, t.sscc, t.status, t.closed_at, t.closed_by, t.row_ver,
+               (select count(*) from wms_ship_pick p where p.pallet_id = t.pallet_id) as pick_count
+          from wms_pallet t where t.ship_id = #{shipId}
+         order by t.pallet_id
+    </select>
+
+    <!-- 팔레트 스캔(B6b-2) — 내부 번호 또는 SSCC 하나로. 회사 안 유일(uq_wms_pallet_no·uq_wms_pallet_sscc) -->
+    <select id="findPalletByKey" resultType="io.smarthappy.module.wms.ship.ShipDtos$PalletHit">
+        select t.ship_id, s.ship_no, t.pallet_id, t.pallet_no, t.sscc, t.status
+          from wms_pallet t
+          join wms_ship s on s.ship_id = t.ship_id
+         where <choose>
+                 <when test="sscc != null">t.sscc = #{sscc}</when>
+                 <otherwise>t.pallet_no = #{palletNo}</otherwise>
+               </choose>
+    </select>
+
+    <select id="lockPallet" resultType="io.smarthappy.module.wms.ship.ShipDtos$Pallet" flushCache="true">
+        select t.pallet_id, t.pallet_no, t.sscc, t.status, t.row_ver,
+               (select count(*) from wms_ship_pick p where p.pallet_id = t.pallet_id) as pick_count
+          from wms_pallet t where t.pallet_id = #{palletId} and t.ship_id = #{shipId}
+           for update
+    </select>
+
+    <select id="insertPallet" resultType="long" flushCache="true">
+        insert into wms_pallet (comp_cd, ship_id, pallet_no, remark, created_by, updated_by)
+        values (hb_current_comp(), #{shipId}, #{palletNo}, #{remark}, #{by}, #{by})
+        returning pallet_id
+    </select>
+
+    <update id="closePallet">
+        update wms_pallet set status = 'CLOSED', sscc = coalesce(sscc, #{sscc}), closed_at = now(), closed_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where pallet_id = #{palletId} and status = 'OPEN'
+    </update>
+
+    <update id="setPalletStatus">
+        update wms_pallet set status = #{to}, closed_at = null, closed_by = null, remark = coalesce(#{remark}, remark),
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where pallet_id = #{palletId} and status = #{from}
+    </update>
+
+    <update id="setPickPallet">
+        update wms_ship_pick set pallet_id = #{palletId}, updated_at = now(), updated_by = #{by}
+         where status = 'PICKED'
+           and pick_id in <foreach collection="pickIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </update>
+
+    <!-- 머리 row_ver 올리기 — 팔레트 동작도 지시 단위로 줄 세운다 -->
+    <update id="touchShip">
+        update wms_ship set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by} where ship_id = #{id}
+    </update>
+
+    <!-- 출하 확정 전 팔레트 필수 검사: CLOSED 팔레트에 있지 않은 PICKED 피킹 수 -->
+    <select id="countUnpalletized" resultType="int">
+        select count(*)
+          from wms_ship_pick p join wms_ship_line l on l.ship_line_id = p.ship_line_id
+          left join wms_pallet t on t.pallet_id = p.pallet_id
+         where l.ship_id = #{shipId} and p.status = 'PICKED' and (t.pallet_id is null or t.status &lt;&gt; 'CLOSED')
+    </select>
+
+    <!-- 팔레트 라벨 값: 품목별 수량 합·LOT 수 -->
+    <select id="palletContent" resultType="io.smarthappy.module.wms.ship.ShipMapper$PalletItem">
+        select l.item_id, i.item_cd, i.item_nm, i.unit_cd, sum(p.qty) as qty, count(distinct p.lot_id) as lot_count
+          from wms_ship_pick p
+          join wms_ship_line l on l.ship_line_id = p.ship_line_id
+          join mst_item i on i.item_id = l.item_id
+         where p.pallet_id = #{palletId}
+         group by l.item_id, i.item_cd, i.item_nm, i.unit_cd
+         order by i.item_cd
+    </select>
+</mapper>

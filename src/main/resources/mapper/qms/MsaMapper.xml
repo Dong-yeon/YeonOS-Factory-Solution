@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- MSA GRR 연구 (P3 QMS Q2b, docs/29). 목록·건수·엑셀은 같은 조건·정렬 조각. 측정자 이름 배열은 0x1F 로 이어 주고받는다 -->
+<mapper namespace="io.smarthappy.module.qms.MsaMapper">
+
+    <sql id="cols">
+        s.study_id, s.study_no, s.asset_id, a.asset_cd, a.asset_nm, s.char_id,
+        case when c.char_id is null then null else coalesce(i.item_cd, pr.proc_cd) || '-' || c.char_no || ' ' || c.char_nm end as char_label,
+        c.lsl as char_lsl, c.usl as char_usl,
+        s.method, s.appraiser_cnt, s.part_cnt, s.trial_cnt, s.basis, s.process_sigma,
+        array_to_string(s.appraiser_nms, chr(31)) as appraiser_nms_text, s.study_date, s.status, s.tolerance, s.result_json::text as result_json,
+        s.grr_pct, s.ndc, s.verdict, s.done_at, s.done_by, s.remark, s.row_ver, s.updated_at,
+        (select count(*) from qms_msa_data d where d.study_id = s.study_id and d.appraiser_no > 0) as data_cnt
+    </sql>
+
+    <sql id="from">
+        from qms_msa_study s
+        join mst_phys_asset a on a.asset_id = s.asset_id
+        left join qms_char c on c.char_id = s.char_id
+        left join mst_item i on i.item_id = c.item_id
+        left join mst_proc pr on pr.proc_id = c.proc_id
+    </sql>
+
+    <sql id="where">
+        <include refid="from"/>
+        <where>
+            <if test="q.keywordLike != null">and (s.study_no ilike #{q.keywordLike} escape '\' or a.asset_cd ilike #{q.keywordLike} escape '\'
+                or a.asset_nm ilike #{q.keywordLike} escape '\')</if>
+            <if test="q.method != null">and s.method = #{q.method}</if>
+            <if test="q.status != null">and s.status = #{q.status}</if>
+        </where>
+    </sql>
+
+    <sql id="orderBy">
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'STUDY_NO'">s.study_no</when>
+                <when test="o.key == 'ASSET_CD'">a.asset_cd</when>
+                <when test="o.key == 'GRR_PCT'">s.grr_pct</when>
+                <when test="o.key == 'STATUS'">s.status</when>
+                <otherwise>s.study_date</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        s.study_id desc
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.MsaDtos$StudyRow">
+        select <include refid="cols"/> <include refid="where"/> <include refid="orderBy"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="cursor" resultType="io.smarthappy.module.qms.MsaDtos$StudyRow" fetchSize="1000">
+        select <include refid="cols"/> <include refid="where"/> <include refid="orderBy"/>
+    </select>
+
+    <select id="findById" resultType="io.smarthappy.module.qms.MsaDtos$StudyRow">
+        select <include refid="cols"/> <include refid="from"/> where s.study_id = #{id}
+    </select>
+
+    <select id="lockStudy" resultType="java.lang.Long">
+        select study_id from qms_msa_study where study_id = #{id} for update
+    </select>
+
+    <select id="findCells" resultType="io.smarthappy.module.qms.MsaDtos$Cell">
+        select appraiser_no as a, part_no as p, trial_no as t, coalesce(trim_scale(value)::text, attr_value) as v
+          from qms_msa_data where study_id = #{id}
+         order by appraiser_no, trial_no, part_no
+    </select>
+
+    <select id="findGaugeId" resultType="java.lang.Long">
+        select asset_id from mst_phys_asset where asset_cd = #{assetCd} and asset_type = 'GAUGE' and use_yn = 'Y'
+    </select>
+
+    <select id="charUseYn" resultType="string">
+        select use_yn from qms_char where char_id = #{charId}
+    </select>
+
+    <select id="gaugeChoices" resultType="io.smarthappy.module.qms.MsaDtos$Choice">
+        select asset_id as id, asset_cd as cd, asset_nm as nm, gauge_class as extra
+          from mst_phys_asset where asset_type = 'GAUGE' and use_yn = 'Y' order by asset_cd limit 1000
+    </select>
+
+    <select id="charChoices" resultType="io.smarthappy.module.qms.MsaDtos$Choice">
+        select c.char_id as id, coalesce(i.item_cd, pr.proc_cd) || '-' || c.char_no as cd, c.char_nm as nm, c.data_type as extra
+          from qms_char c left join mst_item i on i.item_id = c.item_id left join mst_proc pr on pr.proc_id = c.proc_id
+         where c.use_yn = 'Y'
+         order by coalesce(i.item_cd, pr.proc_cd), c.char_no limit 1000
+    </select>
+
+    <select id="insert" resultType="long" flushCache="true">
+        insert into qms_msa_study (comp_cd, study_no, asset_id, char_id, method, appraiser_cnt, part_cnt, trial_cnt, basis, process_sigma,
+                                   appraiser_nms, study_date, remark, created_by, updated_by)
+        values (hb_current_comp(), #{studyNo}, #{f.assetId}, #{f.charId}, #{f.method}, #{f.appraiserCnt}, #{f.partCnt}, #{f.trialCnt},
+                #{f.basis}, #{f.processSigma}, coalesce(string_to_array(#{f.appraiserNmsText}, chr(31)), '{}'), #{f.studyDate},
+                #{f.remark}, #{by}, #{by})
+        returning study_id
+    </select>
+
+    <update id="update">
+        update qms_msa_study
+           set asset_id = #{f.assetId}, char_id = #{f.charId}, method = #{f.method}, appraiser_cnt = #{f.appraiserCnt},
+               part_cnt = #{f.partCnt}, trial_cnt = #{f.trialCnt}, basis = #{f.basis}, process_sigma = #{f.processSigma},
+               appraiser_nms = coalesce(string_to_array(#{f.appraiserNmsText}, chr(31)), '{}'), study_date = #{f.studyDate},
+               remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where study_id = #{id} and row_ver = #{f.rowVer} and status = 'DRAFT'
+    </update>
+
+    <delete id="deleteCells">
+        delete from qms_msa_data where study_id = #{id}
+    </delete>
+
+    <insert id="insertCells">
+        insert into qms_msa_data (comp_cd, study_id, appraiser_no, part_no, trial_no, value, attr_value, created_by)
+        values
+        <foreach collection="cells" item="c" separator=",">
+            (hb_current_comp(), #{id}, #{c.a}, #{c.p}, #{c.t}, #{c.value}, #{c.attr}, #{by})
+        </foreach>
+    </insert>
+
+    <update id="complete">
+        update qms_msa_study
+           set status = 'DONE', tolerance = #{tolerance}, result_json = #{resultJson}::jsonb, grr_pct = #{grrPct}, ndc = #{ndc},
+               verdict = #{verdict}, done_at = now(), done_by = #{by}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where study_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="cancel">
+        update qms_msa_study set status = 'CANCELLED', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where study_id = #{id} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+</mapper>

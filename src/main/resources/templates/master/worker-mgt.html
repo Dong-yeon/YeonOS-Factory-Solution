@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  작업자 관리 (mst-worker) — P2 1단계 (docs/25 4.2·D3). 작업자는 로그인 계정이 아니다 — POP 은 단말 + 배지로 전환한다.
+  배지는 값을 저장하지 않고(해시), 화면에도 다시 보이지 않는다(지정 여부만). 자격은 갱신할 때 새 행으로 추가한다(이력).
+  아래 "자격 확인" 은 그 공정을 그 작업일에 해도 되는지(게이트) 미리 본다 — 실제 착수 차단은 POP(5b).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">작업자 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{worker.col.plantCd}">공장</span><select name="plantCd" id="plantSearch"></select></label>
+    <label><span th:text="#{worker.keyword}">사번·이름·부서</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{worker.col.useYn}">사용</legend>
+        <label><input type="radio" name="useYn" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="useYn" value="Y" checked><span th:text="#{yn.Y}">사용</span></label>
+        <label><input type="radio" name="useYn" value="N"><span th:text="#{yn.N}">미사용</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <div id="workerGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{worker.selectOrNew}">왼쪽에서 작업자를 고르거나 신규를 누르세요.</p>
+        <form id="workerForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{worker.col.workerCd}">사번</span>
+                <input data-field="workerCd" maxlength="20" required data-help-key="mst-worker.workerCd"></label>
+            <label><span th:text="#{worker.col.workerNm}">이름</span>
+                <input data-field="workerNm" maxlength="50" required></label>
+            <label><span th:text="#{worker.col.plantCd}">공장</span>
+                <select data-field="plantCd" id="plantSel"></select></label>
+            <label><span th:text="#{worker.col.deptNm}">부서</span>
+                <input data-field="deptNm" maxlength="50"></label>
+            <label><span th:text="#{worker.col.loginId}">사무 계정(선택)</span>
+                <input data-field="loginId" maxlength="50" data-help-key="mst-worker.loginId"></label>
+            <label><span th:text="#{worker.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+            <label class="hb-wide"><span th:text="#{worker.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+        </form>
+
+        <section class="hb-sub" id="workerExtra" hidden>
+            <h2 th:text="#{worker.badge}">배지</h2>
+            <form id="badgeForm" class="hb-form" autocomplete="off">
+                <p id="badgeState" class="hb-muted hb-wide"></p>
+                <label class="hb-wide-2" th:if="${actions.contains('SAVE')}"><span th:text="#{worker.badgeScan}">배지 스캔 또는 입력</span>
+                    <input type="password" data-field="badge" maxlength="64" autocomplete="off" data-help-key="mst-worker.badge"></label>
+                <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                    <button type="button" id="badgeBtn" class="hb-btn-secondary" th:text="#{worker.badgeSet}">배지 지정</button>
+                </div>
+                <!-- 되돌리기 어려운 동작은 외곽선 위험 톤 + 주동작과 다른 줄(docs/40 P1 ④) -->
+                <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                    <button type="button" id="badgeClearBtn" class="hb-btn-danger-outline" th:text="#{worker.badgeClear}">배지 지우기</button>
+                </div>
+            </form>
+
+            <h2 th:text="#{worker.pin}">POP PIN</h2>
+            <form id="pinForm" class="hb-form" autocomplete="off">
+                <p id="pinState" class="hb-muted hb-wide"></p>
+                <label class="hb-wide-2" th:if="${actions.contains('SAVE')}"><span th:text="#{worker.pinInput}">PIN (숫자 4~8자리)</span>
+                    <input type="password" data-field="pin" inputmode="numeric" maxlength="8" autocomplete="new-password" data-help-key="mst-worker.pin"></label>
+                <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                    <button type="button" id="pinBtn" class="hb-btn-secondary" th:text="#{worker.pinSet}">PIN 지정</button>
+                </div>
+                <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                    <button type="button" id="pinClearBtn" class="hb-btn-danger-outline" th:text="#{worker.pinClear}">PIN 지우기</button>
+                </div>
+            </form>
+
+            <h2 th:text="#{worker.quals}">보유 자격</h2>
+            <table class="hb-cmp-table hb-plant-table" id="held">
+                <thead><tr>
+                    <th th:text="#{worker.col.qual}">자격</th>
+                    <th th:text="#{worker.col.acquiredOn}">취득</th>
+                    <th th:text="#{worker.col.expiresOn}">만료</th>
+                    <th th:text="#{worker.col.state}">상태</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <form id="heldForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{worker.col.qual}">자격</span><select data-field="qualCd" id="qualSel"></select></label>
+                <label><span th:text="#{worker.col.acquiredOn}">취득</span><input type="date" data-field="acquiredOn"></label>
+                <label><span th:text="#{worker.col.expiresOn}">만료(비우면 유효 개월로)</span>
+                    <input type="date" data-field="expiresOn" data-help-key="mst-worker.expiresOn"></label>
+                <label><span th:text="#{worker.col.certNo}">증서 번호</span><input data-field="certNo" maxlength="50"></label>
+                <div class="hb-toolbar">
+                    <button type="button" id="addHeldBtn" class="hb-btn-secondary" th:text="#{worker.addQual}">자격 추가</button>
+                </div>
+            </form>
+
+            <h2 th:text="#{worker.gate}">자격 확인(공정)</h2>
+            <form id="gateForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{worker.gateProc}">공정</span><select data-field="procCd" id="procSel"></select></label>
+                <label><span th:text="#{worker.gateDay}">작업일</span><input type="date" data-field="workDay"></label>
+                <div class="hb-toolbar">
+                    <button type="button" id="gateBtn" class="hb-btn-secondary" th:text="#{worker.gateBtn}">확인</button>
+                </div>
+                <p id="gateResult" class="hb-wide" role="status"></p>
+            </form>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/mes/mes-ui.js}"></script>
+<script th:src="@{/js/views/master/worker-mgt.js}"></script>
+</body>
+</html>

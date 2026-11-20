@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="#{app.name}">YeonOS</title>
+    <link rel="icon" type="image/svg+xml" th:href="@{/images/yeonos-mark.svg}">
+    <!-- PWA 셸(docs/45 M-1): 홈 화면에 추가 — manifest·아이콘은 같은 출처 정적 파일(CSP default-src 'self') -->
+    <link rel="manifest" th:href="@{/manifest.webmanifest}">
+    <link rel="apple-touch-icon" th:href="@{/images/pwa/apple-touch-icon-180.png}">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/shell.css}">
+    <link rel="stylesheet" th:href="@{/css/tip.css}">
+</head>
+<body class="hb-shell">
+<header class="hb-header">
+    <!-- 메뉴 접기(≥1024) / 메뉴 덮개 열기(<1024) — docs/15 4.4, 상태는 shell.js 가 body[data-menu] 로 -->
+    <button type="button" id="hb-menu-toggle" class="hb-menu-toggle" aria-controls="hb-menu" aria-expanded="true"
+            th:attr="aria-label=#{shell.menuToggle},title=#{shell.menuToggle}"><span class="hb-menu-toggle-bar" aria-hidden="true"></span></button>
+    <strong class="hb-brand"><img th:src="@{/images/yeonos-mark.svg}" alt="" width="20" height="20"><span th:text="#{app.name}">YeonOS</span></strong>
+    <span class="hb-user">
+        <span th:text="${user.compCd}">DEMO</span><span class="hb-user-name"> · <span th:text="${user.userNm}">사용자</span></span>
+    </span>
+    <!-- 내 알림 (docs/36 11.4) — 안 읽은 수는 탭 열기·창 포커스 때만 다시 센다(주기 조회는 세션 비활동 만료를 막으므로 하지 않음) -->
+    <button type="button" id="hb-bell" class="hb-bell" hidden th:data-title="#{prog.sysInbox}"
+            th:attr="aria-label=#{shell.bell}"><span th:text="#{shell.bell}">알림</span><span id="hb-bell-count" class="hb-bell-count" hidden></span></button>
+    <form th:action="@{/logout}" method="post" class="hb-logout">
+        <button type="submit" th:text="#{main.logout}">로그아웃</button>
+    </form>
+</header>
+<div class="hb-body">
+    <nav id="hb-menu" class="hb-menu" th:attr="aria-label=#{shell.menu}"></nav>
+    <main class="hb-work">
+        <div id="hb-tabs" class="hb-tabs" role="tablist"></div>
+        <div id="hb-frames" class="hb-frames">
+            <p id="hb-empty" class="hb-empty" th:text="#{shell.empty}">메뉴에서 화면을 선택하세요.</p>
+        </div>
+    </main>
+</div>
+<script th:src="@{/js/common/hb.js}"></script>
+<script th:src="@{/js/common/hb.tip.js}"></script>
+<script th:src="@{/js/common/hb.text.js}"></script>
+<script th:src="@{/js/common/hb.dialog.js}"></script>
+<script th:src="@{/js/shell.menufold.js}"></script>
+<script th:src="@{/js/common/hb.pwa.js}"></script>
+<script th:src="@{/js/shell.js}"></script>
+</body>
+</html>

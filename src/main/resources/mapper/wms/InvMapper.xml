@@ -1,0 +1,400 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 재고 원장·현재고 (P4 W3, docs/30 4.3). 현재고는 inv_trx INSERT 트리거가 고친다 — 여기서 inv_stock 에 쓰지 않는다 -->
+<mapper namespace="io.smarthappy.module.wms.inv.InvMapper">
+
+    <!-- ================================================================ 게시 -->
+    <select id="insertTrx" resultType="long" flushCache="true">
+        insert into inv_trx (comp_cd, plant_cd, trx_type, item_id, node_id, lot_id, stock_status, qty, unit_cd, move_grp_id, src_type, src_id,
+                             reason_cd, remark, client_req_id, req_seq, occurred_at, entry_method, recorded_by, performed_by,
+                             reversal_of_id, po_line_id, po_qty)
+        values (hb_current_comp(), #{plantCd}, #{t.trxType}, #{t.itemId}, #{t.nodeId}, #{t.lotId}, #{t.stockStatus}, #{t.qty}, #{unitCd},
+                #{t.moveGrpId}, #{t.srcType}, #{t.srcId}, #{t.reasonCd}, #{t.remark}, #{clientReqId}, #{reqSeq},
+                #{t.occurredAt}, #{t.entryMethod}, #{by}, #{t.performedBy}, #{reversalOf}, #{t.poLineId}, #{t.poQty})
+        returning trx_id
+    </select>
+
+    <select id="findReq" resultType="long">
+        select trx_id from inv_trx where client_req_id = #{clientReqId} order by req_seq
+    </select>
+
+    <!-- 같은 요청 id 의 처음 원장 행 내용(PQ-1) — 다시 온 요청과 비교한다 -->
+    <select id="findReqRows" resultType="io.smarthappy.module.wms.inv.InvMapper$ReqRow">
+        select req_seq, trx_type, item_id, node_id, stock_status, qty, lot_id, src_type
+          from inv_trx where client_req_id = #{clientReqId} order by req_seq
+    </select>
+
+    <sql id="trxCols">
+        t.trx_id, t.lot_id, (select l.lot_no from lot_master l where l.lot_id = t.lot_id) as lot_no, t.plant_cd, t.trx_type, t.item_id, i.item_cd, i.item_nm, t.unit_cd, t.node_id, n.node_cd,
+        wms_node_path(t.node_id) as path, t.stock_status, t.qty, t.move_grp_id::text as move_grp_id, t.src_type, t.src_id, t.reason_cd, t.remark,
+        t.occurred_at, t.recorded_at, t.entry_method, t.recorded_by, t.performed_by, w.worker_nm as performed_by_nm, t.reversal_of_id,
+        (select r.trx_id from inv_trx r where r.reversal_of_id = t.trx_id) as reversed_by_id, t.po_line_id, t.po_qty, t.client_req_id
+    </sql>
+
+    <sql id="trxFrom">
+        from inv_trx t
+        join mst_item i on i.item_id = t.item_id
+        join mst_equip_hier n on n.node_id = t.node_id
+        left join mst_worker w on w.worker_id = t.performed_by
+    </sql>
+
+    <select id="findTrx" resultType="io.smarthappy.module.wms.inv.InvDtos$TrxRow">
+        select <include refid="trxCols"/> <include refid="trxFrom"/> where t.trx_id = #{id}
+    </select>
+
+    <select id="findMoveGroup" resultType="io.smarthappy.module.wms.inv.InvDtos$TrxRow">
+        select <include refid="trxCols"/> <include refid="trxFrom"/> where t.move_grp_id = #{moveGrpId} order by t.trx_id
+    </select>
+
+    <!-- ================================================================ 참조 확인 -->
+    <sql id="itemCols">item_id, item_cd, item_nm, spec, unit_cd, lot_ctrl_yn, use_yn</sql>
+
+    <select id="findItem" resultType="io.smarthappy.module.wms.inv.InvDtos$ItemOpt">
+        select <include refid="itemCols"/> from mst_item where item_id = #{id}
+    </select>
+
+    <select id="findLotByNo" resultType="io.smarthappy.module.wms.inv.InvDtos$LotOpt">
+        select l.lot_id, l.lot_no, l.item_id, i.item_cd, i.item_nm, i.unit_cd, i.lot_ctrl_yn, l.hold_yn
+          from lot_master l join mst_item i on i.item_id = l.item_id
+         where l.lot_no = #{lotNo}
+    </select>
+
+    <select id="findItemByCode" resultType="io.smarthappy.module.wms.inv.InvDtos$ItemOpt">
+        select <include refid="itemCols"/> from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <sql id="nodeCols">
+        n.node_id, n.node_type, n.node_cd, n.node_nm, wms_node_path(n.node_id) as path,
+        coalesce(a.loc_usage, 'STORAGE') as loc_usage, a.default_status, coalesce(a.stock_yn, 'Y') as stock_yn
+    </sql>
+
+    <select id="findNode" resultType="io.smarthappy.module.wms.inv.InvDtos$NodeOpt">
+        select <include refid="nodeCols"/>
+          from mst_equip_hier n left join wms_loc_attr a on a.node_id = n.node_id
+         where n.node_id = #{id} and n.plant_cd = #{plantCd} and n.node_type in ('WH', 'LOC') and n.use_yn = 'Y'
+    </select>
+
+    <!-- PDA 입고 위치 후보(docs/30 12.12.15) — 이 공장 사용 중 WH·LOC + 폐기 위치 아래인지. 받는 칸(RECEIVING) 먼저, 경로 순 -->
+    <select id="rcvNodes" resultType="io.smarthappy.module.wms.inv.InvDtos$RcvNode">
+        select <include refid="nodeCols"/>,
+               exists (with recursive up as (
+                           select x.node_id, x.parent_id, 1 as lv from mst_equip_hier x where x.node_id = n.node_id
+                           union all
+                           select p.node_id, p.parent_id, u.lv + 1 from up u join mst_equip_hier p on p.node_id = u.parent_id where u.lv &lt; 20)
+                       select 1 from up join wms_loc_attr s on s.node_id = up.node_id where s.loc_usage = 'SCRAP') as under_scrap
+          from mst_equip_hier n left join wms_loc_attr a on a.node_id = n.node_id
+         where n.plant_cd = #{plantCd} and n.node_type in ('WH', 'LOC') and n.use_yn = 'Y'
+         order by case when a.loc_usage = 'RECEIVING' then 0 else 1 end, 5, n.node_id
+    </select>
+
+    <select id="findNodeByCode" resultType="io.smarthappy.module.wms.inv.InvDtos$NodeOpt">
+        select <include refid="nodeCols"/>
+          from mst_equip_hier n left join wms_loc_attr a on a.node_id = n.node_id
+         where n.plant_cd = #{plantCd} and n.node_cd = #{nodeCd}
+    </select>
+
+    <select id="nodePlant" resultType="string">
+        select plant_cd from mst_equip_hier where node_id = #{id}
+    </select>
+
+    <select id="plantExists" resultType="boolean">
+        select exists (select 1 from sys_plant where plant_cd = #{plantCd})
+    </select>
+
+    <!-- 시스템 코드 또는 이 회사가 더한 코드(사용 중) -->
+    <select id="codeUsable" resultType="boolean">
+        select exists (select 1 from sys_code where grp_cd = #{grpCd} and code = #{code} and use_yn = 'Y')
+            or exists (select 1 from sys_comp_code where grp_cd = #{grpCd} and code = #{code} and use_yn = 'Y')
+    </select>
+
+    <select id="mixItemYn" resultType="string">
+        select coalesce((select mix_item_yn from wms_loc_attr where node_id = #{nodeId}), 'Y')
+    </select>
+
+    <select id="otherItemAt" resultType="boolean">
+        select exists (select 1 from inv_stock where node_id = #{nodeId} and item_id &lt;&gt; #{itemId} and qty &gt; 0)
+    </select>
+
+    <select id="stockQty" resultType="java.math.BigDecimal">
+        select coalesce((select qty from inv_stock where item_id = #{itemId} and node_id = #{nodeId} and lot_id is null
+                            and stock_status = #{status}), 0)
+    </select>
+
+    <select id="ledgerQtyAsOf" resultType="java.math.BigDecimal">
+        select coalesce(sum(qty), 0) from inv_trx
+         where item_id = #{itemId} and node_id = #{nodeId} and lot_id is not distinct from #{lotId}::bigint and stock_status = #{status}
+           and occurred_at &lt;= #{at}
+    </select>
+
+    <select id="findStorageNodes" resultType="io.smarthappy.module.wms.inv.InvDtos$NodeOpt">
+        select <include refid="nodeCols"/>
+          from mst_equip_hier n left join wms_loc_attr a on a.node_id = n.node_id
+         where n.plant_cd = #{plantCd} and n.node_type in ('WH', 'LOC') and n.use_yn = 'Y'
+         order by path
+    </select>
+
+    <!-- ================================================================ 반품 출고 후보(R4-4, docs/30 12.14) -->
+    <select id="rtnStock" resultType="io.smarthappy.module.wms.inv.InvDtos$RtnStock">
+        select s.node_id, n.node_cd, wms_node_path(s.node_id) as path, s.stock_status, s.qty
+          from inv_stock s
+          join mst_equip_hier n on n.node_id = s.node_id
+         where s.plant_cd = #{plantCd} and s.item_id = #{itemId} and s.qty &gt; 0
+           and <choose><when test="lotId != null">s.lot_id = #{lotId}</when><otherwise>s.lot_id is null</otherwise></choose>
+         order by path, s.stock_status
+    </select>
+
+    <!-- ================================================================ 현재고 조회 -->
+    <sql id="stockCols">
+        s.stock_id, s.plant_cd, s.node_id, n.node_cd, wms_node_path(s.node_id) as path, s.item_id, i.item_cd, i.item_nm, i.spec,
+        i.unit_cd, s.lot_id, lm.lot_no, s.stock_status, s.qty, s.last_trx_id, s.updated_at
+    </sql>
+
+    <sql id="stockWhere">
+        from inv_stock s
+        join mst_item i on i.item_id = s.item_id
+        join mst_equip_hier n on n.node_id = s.node_id
+        left join lot_master lm on lm.lot_id = s.lot_id
+        <include refid="stockCond"/>
+    </sql>
+
+    <sql id="stockCond">
+        where s.plant_cd = #{q.plantCd}
+        <if test="q.nodeId != null">
+            <choose>
+                <when test="q.withChildren">
+                    and s.node_id in (with recursive d as (select node_id, 1 as lv from mst_equip_hier where node_id = #{q.nodeId}
+                                      union all select c.node_id, d.lv + 1 from d join mst_equip_hier c on c.parent_id = d.node_id
+                                       where d.lv &lt; 20) select node_id from d)
+                </when>
+                <otherwise>and s.node_id = #{q.nodeId}</otherwise>
+            </choose>
+        </if>
+        <if test="q.itemCdLike != null">and i.item_cd like #{q.itemCdLike} escape '\'</if>
+        <if test="q.itemNmLike != null">and i.item_nm ilike #{q.itemNmLike} escape '\'</if>
+        <if test="q.stockStatus != null">and s.stock_status = #{q.stockStatus}</if>
+        <if test="q.lotNoLike != null">and lm.lot_no like #{q.lotNoLike} escape '\'</if>
+        <if test="q.hideZero">and s.qty &lt;&gt; 0</if>
+    </sql>
+
+    <sql id="stockOrder">
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'PATH'">path</when>
+                <when test="o.key == 'LOT_NO'">lm.lot_no</when>
+                <when test="o.key == 'QTY'">s.qty</when>
+                <when test="o.key == 'UPDATED_AT'">s.updated_at</when>
+                <otherwise>i.item_cd</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        s.stock_id
+    </sql>
+
+    <!-- 쪽 안 재고 칸 id 만 — 지연 조인(docs/30 5.1, QA 2026-10-24 M3). 정렬 키 "위치 경로"(기본 정렬 품번·경로)는 행마다 wms_node_path 를
+         부르지 않고 그 공장 창고·위치마다 한 번 계산한 표 p(MATERIALIZED — 안쪽에 풀려 행마다 다시 부르지 않게)와 조인해 쓴다(행 수 ≫ 위치 수). 끝 키 stock_id 그대로, 회사는 RLS -->
+    <sql id="stockKeys">
+        with p as materialized (
+            select h.node_id, wms_node_path(h.node_id) as path from mst_equip_hier h
+             where h.plant_cd = #{q.plantCd} and h.node_type in ('WH', 'LOC'))
+        select s.stock_id
+          from inv_stock s
+          join mst_item i on i.item_id = s.item_id
+          left join lot_master lm on lm.lot_id = s.lot_id
+          join p on p.node_id = s.node_id
+        <include refid="stockCond"/>
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'PATH'">p.path</when>
+                <when test="o.key == 'LOT_NO'">lm.lot_no</when>
+                <when test="o.key == 'QTY'">s.qty</when>
+                <when test="o.key == 'UPDATED_AT'">s.updated_at</when>
+                <otherwise>i.item_cd</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        s.stock_id
+        limit #{q.page.size} offset #{q.page.offset}
+    </sql>
+
+    <select id="findStock" resultType="io.smarthappy.module.wms.inv.InvDtos$StockRow">
+        select <include refid="stockCols"/>
+          from (<include refid="stockKeys"/>) k
+          join inv_stock s on s.stock_id = k.stock_id
+          join mst_item i on i.item_id = s.item_id
+          join mst_equip_hier n on n.node_id = s.node_id
+          left join lot_master lm on lm.lot_id = s.lot_id
+        <include refid="stockOrder"/>
+    </select>
+
+    <select id="countStock" resultType="long">select count(*) <include refid="stockWhere"/></select>
+
+    <select id="cursorStock" resultType="io.smarthappy.module.wms.inv.InvDtos$StockRow" fetchSize="1000">
+        select <include refid="stockCols"/> <include refid="stockWhere"/> <include refid="stockOrder"/>
+    </select>
+
+    <select id="findStockRow" resultType="io.smarthappy.module.wms.inv.InvDtos$StockRow">
+        select <include refid="stockCols"/>
+          from inv_stock s join mst_item i on i.item_id = s.item_id join mst_equip_hier n on n.node_id = s.node_id
+          left join lot_master lm on lm.lot_id = s.lot_id
+         where s.stock_id = #{id}
+    </select>
+
+    <!-- ================================================================ 수불 원장 조회 (기간 필수 + 페이지) -->
+    <sql id="trxWhere">
+        <include refid="trxFrom"/>
+        where t.occurred_at &gt;= #{q.fromAt} and t.occurred_at &lt; #{q.toAt} and t.plant_cd = #{q.plantCd}
+        <if test="q.itemId != null">and t.item_id = #{q.itemId}</if>
+        <if test="q.itemCdLike != null">and i.item_cd like #{q.itemCdLike} escape '\'</if>
+        <if test="q.nodeId != null">and t.node_id = #{q.nodeId}</if>
+        <if test="q.trxType != null">and t.trx_type = #{q.trxType}</if>
+    </sql>
+
+    <sql id="trxOrder">
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'TRX_ID'">t.trx_id</when>
+                <otherwise>t.occurred_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        t.trx_id desc
+    </sql>
+
+    <!-- 쪽 안 원장 id 만 — 지연 조인(docs/30 5.1): 깊은 offset 에서 건너뛰는 행마다 select 목록(부질의·wms_node_path)을 계산하지 않게
+         안쪽은 inv_trx(+ 품번 조건일 때만 품목)만 읽고 ix_inv_trx_plant 로 id 를 고른다. 같은 조건·같은 정렬(끝 키 trx_id — 같은 시각도 쪽 경계 고정),
+         회사는 두 쪽 inv_trx 모두 RLS -->
+    <sql id="trxKeys">
+        select t.trx_id
+          from inv_trx t
+          <if test="q.itemCdLike != null">join mst_item i on i.item_id = t.item_id</if>
+         where t.occurred_at &gt;= #{q.fromAt} and t.occurred_at &lt; #{q.toAt} and t.plant_cd = #{q.plantCd}
+        <if test="q.itemId != null">and t.item_id = #{q.itemId}</if>
+        <if test="q.itemCdLike != null">and i.item_cd like #{q.itemCdLike} escape '\'</if>
+        <if test="q.nodeId != null">and t.node_id = #{q.nodeId}</if>
+        <if test="q.trxType != null">and t.trx_type = #{q.trxType}</if>
+        <include refid="trxOrder"/>
+        limit #{q.page.size} offset #{q.page.offset}
+    </sql>
+
+    <select id="customPlan" resultType="string">select set_config('plan_cache_mode', 'force_custom_plan', true)</select>
+
+    <select id="findTrxs" resultType="io.smarthappy.module.wms.inv.InvDtos$TrxRow">
+        select <include refid="trxCols"/>
+          from (<include refid="trxKeys"/>) k
+          join inv_trx t on t.trx_id = k.trx_id
+          join mst_item i on i.item_id = t.item_id
+          join mst_equip_hier n on n.node_id = t.node_id
+          left join mst_worker w on w.worker_id = t.performed_by
+        <include refid="trxOrder"/>
+    </select>
+
+    <select id="countTrxs" resultType="long">select count(*) <include refid="trxWhere"/></select>
+
+    <select id="cursorTrxs" resultType="io.smarthappy.module.wms.inv.InvDtos$TrxRow" fetchSize="1000">
+        select <include refid="trxCols"/> <include refid="trxWhere"/> <include refid="trxOrder"/>
+    </select>
+
+    <select id="findKeyHistory" resultType="io.smarthappy.module.wms.inv.InvDtos$TrxRow">
+        select <include refid="trxCols"/> <include refid="trxFrom"/>
+         where t.item_id = #{itemId} and t.node_id = #{nodeId} and t.lot_id is not distinct from #{lotId}::bigint
+           and t.stock_status = #{status}
+         order by t.occurred_at desc, t.trx_id desc
+         limit #{limit}
+    </select>
+
+    <!-- ================================================================ 대사: 원장 합 vs 현재고 -->
+    <sql id="mismatchFrom">
+        from (select item_id, node_id, lot_id, stock_status, sum(qty) as q from inv_trx group by item_id, node_id, lot_id, stock_status) t
+        full join inv_stock s
+          on s.item_id = t.item_id and s.node_id = t.node_id and s.lot_id is not distinct from t.lot_id and s.stock_status = t.stock_status
+        where coalesce(t.q, 0) &lt;&gt; coalesce(s.qty, 0)
+    </sql>
+
+    <select id="countStockKeys" resultType="int">select count(*) from inv_stock</select>
+
+    <select id="findMismatches" resultType="io.smarthappy.module.wms.inv.InvDtos$Mismatch">
+        select coalesce(t.item_id, s.item_id) as item_id, coalesce(t.node_id, s.node_id) as node_id,
+               coalesce(t.lot_id, s.lot_id) as lot_id, coalesce(t.stock_status, s.stock_status) as stock_status,
+               coalesce(t.q, 0) as ledger_qty, coalesce(s.qty, 0) as stock_qty
+        <include refid="mismatchFrom"/>
+        order by 1, 2
+        limit #{limit}
+    </select>
+
+    <select id="countMismatches" resultType="int">select count(*) <include refid="mismatchFrom"/></select>
+
+    <select id="insertReconcile" resultType="long" flushCache="true">
+        insert into inv_reconcile_run (comp_cd, key_count, mismatch_count, missing_receipts, rcv_mat_over, rcv_po_mismatch, qc_judged, qms_void_live,
+                                       detail, run_by)
+        values (hb_current_comp(), #{keys}, #{mismatches}, #{missing}, #{rcvOver}, #{poMismatch}, #{qcJudged}, #{voidLive}, #{detail}::jsonb, #{by})
+        returning run_id
+    </select>
+
+    <select id="lastReconcile" resultType="io.smarthappy.module.wms.inv.InvDtos$ReconcileRow">
+        select run_id, run_at, key_count, mismatch_count, missing_receipts, rcv_mat_over, rcv_po_mismatch, qc_judged, qms_void_live,
+               detail::text as detail, run_by
+          from inv_reconcile_run order by run_at desc, run_id desc limit 1
+    </select>
+    <!-- ================================================================ 자재 입고 (2부 B4a, docs/30 12.3) -->
+    <!-- 품목 속성 GTIN(D-B10) — EAN-13 등 짧게 적어도 14자리로 맞춰 비교, 둘 이상이면 모호해서 없음 -->
+    <select id="findItemByGtin" resultType="io.smarthappy.module.wms.inv.InvDtos$ItemOpt">
+        select <include refid="itemCols"/>
+          from (select i.*, count(*) over () as n
+                  from mst_item i
+                 where lpad(btrim(i.attrs ->> 'GTIN'), 14, '0') = #{gtin}) x
+         where n = 1
+    </select>
+
+    <select id="underScrap" resultType="boolean">
+        with recursive up as (
+            select n.node_id, n.parent_id, 1 as lv from mst_equip_hier n where n.node_id = #{nodeId}
+            union all
+            select p.node_id, p.parent_id, u.lv + 1 from up u join mst_equip_hier p on p.node_id = u.parent_id where u.lv &lt; 20
+        )
+        select exists (select 1 from up join wms_loc_attr a on a.node_id = up.node_id where a.loc_usage = 'SCRAP')
+    </select>
+
+    <select id="lotNoOf" resultType="string">
+        select lot_no from lot_master where lot_id = #{lotId}
+    </select>
+
+    <select id="findRcvByReq" resultType="io.smarthappy.module.wms.inv.InvDtos$RcvReplay">
+        select t.trx_id, l.lot_no
+          from inv_trx t join lot_master l on l.lot_id = t.src_id
+         where t.client_req_id = #{reqId} and t.req_seq = 1 and t.trx_type in ('RCV_MAT', 'RCV_PO')
+    </select>
+
+    <select id="countRcvMatOver" resultType="int">
+        select count(*) from (
+            select t.src_id
+              from inv_trx t join lot_master l on l.lot_id = t.src_id
+             where t.src_type = 'MAT_RECEIPT'
+             group by t.src_id, l.qty_created
+            having sum(t.qty) &gt; l.qty_created
+        ) x
+    </select>
+    <!-- 구매 입고 대사(B4b): SRM 발주 행 입고 수량(투영) ≠ 원장 RCV_PO 발주 단위 합(역분개 포함)인 발주 행 수.
+         원장에 한 번이라도 걸린 행 + 원장 없이 입고 수량만 있는 행 둘 다 센다(srm_po_line 은 읽기만) -->
+    <select id="countRcvPoMismatch" resultType="int">
+        select count(*)
+          from srm_po_line p
+          left join (select t.po_line_id, sum(t.po_qty) as q from inv_trx t where t.po_line_id is not null group by t.po_line_id) x
+            on x.po_line_id = p.po_line_id
+         where coalesce(x.q, 0) &lt;&gt; p.recv_qty
+    </select>
+
+    <select id="custCdOf" resultType="string">
+        select cust_cd from mst_cust where cust_id = #{custId}
+    </select>
+
+    <!-- 다건 원장 앞 LOT 선잠금(docs/30 12.4.5 ②) — 정렬한 뒤 잠그므로 잠그는 순서 = lot_id 순 -->
+    <select id="lockLotsShare" resultType="long">
+        select lot_id from lot_master
+         where lot_id in <foreach collection="lotIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by lot_id
+           for share
+    </select>
+</mapper>

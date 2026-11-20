@@ -1,0 +1,46 @@
+# YeonOS Jenkins (docs/71, 설치·운영은 deploy/ci/README.md). 이 PC(Windows + Docker Desktop)에서만 돈다.
+#   cd deploy/ci/jenkins && cp .env.example .env   # 관리자 비밀번호를 바꾼다(.env 는 커밋 금지)
+#   docker compose up -d --build                   # http://127.0.0.1:8095/
+name: yeonos-ci
+
+services:
+  jenkins:
+    # 직접 빌드 — image: 를 적지 않아 compose 기본 이름(yeonos-ci-jenkins)을 쓴다(베이스 이미지는 Dockerfile 에서 다이제스트 고정)
+    build: .
+    container_name: yeonos-jenkins
+    restart: unless-stopped
+    # 127.0.0.1 에만 연다 — 인터넷·같은 공유기의 다른 기기에서 접속할 수 없다(webhook 대신 폴링을 쓰는 이유, docs/71 2장)
+    ports:
+      - "127.0.0.1:${JENKINS_PORT:-8095}:8080"
+    environment:
+      JENKINS_ADMIN_ID: ${JENKINS_ADMIN_ID:-admin}
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:?.env 에 JENKINS_ADMIN_PASSWORD 를 넣는다}
+      JENKINS_PORT: ${JENKINS_PORT:-8095}
+      YEONOS_GIT_URL: ${YEONOS_GIT_URL:-https://github.com/Dong-yeon/YeonOS.git}
+      CASC_JENKINS_CONFIG: /var/jenkins_casc
+      # 설정 마법사 끔(관리자·플러그인·잡은 JCasC 로), 컨트롤러 힙 512m(빌드 없을 때 RSS 약 650MB)
+      JAVA_OPTS: >-
+        -Djenkins.install.runSetupWizard=false
+        -Xmx512m
+        -Duser.timezone=Asia/Seoul
+      # Testcontainers: Docker Desktop 소켓을 그대로 쓰고(docker-outside-of-docker), 시험 DB 컨테이너는 이 컨테이너의
+      # 형제로 뜬다. 접속 주소는 host.docker.internal(Docker Desktop 이 주는 호스트 이름) — docs/71 4장 시험 결과
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+      TZ: Asia/Seoul
+      LC_ALL: C.UTF-8
+    # Docker Desktop 의 소켓은 root:root 660 — 그룹 0 을 더해야 jenkins(uid 1000)가 연다.
+    # 소켓 = Docker 전체 제어권(호스트 VM root 와 같음). 그래서 관리자 1명·자기 저장소 빌드만(docs/71 5장)
+    group_add:
+      - "0"
+    volumes:
+      - jenkins-home:/var/jenkins_home
+      - ./casc:/var/jenkins_casc:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    # 4g = 컨트롤러 약 0.8 + Gradle 빌드 JVM 약 0.8 + 시험 JVM(힙 1536m) 약 2.2 GB — 다른 세션과 PC 메모리를 나눠 쓰므로 빠듯하게(docs/71 3장).
+    # 시험 DB 컨테이너는 이 한도 밖(형제 컨테이너, 약 0.3GB)
+    mem_limit: 4g
+    stop_grace_period: 60s
+
+volumes:
+  jenkins-home:
+    name: yeonos-jenkins-home

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  메뉴 관리 (sys-menu) — 시스템관리 1단계 (docs/36). 회사 메뉴 트리: 폴더 + 화면 메뉴.
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자(WEB). 도입 때 한 번 정리하고 새 화면이 생기면 가끔 고친다.
+  직접 치는 값 = 폴더 이름·순서. 화면은 사용 중 목록에서 고른다. 메뉴는 배치일 뿐 — 화면이 보이는지는 조회 권한이 정한다.
+  예외 = 자기 하위 아래로 이동(순환), 5단 초과, 화면 메뉴 아래 넣기 → 칸 오류(DB 트리거가 최종).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">메뉴 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<!-- 건수 적은 목록 = 빠른 찾기 1칸(docs/40 P1 ②) -->
+<form id="quickFind" class="hb-search" role="search" autocomplete="off">
+    <label><span th:text="#{sysUi.quickFind}">빠른 찾기</span>
+        <input type="search" maxlength="50" th:placeholder="#{sysUi.quickFindTreeHint}"></label>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar hb-tree-tools">
+            <span id="summary" class="hb-muted hb-tree-summary"></span>
+            <button type="button" id="expandBtn" class="hb-btn-secondary" th:text="#{bomTree.expandAll}">모두 펼치기</button>
+            <button type="button" id="collapseBtn" class="hb-btn-secondary" th:text="#{bomTree.collapse}">1레벨만</button>
+        </div>
+        <div id="tree" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="addFolderBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{sysMenu.addFolder}">폴더 추가</button>
+            <button type="button" id="addProgBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{sysMenu.addProg}">화면 추가</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{sysMenu.selectOrNew}">왼쪽에서 메뉴를 고르거나 추가를 누르세요.</p>
+        <form id="menuForm" class="hb-form" autocomplete="off">
+            <label class="hb-wide"><span th:text="#{sysMenu.parent}">상위 폴더</span>
+                <select data-field="parentId" data-help-key="sys-menu.parentId"></select></label>
+            <label class="hb-wide" id="progRow"><span th:text="#{sysMenu.col.progCd}">화면</span>
+                <select data-field="progCd" data-help-key="sys-menu.progCd"></select></label>
+            <label class="hb-wide"><span th:text="#{sysMenu.col.menuNm}">이름</span>
+                <input data-field="menuNm" maxlength="100" data-help-key="sys-menu.menuNm"></label>
+            <label><span th:text="#{sysMenu.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{sysMenu.col.useYn}">사용</span>
+                <select data-field="useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+        </form>
+        <p class="hb-muted" th:text="#{sysMenu.note}">메뉴는 배치일 뿐입니다 — 화면이 보이는지는 권한그룹의 조회 권한이 정합니다.</p>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.tree.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/views/admin/menu-mgt.js}"></script>
+</body>
+</html>

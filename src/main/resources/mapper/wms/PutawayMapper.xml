@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  적치 검사(W-12, docs/30 12.19). 회사 조건은 RLS.
+  실효 목록 = 자기 노드부터 위로 올라가며 사용 중 허용 행이 있는 첫 노드의 목록(상속). 깊이 20 까지(트리 순환 방지).
+-->
+<mapper namespace="io.smarthappy.module.wms.inv.PutawayMapper">
+
+    <select id="allowedFor" resultType="io.smarthappy.module.wms.inv.PutawayMapper$Allow">
+        with recursive up as (
+            select h.node_id, h.parent_id, 0 as d from mst_equip_hier h where h.node_id = #{nodeId}
+            union all
+            select p.node_id, p.parent_id, u.d + 1 from up u join mst_equip_hier p on p.node_id = u.parent_id where u.d &lt; 20
+        ), owner as (
+            select u.node_id
+              from up u
+             where exists (select 1 from wms_loc_class_allow a where a.node_id = u.node_id and a.use_yn = 'Y')
+             order by u.d
+             limit 1
+        )
+        select a.item_class_id as class_id, k.class_cd, k.class_nm, a.node_id as owner_node_id
+          from owner o
+          join wms_loc_class_allow a on a.node_id = o.node_id and a.use_yn = 'Y'
+          join mst_item_class k on k.class_id = a.item_class_id
+         order by k.class_cd
+    </select>
+
+    <select id="itemClass" resultType="io.smarthappy.module.wms.inv.PutawayMapper$ItemCls">
+        select i.item_cd, i.item_class_id as class_id, k.class_cd
+          from mst_item i
+          left join mst_item_class k on k.class_id = i.item_class_id
+         where i.item_id = #{itemId}
+    </select>
+
+    <select id="nodeCd" resultType="string">
+        select h.node_cd from mst_equip_hier h where h.node_id = #{nodeId}
+    </select>
+
+    <select id="ownClassIds" resultType="long">
+        select a.item_class_id from wms_loc_class_allow a where a.node_id = #{nodeId} and a.use_yn = 'Y' order by a.item_class_id
+    </select>
+
+    <select id="lockRows" resultType="io.smarthappy.module.wms.inv.PutawayMapper$AllowRow">
+        select a.allow_id, a.item_class_id as class_id, a.use_yn
+          from wms_loc_class_allow a
+         where a.node_id = #{nodeId}
+         order by a.allow_id
+           for update
+    </select>
+
+    <select id="classOptions" resultType="io.smarthappy.module.wms.inv.PutawayMapper$Allow">
+        select k.class_id, k.class_cd, k.class_nm from mst_item_class k where k.use_yn = 'Y' order by k.sort_no, k.class_cd
+    </select>
+
+    <insert id="insert">
+        insert into wms_loc_class_allow (comp_cd, node_id, item_class_id, created_by, updated_by)
+        values (hb_current_comp(), #{nodeId}, #{classId}, #{by}, #{by})
+    </insert>
+
+    <update id="setUse">
+        update wms_loc_class_allow
+           set use_yn = #{useYn}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where allow_id = #{allowId}
+    </update>
+</mapper>

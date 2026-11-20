@@ -1,0 +1,78 @@
+{
+  "title": "YeonOS 운영 지표 (예시, docs/52 Y2)",
+  "uid": "yeonos-ops",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": {"from": "now-24h", "to": "now"},
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {"name": "ds", "type": "datasource", "query": "prometheus", "label": "데이터 원본"}
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "아웃박스 실패(멈춤)",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${ds}"},
+      "targets": [{"expr": "sum(hb_outbox_failed)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "RLS 위반 차단(24시간)",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${ds}"},
+      "targets": [{"expr": "sum(increase(hb_tenant_forbidden_total[24h]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "마지막 백업 뒤(시간)",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "${ds}"},
+      "targets": [{"expr": "hb_backup_age_hours", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "h", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 26}]}}}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "아웃박스 대기(토픽별)",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${ds}"},
+      "targets": [
+        {"expr": "sum by (topic) (hb_outbox_pending)", "legendFormat": "{{topic}} 대기", "refId": "A"},
+        {"expr": "max by (topic) (hb_outbox_oldest_pending_seconds)", "legendFormat": "{{topic}} 가장 오래(초)", "refId": "B"}
+      ]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "로그인 실패·시도 제한(5분)",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${ds}"},
+      "targets": [
+        {"expr": "increase(hb_login_fail_total[5m])", "legendFormat": "실패", "refId": "A"},
+        {"expr": "increase(hb_login_throttled_total[5m])", "legendFormat": "시도 제한", "refId": "B"}
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "재전송·중복(5분)",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${ds}"},
+      "targets": [
+        {"expr": "sum by (kind) (increase(hb_pop_resend_total[5m]))", "legendFormat": "POP {{kind}}", "refId": "A"},
+        {"expr": "sum by (consumer) (increase(hb_inbox_duplicate_total[5m]))", "legendFormat": "수신 {{consumer}}", "refId": "B"}
+      ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "정기 작업 지연(초)",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${ds}"},
+      "targets": [{"expr": "hb_job_lag_seconds", "legendFormat": "{{job}}", "refId": "A"}]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "엑셀 내보내기(거절·평균 시간)",
+      "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${ds}"},
+      "targets": [
+        {"expr": "increase(hb_excel_busy_total[5m])", "legendFormat": "자리 없음", "refId": "A"},
+        {"expr": "sum(rate(hb_excel_export_seconds_sum[5m])) / sum(rate(hb_excel_export_seconds_count[5m]))", "legendFormat": "평균 시간(초)", "refId": "B"}
+      ]
+    }
+  ]
+}

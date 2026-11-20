@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  지원 세션 허락 (sys-support) — 회사 관리자가 YeonOS 운영자에게 기간·범위를 정해 열람을 허락하고, 운영자가 한 일을 본다(05 D8).
+  주 사용자: 회사 관리자(WEB). 운영자 아이디는 지원 요청 때 운영자가 알려준다.
+-->
+<body data-table-menu="" class="hb-page hb-page-scroll" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">지원 세션 허락</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+<p class="hb-muted" th:text="#{support.guide}">운영자는 여기서 허락한 범위·기간 안에서만 우리 회사 자료를 봅니다. 언제든 회수할 수 있습니다.</p>
+
+<form id="grantForm" class="hb-inline-form" th:if="${actions.contains('SAVE')}" autocomplete="off">
+    <input data-field="opLoginId" maxlength="50" th:placeholder="#{support.opLoginId}" required>
+    <select data-field="scopeCd">
+        <option value="LOGS" th:text="#{support.scope.LOGS}">접속 로그</option>
+        <option value="USERS" th:text="#{support.scope.USERS}">사용자 MFA 초기화</option>
+        <option value="FEEDBACK" th:text="#{support.scope.FEEDBACK}">화면 의견</option>
+    </select>
+    <select data-field="hours">
+        <option value="2">2h</option><option value="24" selected>24h</option><option value="72">72h</option><option value="168">7d</option>
+    </select>
+    <input data-field="reason" maxlength="500" th:placeholder="#{support.reason}" required>
+    <button type="submit" th:text="#{support.grant}">허락</button>
+</form>
+
+<h2 th:text="#{support.grants}">허락 목록</h2>
+<div id="grants"></div>
+<h2 th:text="#{support.opsLog}">운영자가 한 일</h2>
+<div id="opsLog"></div>
+<p id="msg" class="hb-msg" role="status"></p>
+
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/platform/support.js}"></script>
+</body>
+</html>

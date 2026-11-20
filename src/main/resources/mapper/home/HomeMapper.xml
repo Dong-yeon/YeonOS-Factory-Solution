@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 홈 카드 설정 (docs/37 14.1 사용자 · 15장 역할별 기본). 회사 조건은 RLS, 같은 회사 사용자인지는 트리거(hb_check_user_comp),
+     같은 회사 권한그룹인지는 복합 FK (comp_cd, auth_grp_cd) -->
+<mapper namespace="io.smarthappy.module.home.HomeMapper">
+
+    <select id="findPrefs" resultType="io.smarthappy.module.home.HomeMapper$PrefRow">
+        select card_cd, sort_no, hidden_yn
+          from sys_home_user_card
+         where user_id = #{userId}
+         order by sort_no, card_cd
+    </select>
+
+    <delete id="deletePrefs">
+        delete from sys_home_user_card where user_id = #{userId}
+    </delete>
+
+    <insert id="insertPrefs">
+        insert into sys_home_user_card (comp_cd, user_id, card_cd, sort_no, hidden_yn, created_by, updated_by)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{userId}, #{r.cardCd}, #{r.sortNo}, #{r.hiddenYn}, #{by}, #{by})
+        </foreach>
+    </insert>
+
+    <!-- 세트가 있는 사용 중 그룹 중 첫 그룹 — 그룹 순서는 역할별 홈(findHomeProg)과 같다(sort_no, auth_grp_cd) -->
+    <select id="findGroupDefault" resultType="io.smarthappy.module.home.HomeMapper$PrefRow">
+        select gc.card_cd, gc.sort_no, gc.hidden_yn
+          from sys_home_grp_card gc
+         where gc.auth_grp_cd = (
+                select g.auth_grp_cd
+                  from sys_user_auth ua
+                  join sys_auth_group g on g.comp_cd = ua.comp_cd and g.auth_grp_cd = ua.auth_grp_cd and g.use_yn = 'Y'
+                 where ua.user_id = #{userId}
+                   and exists (select 1 from sys_home_grp_card x where x.comp_cd = g.comp_cd and x.auth_grp_cd = g.auth_grp_cd)
+                 order by g.sort_no, g.auth_grp_cd
+                 limit 1)
+         order by gc.sort_no, gc.card_cd
+    </select>
+
+    <select id="findGroups" resultType="io.smarthappy.module.home.HomeMapper$GroupRow">
+        select g.auth_grp_cd, g.auth_grp_nm, g.sort_no, g.admin_yn, g.use_yn,
+               (select count(*) from sys_home_grp_card gc where gc.comp_cd = g.comp_cd and gc.auth_grp_cd = g.auth_grp_cd)::int as card_cnt
+          from sys_auth_group g
+         order by g.sort_no, g.auth_grp_cd
+    </select>
+
+    <select id="findGroup" resultType="io.smarthappy.module.home.HomeMapper$GroupRow">
+        select g.auth_grp_cd, g.auth_grp_nm, g.sort_no, g.admin_yn, g.use_yn,
+               (select count(*) from sys_home_grp_card gc where gc.comp_cd = g.comp_cd and gc.auth_grp_cd = g.auth_grp_cd)::int as card_cnt
+          from sys_auth_group g
+         where g.auth_grp_cd = #{authGrpCd}
+    </select>
+
+    <select id="findGroupCards" resultType="io.smarthappy.module.home.HomeMapper$PrefRow">
+        select card_cd, sort_no, hidden_yn
+          from sys_home_grp_card
+         where auth_grp_cd = #{authGrpCd}
+         order by sort_no, card_cd
+    </select>
+
+    <select id="groupVer" resultType="string">
+        select md5(coalesce(string_agg(grp_card_id || ':' || card_cd || ':' || sort_no || hidden_yn, ',' order by grp_card_id), ''))
+          from sys_home_grp_card
+         where auth_grp_cd = #{authGrpCd}
+    </select>
+
+    <select id="groupSearchProgs" resultType="string">
+        select ap.prog_cd
+          from sys_auth_prog ap
+          join sys_prog p on p.prog_cd = ap.prog_cd and p.use_yn = 'Y'
+         where ap.auth_grp_cd = #{authGrpCd}
+           and ap.action_cd = 'SEARCH'
+        union
+        -- 개인 화면(self_service_yn = 'Y', 결재함 등)은 로그인 사용자 모두 조회 권한(AuthMapper 와 같은 규칙) — 5단계 결재 카드.
+        -- 권한 그룹 단위 질의라 사용자 유형 조건이 필요 없다: 협력사 포털 사용자는 권한 그룹에 들 수 없다(docs/42 2장 트리거)
+        select p.prog_cd from sys_prog p where p.use_yn = 'Y' and p.self_service_yn = 'Y'
+    </select>
+
+    <select id="lockGroup" resultType="string">
+        select pg_advisory_xact_lock(hashtext('sys_home_grp_card'), hashtext(hb_current_comp() || ':' || #{authGrpCd}))::text
+    </select>
+
+    <delete id="deleteGroupCards">
+        delete from sys_home_grp_card where auth_grp_cd = #{authGrpCd}
+    </delete>
+
+    <insert id="insertGroupCards">
+        insert into sys_home_grp_card (comp_cd, auth_grp_cd, card_cd, sort_no, hidden_yn, created_by, updated_by)
+        values
+        <foreach collection="rows" item="r" separator=",">
+            (hb_current_comp(), #{authGrpCd}, #{r.cardCd}, #{r.sortNo}, #{r.hiddenYn}, #{by}, #{by})
+        </foreach>
+    </insert>
+
+    <!-- 공장 선택 (5단계, docs/37 17.2) — 사용 중 공장만. 다른 회사 공장은 RLS 로 안 보인다 -->
+    <select id="findPlants" resultType="io.smarthappy.module.home.HomeMapper$PlantRow">
+        select plant_cd, plant_nm from sys_plant where use_yn = 'Y' order by sort_no, plant_cd
+    </select>
+
+    <select id="findPlant" resultType="io.smarthappy.module.home.HomeMapper$PlantRow">
+        select plant_cd, plant_nm from sys_plant where plant_cd = #{plantCd} and use_yn = 'Y'
+    </select>
+</mapper>

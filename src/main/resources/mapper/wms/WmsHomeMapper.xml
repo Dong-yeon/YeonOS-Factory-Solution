@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  홈 카드 집계 (docs/37 17.3). 회사 조건은 RLS. "마감 안 된 실사" = DRAFT·COUNTING·REVIEW(CountMapper countOpen 과 같은 상태 묶음, 공장 선택이 없으면 회사 전체).
+  ix_wms_count_plant (comp_cd, plant_cd, status) — 실사 행은 적다.
+-->
+<mapper namespace="io.smarthappy.module.wms.count.WmsHomeMapper">
+
+    <select id="countOpenSummary" resultType="io.smarthappy.module.wms.count.WmsHomeMapper$CountOpenSummary">
+        select count(*) as open_cnt, count(*) filter (where c.status = 'REVIEW') as review_cnt
+          from wms_count c
+         where c.status in ('DRAFT', 'COUNTING', 'REVIEW')
+           <if test="plantCd != null">and c.plant_cd = #{plantCd}</if>
+    </select>
+
+    <select id="countOpenTop" resultType="io.smarthappy.module.wms.count.WmsHomeMapper$CountOpenRow">
+        select c.count_no, c.plant_cd, c.status, c.created_at
+          from wms_count c
+         where c.status in ('DRAFT', 'COUNTING', 'REVIEW')
+           <if test="plantCd != null">and c.plant_cd = #{plantCd}</if>
+         order by case c.status when 'REVIEW' then 0 when 'COUNTING' then 1 else 2 end, c.created_at, c.count_id
+         limit #{limit}
+    </select>
+</mapper>

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  라벨 템플릿·프린터 (wms-label) — P4 1부 W2 (docs/30). 탭 2개: 템플릿(ZPL + {{자리표시자}}) / 프린터(네트워크, 사설 주소).
+  사용성 체크(docs/11 4.3): 주 사용자 = 물류·전산 담당(WEB). 처음 구성 때 쓰고 가끔 고친다.
+  직접 치는 값 = 코드·이름·ZPL 본문·프린터 주소. 본문은 "견본 불러오기"로 시작해 고친다. 미리보기는 서버 렌더 결과(ZPL 글자) —
+  라벨 내용을 회사 밖 미리보기 서비스로 보내지 않는다(docs/30 9장). 실제 모양은 "시험 인쇄"로.
+  예외 = 금지 명령·허용 밖 자리표시자·^FD 밖 자리표시자(칸 오류), 공인 주소·정책 밖 포트(칸 오류), 기본 템플릿 동시 지정(409).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/views/wms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">라벨 템플릿·프린터</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <fieldset class="hb-seg">
+        <legend th:text="#{wmsLabel.tab}">보기</legend>
+        <label><input type="radio" name="tab" value="TPL" checked><span th:text="#{wmsLabel.tabTpl}">템플릿</span></label>
+        <label><input type="radio" name="tab" value="PRN"><span th:text="#{wmsLabel.tabPrn}">프린터</span></label>
+    </fieldset>
+    <label><span th:text="#{wmsLabel.labelType}">라벨 유형</span>
+        <select name="labelType" data-hb="select" data-code="WMS_LABEL_TYPE" data-blank="all"></select></label>
+    <label><span th:text="#{wmsLabel.plant}">공장</span>
+        <select name="plantCd" id="plantSel"></select></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+        </div>
+        <!-- 그리드는 머리에 display 를 주므로 감싼 div 를 숨긴다 -->
+        <div id="tplWrap" class="wms-grid-wrap"><div id="tplGrid" class="hb-grid-host"></div></div>
+        <div id="prnWrap" class="wms-grid-wrap" hidden><div id="prnGrid" class="hb-grid-host"></div></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <!-- 템플릿 -->
+        <div id="tplPane">
+            <div class="hb-toolbar">
+                <button type="button" id="tplSaveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+                <button type="button" id="sampleBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{wmsLabel.sample}">견본 불러오기</button>
+                <button type="button" id="previewBtn" class="hb-btn-secondary" th:text="#{wmsLabel.preview}">미리보기</button>
+                <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            </div>
+            <p id="tplMode" class="hb-muted"></p>
+            <form id="tplForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{wmsLabel.labelType}">라벨 유형</span>
+                    <select data-field="labelType" data-help-key="wms-label.labelType"></select></label>
+                <label><span th:text="#{wmsLabel.tplCd}">코드</span>
+                    <input data-field="tplCd" maxlength="20" required></label>
+                <label class="hb-wide"><span th:text="#{wmsLabel.tplNm}">이름</span>
+                    <input data-field="tplNm" maxlength="100" required></label>
+                <label><span th:text="#{wmsLabel.widthMm}">폭(mm)</span>
+                    <input data-field="widthMm" data-hb="number" data-scale="1" data-min="10" data-max="300" data-pad="false"></label>
+                <label><span th:text="#{wmsLabel.heightMm}">높이(mm)</span>
+                    <input data-field="heightMm" data-hb="number" data-scale="1" data-min="10" data-max="300" data-pad="false"></label>
+                <label><span th:text="#{wmsLabel.dpi}">해상도(dpi)</span>
+                    <select data-field="dpi"><option value="203">203</option><option value="300">300</option><option value="600">600</option></select></label>
+                <label><span th:text="#{wmsLabel.defaultYn}">기본</span>
+                    <select data-field="defaultYn" data-help-key="wms-label.defaultYn">
+                        <option value="N" th:text="#{wmsLabel.no}">아니오</option>
+                        <option value="Y" th:text="#{wmsLabel.yes}">예</option>
+                    </select></label>
+                <label><span th:text="#{wmsLabel.useYn}">사용</span>
+                    <select data-field="useYn">
+                        <option value="Y" th:text="#{yn.Y}">사용</option>
+                        <option value="N" th:text="#{yn.N}">미사용</option>
+                    </select></label>
+                <label class="hb-wide"><span th:text="#{wmsLabel.body}">ZPL 본문</span>
+                    <textarea data-field="body" rows="12" maxlength="32768" spellcheck="false" data-help-key="wms-label.body"></textarea></label>
+                <p class="hb-wide hb-muted" id="fields"></p>
+                <label class="hb-wide"><span th:text="#{wmsLabel.remark}">비고</span>
+                    <textarea data-field="remark" maxlength="500" rows="2"></textarea></label>
+            </form>
+            <div class="hb-toolbar" th:if="${actions.contains('PRINT')}">
+                <label><span th:text="#{wmsLabel.testPrinter}">시험 인쇄 프린터</span> <select id="testPrinter"></select></label>
+                <button type="button" id="testBtn" class="hb-btn-secondary" th:text="#{wmsLabel.testPrint}">시험 인쇄</button>
+            </div>
+            <!-- 미리보기(docs/65 18.3): 서버 배치 계산 → SVG(근사) + 경고(한글 글꼴·넘침, 견본 값 / 긴 값) -->
+            <div id="previewBox" class="wms-label-preview" hidden>
+                <p class="hb-muted" th:text="#{wmsLabel.previewApprox}">근사값입니다 — 최종 모양은 시험 인쇄로 확인하세요.</p>
+                <svg id="previewSvg" class="wms-label-svg" role="img" th:attr="aria-label=#{wmsLabel.preview}"></svg>
+                <ul id="previewWarn" class="wms-warn-list"></ul>
+                <details>
+                    <summary th:text="#{wmsLabel.previewZpl}">렌더된 ZPL</summary>
+                    <pre id="preview" class="hb-muted"></pre>
+                </details>
+            </div>
+
+            <!-- 템플릿 선택 규칙(docs/65 18.4): 거래처 > 품목 > 유형 기본 -->
+            <section id="rulePane" hidden>
+                <h2 th:text="#{wmsLabel.rules}">이 템플릿을 쓰는 규칙</h2>
+                <p class="hb-muted" th:text="#{wmsLabel.rulesHint}">인쇄 때 템플릿을 고르지 않으면 거래처 규칙 → 품목 규칙 → 유형 기본 순으로 찾습니다.</p>
+                <div class="hb-replace-host">
+                    <table class="hb-cmp-table" id="ruleTbl">
+                        <thead><tr>
+                            <th th:text="#{wmsLabel.ruleScope}">범위</th>
+                            <th th:text="#{wmsLabel.ruleTarget}">대상</th>
+                            <th th:text="#{wmsLabel.useYn}">사용</th>
+                            <th></th>
+                        </tr></thead>
+                        <tbody id="ruleRows"></tbody>
+                    </table>
+                </div>
+                <div class="wms-rule-add" th:if="${actions.contains('SAVE')}">
+                    <label><span th:text="#{wmsLabel.ruleScope}">범위</span>
+                        <select id="ruleScope">
+                            <option value="CUST" th:text="#{wmsLabel.scope.CUST}">거래처</option>
+                            <option value="ITEM" th:text="#{wmsLabel.scope.ITEM}">품목</option>
+                        </select></label>
+                    <label><span th:text="#{wmsLabel.ruleTarget}">대상</span>
+                        <input id="ruleQ" maxlength="50" list="ruleTargets" th:placeholder="#{wmsLabel.ruleQ}" data-help-key="wms-label.ruleTarget">
+                        <datalist id="ruleTargets"></datalist></label>
+                    <button type="button" id="ruleAddBtn" class="hb-btn-secondary" th:text="#{wmsLabel.ruleAdd}">규칙 추가</button>
+                </div>
+            </section>
+        </div>
+
+        <!-- 프린터 -->
+        <div id="prnPane" hidden>
+            <div class="hb-toolbar">
+                <button type="button" id="prnSaveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+                <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            </div>
+            <p id="prnMode" class="hb-muted"></p>
+            <form id="prnForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{wmsLabel.plant}">공장</span>
+                    <select data-field="plantCd"></select></label>
+                <label><span th:text="#{wmsLabel.printerCd}">코드</span>
+                    <input data-field="printerCd" maxlength="20" required></label>
+                <label class="hb-wide"><span th:text="#{wmsLabel.printerNm}">이름</span>
+                    <input data-field="printerNm" maxlength="100" required></label>
+                <label><span th:text="#{wmsLabel.host}">주소</span>
+                    <input data-field="host" maxlength="253" required data-help-key="wms-label.host"></label>
+                <label><span th:text="#{wmsLabel.port}">포트</span>
+                    <input data-field="port" inputmode="numeric" maxlength="5" data-help-key="wms-label.port"></label>
+                <label><span th:text="#{wmsLabel.dpi}">해상도(dpi)</span>
+                    <select data-field="dpi"><option value="203">203</option><option value="300">300</option><option value="600">600</option></select></label>
+                <label><span th:text="#{wmsLabel.usage}">용도</span>
+                    <select data-field="usage"></select></label>
+                <label><span th:text="#{wmsLabel.useYn}">사용</span>
+                    <select data-field="useYn">
+                        <option value="Y" th:text="#{yn.Y}">사용</option>
+                        <option value="N" th:text="#{yn.N}">미사용</option>
+                    </select></label>
+                <!-- E1(docs/65 18.1·18.2·18.4): 연결 방식 · 한글 글꼴 · 용지 폭 · 상태 확인 -->
+                <label><span th:text="#{wmsLabel.connMode}">연결 방식</span>
+                    <select data-field="connMode" data-help-key="wms-label.connMode"></select></label>
+                <label id="agentField"><span th:text="#{wmsLabel.agentTerminalId}">인쇄 에이전트</span>
+                    <select data-field="agentTerminalId" data-help-key="wms-label.agentTerminalId"></select></label>
+                <label><span th:text="#{wmsLabel.cjkFontYn}">한글 글꼴</span>
+                    <select data-field="cjkFontYn" data-help-key="wms-label.cjkFontYn">
+                        <option value="N" th:text="#{wmsLabel.no}">아니오</option>
+                        <option value="Y" th:text="#{wmsLabel.yes}">예</option>
+                    </select></label>
+                <label><span th:text="#{wmsLabel.cjkFontFile}">글꼴 파일</span>
+                    <input data-field="cjkFontFile" maxlength="40" placeholder="E:NANUMGOTHIC.TTF"></label>
+                <label><span th:text="#{wmsLabel.mediaWidthMm}">용지 폭(mm)</span>
+                    <input data-field="mediaWidthMm" data-hb="number" data-scale="1" data-min="10" data-max="300" data-pad="false"
+                           data-help-key="wms-label.mediaWidthMm"></label>
+                <label><span th:text="#{wmsLabel.statusCheckYn}">상태 확인</span>
+                    <select data-field="statusCheckYn" data-help-key="wms-label.statusCheckYn">
+                        <option value="Y" th:text="#{wmsLabel.yes}">예</option>
+                        <option value="N" th:text="#{wmsLabel.no}">아니오</option>
+                    </select></label>
+                <label class="hb-wide"><span th:text="#{wmsLabel.remark}">비고</span>
+                    <textarea data-field="remark" maxlength="500" rows="2"></textarea></label>
+            </form>
+            <!-- 프린터 마지막 상태(~HQES·odometer) — 설치형은 "지금 확인" -->
+            <div class="wms-printer-status" id="prnStatusBox" hidden>
+                <span th:text="#{wmsLabel.printerState}">프린터 상태</span>
+                <span id="prnState"></span>
+                <span id="prnStateDetail" class="hb-muted"></span>
+                <span id="prnAgent" class="hb-muted"></span>
+                <button type="button" id="probeBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{wmsLabel.probe}">지금 확인</button>
+            </div>
+        </div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/views/wms/label-mgt.js}"></script>
+</body>
+</html>

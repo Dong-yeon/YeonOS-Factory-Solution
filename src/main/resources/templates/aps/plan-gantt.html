@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${prog.name}">생산 계획(간트)</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/css/aps.css}">
+</head>
+<!--
+  생산 계획(간트) (aps-plan) — APS 1~3단계 (docs/38). 2단계: 반영 미리보기·반영(APPROVE + 작업지시 SAVE)·같은 공장 계획 비교.
+  3단계: 막대 끌어 놓기·키보드로 수동 고정(SAVE) — 다음 계산이 먼저 자리 잡는다. 지금 고정은 점선 막대와 아래 목록. 공장·첫날·일수로 계산하면 새 계획 버전이 생긴다(지시는 바꾸지 않음).
+  간트는 읽기 전용: 자원(설비·작업장·외주) 행 × 시간 축, 막대 위치는 JS 가 CSSOM 으로 넣는다(인라인 style 속성 없음).
+-->
+<body class="hb-page hb-page-app aps-page" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">생산 계획(간트)</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{apsPlan.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,last7,last30,thisMonth" data-default="last30" data-max-days="366"></div>
+    <label><span th:text="#{apsPlan.col.plant}">공장</span><select name="plantCd" id="plantSel"></select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{apsPlan.new}">새 계획</button>
+            <button type="button" id="ctpBtn" class="hb-btn-secondary" th:text="#{apsPlan.ctp.open}" data-help-key="aps-plan.ctp">납기 답변</button>
+        </div>
+        <div id="planGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{apsPlan.new}">새 계획</button>
+            <button type="button" id="calcBtn" th:if="${actions.contains('SAVE')}" th:text="#{apsPlan.calc}">계산</button>
+            <button type="button" id="previewBtn" class="hb-btn-secondary" th:if="${actions.contains('APPROVE')}" hidden th:text="#{apsPlan.preview}">반영 미리보기</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 계산 줄과 떨어진 자리(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="discardBtn" class="hb-btn-danger-outline" hidden th:text="#{apsPlan.discard}">폐기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{apsPlan.selectOrNew}">왼쪽에서 계획을 고르거나 새 계획을 계산하세요.</p>
+        <form id="planForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{apsPlan.col.plant}">공장</span>
+                <select data-field="plantCd" id="formPlant"></select></label>
+            <label><span th:text="#{apsPlan.col.horizonStart}">첫날</span>
+                <input data-field="horizonStart" type="date" min="2000-01-01" max="2999-12-01" data-help-key="aps-plan.horizonStart"></label>
+            <label><span th:text="#{apsPlan.col.horizonDays}">일수</span>
+                <input data-field="horizonDays" data-hb="number" data-scale="0" data-min="1" data-max="31" data-pad="false" inputmode="numeric" data-help-key="aps-plan.horizonDays"></label>
+            <label><span th:text="#{apsPlan.col.outsrcLeadHr}">외주 리드타임(시간)</span>
+                <input data-field="outsrcLeadHr" data-hb="number" data-scale="0" data-min="0" data-max="720" data-pad="false" inputmode="numeric" data-help-key="aps-plan.outsrcLeadHr"></label>
+            <label class="hb-wide"><span th:text="#{apsPlan.col.planNm}">계획 이름</span>
+                <input data-field="planNm" maxlength="100"></label>
+            <label><span th:text="#{apsPlan.col.matMode}">자재 부족이면</span>
+                <select data-field="matMode" data-help-key="aps-plan.matMode">
+                    <option value="WARN" th:text="#{apsPlan.matMode.WARN}">표시만(시각 그대로)</option>
+                    <option value="DELAY" th:text="#{apsPlan.matMode.DELAY}">들어오는 시점 뒤로</option>
+                </select></label>
+            <label class="aps-inline"><input type="checkbox" data-field="matPo" data-help-key="aps-plan.matPo">
+                <span th:text="#{apsPlan.col.matPo}">입고 예정(발주) 포함</span></label>
+        </form>
+        <dl id="summary" class="aps-summary" hidden></dl>
+        <p class="hb-muted" th:text="#{apsPlan.ruleNote}">순서: 우선순위 → 납기 → 계획 시작일. 지시는 바꾸지 않습니다(시뮬레이션).</p>
+    </aside>
+</div>
+
+<section class="hb-sub aps-gantt-section" id="applySection" th:if="${actions.contains('APPROVE')}" hidden>
+    <div class="hb-toolbar">
+        <h2 th:text="#{apsPlan.preview}">반영 미리보기</h2>
+        <button type="button" id="applyBtn" th:text="#{apsPlan.apply}">반영</button>
+    </div>
+    <p class="hb-muted" th:text="#{apsPlan.applyNote}">계획된 지시의 계획 시작일·완료일과 발행 지시의 설비 배정을 바꿉니다.</p>
+    <p id="applyInfo" role="status"></p>
+    <div id="staleBox" hidden>
+        <h3 th:text="#{apsPlan.staleTitle}">반영할 수 없는 이유</h3>
+        <ul id="staleList" class="aps-stale"></ul>
+    </div>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="applyWos">
+            <thead><tr>
+                <th th:text="#{apsPlan.col.woNo}">지시 번호</th>
+                <th th:text="#{apsPlan.col.woStatus}">지시 상태</th>
+                <th th:text="#{apsPlan.col.planStart}">계획 시작일</th>
+                <th th:text="#{apsPlan.col.planEnd}">계획 완료일</th>
+                <th th:text="#{apsPlan.col.equip}">설비 배정</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    <div id="fencedBox" hidden>
+        <h3 th:text="#{apsPlan.fencedTitle}">확정 구간 — 그대로</h3>
+        <p id="fencedInfo" class="hb-muted" role="status"></p>
+        <p class="hb-muted" th:text="#{apsPlan.fencedNote}">지금 계획 시작일이 확정 구간 안인 지시는 반영이 날짜·설비를 바꾸지 않습니다. 바꾸려면 간트에서 그 공정을 사유(비고)와 함께 고정하고 다시 계산하세요.</p>
+        <div class="aps-table-scroll">
+            <table class="hb-cmp-table" id="fencedWos">
+                <thead><tr>
+                    <th th:text="#{apsPlan.col.woNo}">지시 번호</th>
+                    <th th:text="#{apsPlan.col.woStatus}">지시 상태</th>
+                    <th th:text="#{apsPlan.fenced.now}">지금(그대로)</th>
+                    <th th:text="#{apsPlan.fenced.plan}">계획(반영 안 함)</th>
+                    <th class="hb-num" th:text="#{apsPlan.fenced.days}">구간</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<section class="hb-sub aps-gantt-section" id="ganttSection" hidden>
+    <div class="hb-toolbar">
+        <h2 id="ganttTitle" th:text="#{apsPlan.gantt}">간트</h2>
+        <fieldset class="hb-seg" id="zoom">
+            <legend th:text="#{apsPlan.zoom}">확대</legend>
+            <label><input type="radio" name="zoom" value="4"><span th:text="#{apsPlan.zoom.week}">주</span></label>
+            <label><input type="radio" name="zoom" value="12" checked><span th:text="#{apsPlan.zoom.day}">일</span></label>
+            <label><input type="radio" name="zoom" value="40"><span th:text="#{apsPlan.zoom.shift}">근무조</span></label>
+        </fieldset>
+        <span class="aps-legend"><span class="aps-g-bar aps-legend-swatch"></span><span th:text="#{apsPlan.legend.ok}">납기 안</span></span>
+        <span class="aps-legend"><span class="aps-g-bar aps-g-late aps-legend-swatch"></span><span th:text="#{apsPlan.legend.late}">납기 늦음</span></span>
+        <span class="aps-legend"><span class="aps-g-off aps-legend-swatch"></span><span th:text="#{apsPlan.legend.off}">근무 외</span></span>
+        <span class="aps-legend"><span class="aps-g-bar aps-g-pinned aps-legend-swatch"></span><span th:text="#{apsPlan.legend.pinned}">고정으로 잡힘</span></span>
+        <span class="aps-legend"><span class="aps-g-ghost aps-legend-swatch"></span><span th:text="#{apsPlan.legend.ghost}">지금 고정(다음 계산)</span></span>
+        <span class="aps-legend"><span class="aps-g-bar aps-g-matshort aps-legend-swatch"></span><span th:text="#{apsPlan.legend.matShort}">자재 부족</span></span>
+    </div>
+    <div class="aps-gantt" id="gantt" role="region" th:aria-label="#{apsPlan.gantt}" tabindex="0"></div>
+    <p id="opInfo" class="hb-muted" role="status"></p>
+    <p class="hb-muted" th:if="${actions.contains('SAVE')}" th:text="#{apsPlan.pinNote}">막대를 끌어 놓거나 …</p>
+
+    <h2 th:text="#{apsPlan.pinsTitle}">고정 (다음 계산에 씀)</h2>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="pins">
+            <thead><tr>
+                <th th:text="#{apsPlan.col.woNo}">지시 번호</th>
+                <th th:text="#{apsPlan.col.op}">공정</th>
+                <th th:text="#{apsPlan.col.res}">자원</th>
+                <th th:text="#{apsPlan.col.start}">시작</th>
+                <th th:text="#{apsPlan.col.pinBy}">고정한 계획 · 사람</th>
+                <th></th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="hb-toolbar aps-cmp-bar">
+        <h2 th:text="#{apsPlan.cmpTitle}">계획 비교</h2>
+        <label><span th:text="#{apsPlan.cmpWith}">비교할 계획</span><select id="cmpSel"></select></label>
+        <button type="button" id="cmpBtn" class="hb-btn-secondary" th:text="#{apsPlan.compare}">비교</button>
+        <label class="aps-inline"><input type="checkbox" id="cmpChanged" checked><span th:text="#{apsPlan.cmpChanged}">바뀐 것만</span></label>
+    </div>
+    <div id="cmpBox" hidden>
+        <p id="cmpSummary" class="hb-muted" role="status"></p>
+        <div class="aps-table-scroll">
+            <table class="hb-cmp-table" id="cmp">
+                <thead><tr>
+                    <th th:text="#{apsPlan.col.kind}">구분</th>
+                    <th th:text="#{apsPlan.col.woNo}">지시 번호</th>
+                    <th th:text="#{apsPlan.col.op}">공정</th>
+                    <th th:text="#{apsPlan.col.aStart}">이 계획</th>
+                    <th th:text="#{apsPlan.col.bStart}">비교 계획</th>
+                    <th class="hb-num" th:text="#{apsPlan.col.shift}">이동</th>
+                    <th th:text="#{apsPlan.col.res}">자원</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="hb-toolbar">
+        <h2 th:text="#{apsPlan.matTitle}">자재 (부족 먼저)</h2>
+        <button type="button" id="prBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" disabled
+                th:text="#{apsPlan.pr.btn}">구매 요청 만들기</button>
+    </div>
+    <p class="hb-muted" th:if="${actions.contains('SAVE')}" th:text="#{apsPlan.pr.note}">구매 품목의 부족 줄을 골라 구매 요청 초안을 만듭니다. 반제품 부족은 지시가 필요합니다.</p>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="mats">
+            <thead><tr>
+                <th class="aps-pick-col" th:aria-label="#{apsPlan.pr.pick}"></th>
+                <th th:text="#{apsPlan.col.woNo}">지시 번호</th>
+                <th th:text="#{apsPlan.col.op}">공정</th>
+                <th th:text="#{apsPlan.col.item}">품목</th>
+                <th class="hb-num" th:text="#{apsPlan.col.need}">필요</th>
+                <th class="hb-num" th:text="#{apsPlan.col.alloc}">할당</th>
+                <th class="hb-num" th:text="#{apsPlan.col.short}">부족</th>
+                <th th:text="#{apsPlan.col.needAt}">필요 시각</th>
+                <th th:text="#{apsPlan.col.coveredAt}">충족 시각</th>
+                <th th:text="#{apsPlan.col.pr}">구매 요청</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <h2 th:text="#{apsPlan.unschedTitle}">계획 못 한 공정</h2>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="unsched">
+            <thead><tr>
+                <th th:text="#{apsPlan.col.woNo}">지시 번호</th>
+                <th th:text="#{apsPlan.col.op}">공정</th>
+                <th th:text="#{apsPlan.col.node}">작업장</th>
+                <th class="hb-num" th:text="#{apsPlan.col.qty}">잔량</th>
+                <th th:text="#{apsPlan.col.exc}">이유</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <h2 th:text="#{apsPlan.wosTitle}">지시별 결과 (규칙 순서)</h2>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="planWos">
+            <thead><tr>
+                <th class="hb-num" th:text="#{apsPlan.col.seq}">순서</th>
+                <th th:text="#{apsPlan.col.woNo}">지시 번호</th>
+                <th th:text="#{apsPlan.col.item}">품목</th>
+                <th class="hb-num" th:text="#{apsPlan.col.qty}">수량</th>
+                <th class="hb-num" th:text="#{apsPlan.col.priority}">우선</th>
+                <th th:text="#{apsPlan.col.due}">납기</th>
+                <th th:text="#{apsPlan.col.start}">시작</th>
+                <th th:text="#{apsPlan.col.end}">끝</th>
+                <th th:text="#{apsPlan.col.result}">결과</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+
+<!-- 일일 작업 배정표(9단계, docs/38 18.5) — 공장의 현행 계획(마지막 반영) 결과, 자원별 순서. 순서 어김은 표시만 -->
+<section class="hb-sub aps-gantt-section aps-dispatch" id="dispatchSection">
+    <div class="hb-toolbar">
+        <h2 th:text="#{apsPlan.dispatch.title}">일일 작업 배정표</h2>
+    </div>
+    <form id="dispatchForm" class="hb-form aps-dispatch-form" autocomplete="off">
+        <label><span th:text="#{apsPlan.col.plant}">공장</span><select data-field="plantCd" id="dispatchPlant"></select></label>
+        <label><span th:text="#{apsPlan.dispatch.day}">날짜</span>
+            <input data-field="day" type="date" min="2000-01-01" max="2999-12-31" data-help-key="aps-plan.dispatchDay"></label>
+        <div class="hb-toolbar">
+            <button type="button" id="dispatchBtn" class="hb-btn-secondary" th:text="#{common.search}">조회</button>
+            <button type="button" id="dispatchPrint" class="hb-btn-ghost" th:text="#{apsPlan.dispatch.print}">인쇄</button>
+        </div>
+    </form>
+    <p id="dispatchInfo" class="hb-muted" role="status"></p>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="dispatchRows">
+            <thead><tr>
+                <th th:text="#{apsPlan.col.res}">자원</th>
+                <th class="hb-num" th:text="#{apsPlan.dispatch.seq}">순번</th>
+                <th th:text="#{apsPlan.col.start}">시작</th>
+                <th th:text="#{apsPlan.col.end}">끝</th>
+                <th th:text="#{apsPlan.col.woNo}">지시 번호</th>
+                <th th:text="#{apsPlan.col.op}">공정</th>
+                <th th:text="#{apsPlan.col.item}">품목</th>
+                <th class="hb-num" th:text="#{apsPlan.col.qty}">수량</th>
+                <th th:text="#{apsPlan.dispatch.status}">지금 상태</th>
+                <th th:text="#{apsPlan.dispatch.mark}">표시</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+<!-- CTP 납기 답변(6단계, docs/38 15장) — 읽기 전용, 저장하지 않음 -->
+<dialog id="ctpDialog" class="hb-dialog aps-ctp-dialog" aria-labelledby="ctpTitle">
+    <h2 id="ctpTitle" th:text="#{apsPlan.ctp.title}">납기 답변</h2>
+    <div class="hb-dialog-body">
+        <form id="ctpForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{apsPlan.col.plant}">공장</span><select data-field="plantCd" id="ctpPlant"></select></label>
+            <label><span th:text="#{apsPlan.col.itemCd}">품목 코드</span><input data-field="itemCd" maxlength="40"></label>
+            <label><span th:text="#{apsPlan.col.qty}">수량</span><input data-field="qty" inputmode="decimal" maxlength="40"></label>
+            <label><span th:text="#{apsPlan.ctp.wantDate}">희망 납기</span><input data-field="wantDate" type="date" min="2000-01-01" max="2999-12-31"></label>
+            <label><span th:text="#{apsPlan.ctp.priority}">우선순위(비우면 맨 뒤)</span><input data-field="priority" inputmode="numeric" maxlength="1"></label>
+        </form>
+        <p class="hb-muted" th:text="#{apsPlan.ctp.note}">지금 지시 뒤에 넣었을 때의 계산입니다. 자재는 들어오는 시점 뒤로 미룹니다. 저장하지 않으며 지시가 바뀌면 답도 바뀝니다.</p>
+        <div id="ctpResult" hidden>
+            <p id="ctpAnswer" class="aps-ctp-answer" role="status"></p>
+            <div class="aps-table-scroll">
+                <table class="hb-cmp-table" id="ctpOps">
+                    <thead><tr>
+                        <th th:text="#{apsPlan.col.op}">공정</th>
+                        <th th:text="#{apsPlan.col.res}">자원</th>
+                        <th th:text="#{apsPlan.col.start}">시작</th>
+                        <th th:text="#{apsPlan.col.end}">끝</th>
+                        <th th:text="#{apsPlan.col.result}">결과</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="aps-table-scroll">
+                <table class="hb-cmp-table" id="ctpMats">
+                    <thead><tr>
+                        <th th:text="#{apsPlan.col.item}">품목</th>
+                        <th class="hb-num" th:text="#{apsPlan.col.need}">필요</th>
+                        <th class="hb-num" th:text="#{apsPlan.col.short}">부족</th>
+                        <th th:text="#{apsPlan.col.coveredAt}">충족 시각</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="hb-dialog-bar">
+        <button type="button" id="ctpClose" class="hb-btn-secondary" th:text="#{common.close}">닫기</button>
+        <button type="button" id="ctpRun" th:text="#{apsPlan.ctp.run}">답 받기</button>
+    </div>
+</dialog>
+
+<!-- 부족 → 구매 요청 초안(8단계, docs/38 17.4) — 미리보기 뒤 [만들기]가 구매 요청 1건(작성 중) -->
+<dialog id="prDialog" class="hb-dialog aps-ctp-dialog" aria-labelledby="prTitle">
+    <h2 id="prTitle" th:text="#{apsPlan.pr.title}">구매 요청 초안</h2>
+    <div class="hb-dialog-body">
+        <p id="prHead" class="hb-muted"></p>
+        <div class="aps-table-scroll">
+            <table class="hb-cmp-table" id="prLines">
+                <thead><tr>
+                    <th th:text="#{apsPlan.col.item}">품목</th>
+                    <th class="hb-num" th:text="#{apsPlan.col.short}">부족</th>
+                    <th class="hb-num" th:text="#{apsPlan.pr.moqMult}">최소·배수</th>
+                    <th class="hb-num" th:text="#{apsPlan.pr.reqQty}">요청 수량</th>
+                    <th th:text="#{apsPlan.pr.needDate}">필요일</th>
+                    <th th:text="#{apsPlan.pr.orderBy}">발주 필요일</th>
+                    <th th:text="#{apsPlan.pr.supplier}">협력사</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <p id="prErrors" class="aps-warn" hidden></p>
+        <p class="hb-muted" th:text="#{apsPlan.pr.dialogNote}">수량 = 부족 합을 공급 품목의 최소 발주로 올린 뒤 발주 배수로 올린 값. 발주 필요일 = 필요일 − 구매 리드타임(표시만). 요청은 작성 중으로 만들어지며 구매요청 화면에서 고칠 수 있습니다.</p>
+    </div>
+    <div class="hb-dialog-bar">
+        <button type="button" id="prClose" class="hb-btn-secondary" th:text="#{common.close}">닫기</button>
+        <button type="button" id="prMake" th:text="#{apsPlan.pr.make}">만들기</button>
+    </div>
+</dialog>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/views/aps/plan-gantt.js}"></script>
+</body>
+</html>

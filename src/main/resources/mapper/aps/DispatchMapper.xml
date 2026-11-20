@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 일일 작업 배정 (docs/38 18장). 회사 조건은 RLS. 현행 계획 = 공장의 마지막 반영 계획. 모두 읽기 -->
+<mapper namespace="io.smarthappy.module.aps.DispatchMapper">
+
+    <select id="findCurrent" resultType="io.smarthappy.module.aps.DispatchDtos$CurrentPlan">
+        select plan_id, plan_no, time_zone, applied_at, applied_by
+          from aps_plan
+         where plant_cd = #{plantCd} and status = 'APPLIED'
+         order by applied_at desc, plan_id desc
+         limit 1
+    </select>
+
+    <!--
+      계획된 공정 전부에 순번(자원 × 그 계획 시간대의 시작 날짜 안 시작 순)을 매긴 뒤 거른다 — 그래서 slots 의 순번이 sequence 와 같다.
+      지시 공정은 지금 표에서 (지시, 순번)으로 찾는다(계산 때 계획 지시였다가 뒤에 발행된 것도)
+    -->
+    <select id="findSlots" resultType="io.smarthappy.module.aps.DispatchDtos$SlotRow">
+        select * from (
+            select a.plan_id, a.plan_no, o.res_kind, o.equip_id, e.equip_cd, o.node_id, h.node_cd, o.wo_id, x.wo_no,
+                   p.wo_proc_id, o.op_seq, o.proc_cd, o.proc_nm, o.start_at, o.end_at, i.item_cd, i.item_nm,
+                   trim_scale(o.qty)::text as qty, x.unit_cd, w.status as wo_status, p.status as proc_status, ce.equip_cd as cur_equip_cd,
+                   (o.start_at at time zone a.time_zone)::date as start_day,
+                   row_number() over (partition by o.res_kind, o.equip_id, o.node_id, (o.start_at at time zone a.time_zone)::date
+                                      order by o.start_at, o.plan_op_id)::int as seq,
+                   case o.res_kind when 'EQUIP' then 0 when 'NODE' then 1 else 2 end as res_order
+              from aps_plan a
+              join aps_plan_op o on o.plan_id = a.plan_id
+              join aps_plan_wo x on x.plan_wo_id = o.plan_wo_id
+              join prd_wo w on w.wo_id = o.wo_id
+              join mst_item i on i.item_id = w.item_id
+              left join prd_wo_proc p on p.wo_id = o.wo_id and p.op_seq = o.op_seq
+              left join mst_equip e on e.equip_id = o.equip_id
+              left join mst_equip_hier h on h.node_id = o.node_id
+              left join mst_equip ce on ce.equip_id = p.equip_id
+             where a.plan_id = #{planId} and o.start_at is not null
+        ) s
+        <where>
+            <if test="day != null">s.start_day = #{day}</if>
+            <if test="woProcIds != null">
+                and s.wo_proc_id in <foreach collection="woProcIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+            </if>
+        </where>
+         order by s.res_order, s.equip_cd nulls last, s.node_cd nulls last, s.start_day, s.seq
+    </select>
+</mapper>

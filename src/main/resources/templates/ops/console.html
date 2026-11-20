@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="#{ops.title}">YeonOS 운영자</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+</head>
+<!--
+  운영자 콘솔: 회사 목록·생성·상태·관리자 잠금 해제 / 활용 집계(숫자만, D3) / 지원 세션 열람(고객 허락 시) / 백업 건강 / 내 운영 기록.
+  "모든 회사 업무 데이터 조회" 화면은 만들지 않는다(05 D8).
+-->
+<body data-table-menu="" class="hb-page hb-ops" data-login-url="/ops/login">
+<header class="hb-page-head">
+    <h1 th:text="#{ops.title}">YeonOS 운영자</h1>
+    <div class="hb-page-tools">
+        <span id="me" class="hb-muted"></span>
+        <button type="button" id="logoutBtn" class="hb-btn-secondary" th:text="#{ops.logout}">로그아웃</button>
+    </div>
+</header>
+
+<section class="hb-sub">
+    <h2 th:text="#{ops.backup}">백업 건강 상태</h2>
+    <ul id="backup" class="hb-plain-list"></ul>
+</section>
+
+<section class="hb-sub">
+    <h2 th:text="#{ops.companies}">회사</h2>
+    <table class="hb-table" id="companies">
+        <thead><tr>
+            <th th:text="#{ops.compCd}">회사코드</th><th th:text="#{ops.compNm}">회사명</th>
+            <th th:text="#{ops.status}">상태</th><th th:text="#{ops.timeZone}">시간대</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+    <form id="createForm" class="hb-inline-form" autocomplete="off">
+        <input data-field="compCd" maxlength="20" th:placeholder="#{ops.compCd}" required>
+        <input data-field="compNm" maxlength="100" th:placeholder="#{ops.compNm}" required>
+        <input data-field="timeZone" maxlength="50" value="Asia/Seoul" th:placeholder="#{ops.timeZone}">
+        <input data-field="adminLoginId" maxlength="50" th:placeholder="#{ops.adminLoginId}" required>
+        <input data-field="adminName" maxlength="100" th:placeholder="#{ops.adminName}">
+        <fieldset id="createModules">
+            <legend th:text="#{ops.modules}">사용 모듈</legend>
+            <label th:each="m : ${modules}"><input type="checkbox" name="module" th:value="${m.code}" checked>
+                <span th:text="#{${m.nameKey}}">모듈</span></label>
+        </fieldset>
+        <button type="submit" th:text="#{ops.create}">회사 생성</button>
+    </form>
+    <p id="created" class="hb-notice" hidden></p>
+</section>
+
+<section class="hb-sub" id="detail" hidden>
+    <h2 id="detailTitle"></h2>
+    <div class="hb-inline-form">
+        <input type="date" id="from"> ~ <input type="date" id="to">
+        <button type="button" id="usageBtn" th:text="#{ops.usage}">활용 현황</button>
+        <button type="button" id="logsBtn" class="hb-btn-secondary" th:text="#{ops.supportLogs}">지원: 접속 로그</button>
+        <button type="button" id="feedbackBtn" class="hb-btn-secondary" th:text="#{ops.supportFeedback}">지원: 화면 의견</button>
+    </div>
+    <div class="hb-inline-form">
+        <input id="unlockId" maxlength="50" th:placeholder="#{ops.unlockLoginId}">
+        <button type="button" id="unlockBtn" class="hb-btn-secondary" th:text="#{ops.unlock}">잠금 해제</button>
+        <button type="button" id="resetMfaBtn" class="hb-btn-secondary" th:text="#{ops.resetMfa}">MFA 초기화(지원 세션)</button>
+        <button type="button" id="activateBtn" class="hb-btn-secondary" th:text="#{ops.activate}">사용</button>
+    </div>
+    <!-- 회사 전체를 멈추는 동작은 다른 동작과 떨어진 자리, 외곽선 위험 톤(docs/40 P1 ④) -->
+    <div class="hb-inline-form">
+        <button type="button" id="suspendBtn" class="hb-btn-danger-outline" th:text="#{ops.suspend}">일시 정지</button>
+    </div>
+    <div id="result"></div>
+</section>
+
+<section class="hb-sub">
+    <h2 th:text="#{ops.myLog}">내 운영 기록</h2>
+    <div id="myLog"></div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+
+<script th:src="@{/js/common/hb.js}"></script>
+
+
+<script th:src="@{/js/common/hb.menu.js}"></script>
+<script th:src="@{/js/common/hb.text.js}"></script>
+<script th:src="@{/js/common/hb.dialog.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/ops/console.js}"></script>
+</body>
+</html>

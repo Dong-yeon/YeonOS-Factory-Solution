@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{page.notFound.title}">화면 없음</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+</head>
+<body class="hb-page">
+<h1 th:text="#{page.notFound.title}">화면 없음</h1>
+<p th:text="#{page.notFound.message}">요청한 화면이 없거나 사용하지 않는 화면입니다.</p>
+</body>
+</html>

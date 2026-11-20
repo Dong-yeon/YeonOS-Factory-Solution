@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${prog.name}">기준생산계획(MPS)</title>
+    <link rel="stylesheet" th:href="@{/css/tokens.css}">
+    <link rel="stylesheet" th:href="@{/css/page.css}">
+    <link rel="stylesheet" th:href="@{/css/aps.css}">
+</head>
+<!--
+  기준생산계획 MPS (aps-mps) — APS 7단계 (docs/38 16장). 공장 × MPS 품목 × 일 격자: 수주·예측 수요, 지시 공급, 예상 재고, 제안, 계획.
+  [계산] = 새 초안(지시·구매 요청은 만들지 않음), 초안은 계획 줄만 고쳐 [저장], 확정 구간 칸을 바꾸면 사유. [확정](APPROVE) = 공장의 현행 MPS.
+  격자 표 DOM 은 JS createElement·textContent(인라인 style 없음, CSP 유지).
+-->
+<body class="hb-page hb-page-app aps-page" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}"
+      data-table-menu="">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">기준생산계획(MPS)</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{apsMps.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,last7,last30,thisMonth" data-default="last30" data-max-days="366"></div>
+    <label><span th:text="#{apsMps.col.plant}">공장</span><select name="plantCd" id="plantSel"></select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{apsMps.new}">새 MPS</button>
+            <span id="listCount" class="hb-muted"></span>
+        </div>
+        <div class="aps-table-scroll">
+            <table class="hb-cmp-table aps-mps-list" id="mpsList">
+                <thead><tr>
+                    <th th:text="#{apsMps.col.mpsNo}">MPS 번호</th>
+                    <th th:text="#{apsMps.col.plant}">공장</th>
+                    <th th:text="#{apsMps.col.horizonStart}">첫날</th>
+                    <th class="hb-num" th:text="#{apsMps.col.horizonDays}">일수</th>
+                    <th class="hb-num" th:text="#{apsMps.col.itemCnt}">품목</th>
+                    <th th:text="#{apsMps.col.status}">상태</th>
+                    <th th:text="#{apsMps.col.calculatedAt}">계산 시각</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{apsMps.new}">새 MPS</button>
+            <button type="button" id="calcBtn" th:if="${actions.contains('SAVE')}" th:text="#{apsMps.calc}">계산</button>
+            <button type="button" id="firmBtn" th:if="${actions.contains('APPROVE')}" hidden th:text="#{apsMps.firm}">확정</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+            <button type="button" id="discardBtn" class="hb-btn-danger-outline" hidden th:text="#{apsMps.discard}">폐기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{apsMps.selectOrNew}">왼쪽에서 MPS 를 고르거나 새 MPS 를 계산하세요.</p>
+        <form id="mpsForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{apsMps.col.plant}">공장</span><select data-field="plantCd" id="formPlant"></select></label>
+            <label><span th:text="#{apsMps.col.horizonStart}">첫날</span>
+                <input data-field="horizonStart" type="date" min="2000-01-01" max="2999-09-01" data-help-key="aps-mps.horizonStart"></label>
+            <label><span th:text="#{apsMps.col.horizonDays}">일수</span>
+                <input data-field="horizonDays" data-hb="number" data-scale="0" data-min="7" data-max="92" data-pad="false" inputmode="numeric" data-help-key="aps-mps.horizonDays"></label>
+            <label class="hb-wide"><span th:text="#{apsMps.col.mpsNm}">MPS 이름</span><input data-field="mpsNm" maxlength="100"></label>
+        </form>
+        <dl id="summary" class="aps-summary" hidden></dl>
+        <p class="hb-muted" th:text="#{apsMps.ruleNote}">수요 = 수주 + 남은 예측(거래처·기간마다 큰 쪽), 공급 = 가용 재고 + 열린 지시. 계산은 지시·구매 요청을 만들지 않습니다.</p>
+    </aside>
+</div>
+
+<section class="hb-sub aps-gantt-section" id="gridSection" hidden>
+    <div class="hb-toolbar">
+        <h2 id="gridTitle" th:text="#{apsMps.grid}">MPS 격자</h2>
+        <fieldset class="hb-seg" id="bucket">
+            <legend th:text="#{apsMps.bucket}">보기</legend>
+            <label><input type="radio" name="bucket" value="DAY" checked><span th:text="#{apsMps.bucket.day}">일</span></label>
+            <label><input type="radio" name="bucket" value="WEEK"><span th:text="#{apsMps.bucket.week}">주</span></label>
+        </fieldset>
+        <button type="button" id="saveCellsBtn" th:if="${actions.contains('SAVE')}" hidden th:text="#{apsMps.saveCells}">저장</button>
+        <span class="aps-legend"><span class="aps-mps-fenced aps-legend-swatch"></span><span th:text="#{apsMps.legend.fenced}">확정 구간</span></span>
+        <span class="aps-legend"><span class="aps-mps-neg aps-legend-swatch"></span><span th:text="#{apsMps.legend.neg}">예상 재고 부족</span></span>
+        <span class="aps-legend"><span class="aps-mps-low aps-legend-swatch"></span><span th:text="#{apsMps.legend.low}">안전재고 미달</span></span>
+    </div>
+    <p class="hb-muted" id="gridNote" th:text="#{apsMps.gridNote}">계획 줄을 고친 뒤 [저장]. 확정 구간 칸을 계산 값과 다르게 바꾸면 사유를 적습니다. 주 보기는 합계(예상 재고는 주 마지막 날)이고 고칠 수 없습니다.</p>
+    <div class="aps-table-scroll aps-mps-scroll" role="region" th:aria-label="#{apsMps.grid}" tabindex="0">
+        <table class="hb-cmp-table aps-mps-grid" id="mpsGrid"></table>
+    </div>
+</section>
+
+<section class="hb-sub" id="itemSection">
+    <div class="hb-toolbar">
+        <h2 th:text="#{apsMps.items}">MPS 품목</h2>
+        <button type="button" id="itemNewBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{apsMps.itemNew}">새 품목</button>
+    </div>
+    <p class="hb-muted"><span th:text="#{apsMps.itemNote}">MPS 로 계획할 자체 생산 품목. 품목은 한 공장 MPS 에만 둡니다.</span>
+        <a th:href="@{/page/aps-item-param}" th:text="#{apsMps.paramLink}">안전재고·로트 규칙은 계획 기준정보에서</a></p>
+    <div class="aps-table-scroll">
+        <table class="hb-cmp-table" id="itemTable">
+            <thead><tr>
+                <th th:text="#{apsMps.col.plant}">공장</th>
+                <th th:text="#{apsMps.col.item}">품목</th>
+                <th class="hb-num" th:text="#{apsMps.col.safetyQty}">안전재고</th>
+                <th th:text="#{apsMps.col.lotRule}">로트 규칙</th>
+                <th class="hb-num" th:text="#{apsMps.col.lotQty}">로트 수량</th>
+                <th th:text="#{apsMps.col.useYn}">사용</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    <form id="itemForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}" hidden>
+        <label><span th:text="#{apsMps.col.plant}">공장</span><select data-field="plantCd" id="itemPlant"></select></label>
+        <label><span th:text="#{apsMps.col.itemCd}">품목 코드</span><input data-field="itemCd" maxlength="40"></label>
+        <label><span th:text="#{apsMps.col.useYn}">사용</span>
+            <select data-field="useYn">
+                <option value="Y" th:text="#{yn.Y}">사용</option>
+                <option value="N" th:text="#{yn.N}">사용 안 함</option>
+            </select></label>
+        <label class="hb-wide"><span th:text="#{apsMps.col.remark}">비고</span><input data-field="remark" maxlength="500"></label>
+        <div class="hb-toolbar hb-wide">
+            <button type="button" id="itemSaveBtn" th:text="#{common.save}">저장</button>
+            <button type="button" id="itemCancelBtn" class="hb-btn-ghost" th:text="#{apsMps.itemCancel}">취소</button>
+        </div>
+    </form>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/aps/mps.js}"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{portal/layout :: head(#{portal.menu.me})}"></head>
+<!--
+  협력사 포털 내 정보 (docs/42 7장 2) — 계정 정보 보기 + 자기 비밀번호 바꾸기.
+  회사 사용자의 내 정보(sys-my-info)는 화면 권한이라 협력사가 못 쓴다 → 포털 API(/api/portal/me/password)로 같은 검사.
+  이름·메일·소속은 회사 관리자가 바꾼다(유형·소속은 고정, docs/42 10장).
+-->
+<body class="pt-page">
+<header th:replace="~{portal/layout :: header}"></header>
+<div class="pt-body">
+    <nav th:replace="~{portal/layout :: nav}"></nav>
+    <main class="pt-main">
+        <h1 th:text="#{portal.menu.me}">내 정보</h1>
+        <dl class="pt-info">
+            <dt th:text="#{myInfo.loginId}">아이디</dt><dd th:text="${portalUser.loginId}">sup1</dd>
+            <dt th:text="#{sysUser.col.cust}">소속 협력사</dt><dd th:text="|${supplier.custNm} (${supplier.custCd})|">협력상사 (S1)</dd>
+        </dl>
+        <p class="pt-muted" th:text="#{portal.me.note}">이름·메일·소속 협력사는 거래 회사의 관리자가 바꿉니다.</p>
+
+        <section class="pt-section">
+            <h2 th:text="#{myInfo.password}">비밀번호 변경</h2>
+            <form id="pwdForm" class="pt-form" autocomplete="off">
+                <label><span th:text="#{myInfo.password.current}">현재 비밀번호</span>
+                    <input type="password" id="currentPassword" maxlength="72" required autocomplete="current-password"></label>
+                <label><span th:text="#{myInfo.password.new}">새 비밀번호</span>
+                    <input type="password" id="newPassword" maxlength="72" required autocomplete="new-password"></label>
+                <label><span th:text="#{myInfo.password.confirm}">새 비밀번호 확인</span>
+                    <input type="password" id="confirmPassword" maxlength="72" required autocomplete="new-password"></label>
+                <ul id="pwdMsg" class="pt-msg" role="alert" hidden></ul>
+                <p id="pwdOk" class="pt-ok" role="status" hidden th:text="#{js.myInfo.passwordChanged}">비밀번호를 바꿨습니다.</p>
+                <button type="submit" id="pwdBtn" th:text="#{myInfo.password.submit}">비밀번호 변경</button>
+            </form>
+        </section>
+    </main>
+</div>
+<th:block th:replace="~{portal/layout :: scripts}"></th:block>
+<script th:src="@{/js/views/portal/me.js}"></script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설비 알람 이력 (cms-alarm) — CMS 2부 C8 (docs/33 11.6, D24). 수집 알람 원장 조회만(쓰기는 수집 계약 AlarmSink).
+  위: 상위 알람(발생 수·활성 분), 아래: 이력(발생마다 한 줄, 반복 표시, 자동 고장 신고 번호).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설비 알람 이력</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cms.alarm.plant}">공장</span><select name="plantCd" id="plantSel" required></select></label>
+    <label><span th:text="#{cms.alarm.from}">시작일</span><input name="from" id="fromIn" type="date" required></label>
+    <label><span th:text="#{cms.alarm.to}">종료일</span><input name="to" id="toIn" type="date" required></label>
+    <label><span th:text="#{cms.alarm.keyword}">설비·알람</span><input name="keyword" maxlength="100"></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{cms.alarm.scope}">범위</legend>
+        <label><input type="radio" name="openOnly" value="" checked><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="openOnly" value="Y" data-help-key="cms-alarm.openOnly"><span th:text="#{cms.alarm.openOnly}">열린 알람만</span></label>
+    </fieldset>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<section class="hb-sub" aria-labelledby="topTitle">
+    <h2 id="topTitle" th:text="#{cms.alarm.top}">상위 알람</h2>
+    <div class="hb-replace-host">
+        <table class="hb-cmp-table" id="top">
+            <thead><tr>
+                <th th:text="#{cms.alarm.col.equip}">설비</th>
+                <th th:text="#{cms.alarm.col.code}">알람 코드</th>
+                <th th:text="#{cms.alarm.col.name}">알람 이름</th>
+                <th th:text="#{cms.alarm.col.severity}">심각도</th>
+                <th class="hb-num" th:text="#{cms.alarm.col.count}">발생 수</th>
+                <th class="hb-num" th:text="#{cms.alarm.col.active}">활성 분</th>
+                <th class="hb-num" th:text="#{cms.alarm.col.open}">열림</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</section>
+
+<section class="hb-sub" aria-labelledby="histTitle">
+    <div class="hb-toolbar">
+        <h2 id="histTitle" th:text="#{cms.alarm.history}">알람 이력</h2>
+    </div>
+    <div id="alarmGrid" class="hb-grid-host"></div>
+</section>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/alarm-log.js}"></script>
+</body>
+</html>

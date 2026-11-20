@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  발주 관리 (srm-po) — SRM 1부 S3 (docs/31 D1·D3·D6). 머리 + 품목 행을 한 벌로 저장(작성 중만), 단가를 비우면 단가표 값.
+  결재가 필요하면 결재 상신(SRM_PO), 아니면 확정(승인 권한). 발행하면 발행본이 남고, 발행 뒤 변경은 개정(번호 + 1).
+  결재 중에는 이 화면에서 결재선을 보고, 내 차례면 승인·반려, 내가 상신했으면 회수할 수 있다(판정은 결재 API).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">발주 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{srm.po.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,thisWeek,last7,last30,thisMonth,lastMonth" data-default="last30" data-max-days="366"></div>
+    <label><span th:text="#{srm.po.col.status}">상태</span>
+        <select name="status" data-hb="select" data-code="PO_STATUS" data-blank="all"></select></label>
+    <label><span th:text="#{srm.po.keyword}">번호·협력사·품목</span><input name="keyword" maxlength="100"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="erpImportBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{srm.erpPo.button}">ERP 발주 받기</button>
+        </div>
+        <div id="poGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{srm.po.selectOrNew}">왼쪽에서 발주를 고르거나 신규를 누르세요.</p>
+        <p id="stateLine" class="hb-wide" role="status"></p>
+
+        <div class="hb-toolbar" id="actionBar">
+            <button type="button" class="hb-btn-secondary" data-act="confirm" data-need="APPROVE" hidden th:text="#{srm.po.act.confirm}">확정</button>
+            <button type="button" class="hb-btn-secondary" data-act="issue" data-need="SAVE" hidden th:text="#{srm.po.act.issue}">발행</button>
+            <button type="button" class="hb-btn-secondary" data-act="revise" data-need="SAVE" hidden th:text="#{srm.po.act.revise}">개정</button>
+            <button type="button" class="hb-btn-secondary" data-act="close" data-need="APPROVE" hidden th:text="#{srm.po.act.close}">마감</button>
+        </div>
+        <div class="hb-toolbar" id="docBar" hidden th:if="${actions.contains('PRINT')}">
+            <button type="button" id="printBtn" class="hb-btn-ghost" th:text="#{srm.po.print}">발주서 인쇄</button>
+            <button type="button" id="excelBtn" class="hb-btn-ghost" th:text="#{srm.po.excel}">발주서 엑셀</button>
+        </div>
+        <!-- 되돌릴 수 없는 동작은 저장·진행 줄과 떨어진 자리(docs/40 P1 ④). 사유는 누를 때 대화상자로 받는다 -->
+        <div class="hb-toolbar" id="dangerBar">
+            <button type="button" class="hb-btn-danger-outline" data-act="cancel" data-need="SAVE" data-reason="true" hidden th:text="#{srm.po.act.cancel}">취소</button>
+        </div>
+
+        <section class="hb-sub" id="submitBox" hidden>
+            <h2 th:text="#{srm.po.approval}">결재</h2>
+            <p id="approvalNeed" class="hb-muted"></p>
+            <div class="hb-form">
+                <label class="hb-wide"><span th:text="#{srm.po.approvers}">결재자(아이디, 순서대로 쉼표)</span>
+                    <input id="approvers" list="approverList" maxlength="200" data-help-key="srm-po.approvers"></label>
+            </div>
+            <div class="hb-toolbar">
+                <button type="button" id="submitBtn" class="hb-btn-secondary" th:text="#{srm.po.act.submit}">결재 상신</button>
+            </div>
+            <datalist id="approverList"></datalist>
+        </section>
+
+        <section class="hb-sub" id="aprBox" hidden>
+            <h2 th:text="#{srm.po.approvalLines}">결재선</h2>
+            <ol id="aprLines"></ol>
+            <div class="hb-form">
+                <label class="hb-wide"><span th:text="#{srm.po.aprComment}">의견</span><input id="aprComment" maxlength="1000"></label>
+            </div>
+            <div class="hb-toolbar">
+                <button type="button" id="aprApproveBtn" class="hb-btn-secondary" hidden th:text="#{srm.po.apr.approve}">승인</button>
+                <button type="button" id="aprRejectBtn" class="hb-btn-secondary" hidden th:text="#{srm.po.apr.reject}">반려</button>
+                <button type="button" id="aprWithdrawBtn" class="hb-btn-ghost" hidden th:text="#{srm.po.apr.withdraw}">회수</button>
+            </div>
+        </section>
+
+        <form id="poForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{srm.po.col.supplier}">협력사</span>
+                <input data-field="custCd" list="supList" maxlength="30" data-help-key="srm-po.custCd"></label>
+            <label><span th:text="#{srm.po.col.plant}">공장</span><select data-field="plantCd" id="plantSel"></select></label>
+            <label><span th:text="#{srm.po.col.wh}">납품 창고</span><select data-field="whCd" id="whSel"></select></label>
+            <label><span th:text="#{srm.po.col.payTerms}">결제 조건</span>
+                <select data-field="payTermsCd" data-hb="select" data-code="PAY_TERMS" data-blank="select"></select></label>
+            <label class="hb-wide"><span th:text="#{srm.po.col.remark}">비고</span><input data-field="remark" maxlength="1000"></label>
+        </form>
+        <datalist id="supList"></datalist>
+
+        <section class="hb-sub">
+            <h2 th:text="#{srm.po.lines}">품목</h2>
+            <div id="linesErrorBox" hidden><p id="linesError" class="hb-field-error"></p></div>
+            <div id="lines"></div>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="addLineBtn" class="hb-btn-secondary" th:text="#{srm.po.addLine}">행 추가</button>
+                <button type="button" id="fromPrBtn" class="hb-btn-secondary" th:text="#{srm.po.fromPr}">구매요청에서 가져오기</button>
+            </div>
+            <div id="prPick" class="hb-sub" hidden>
+                <p class="hb-muted" th:text="#{srm.po.prPickHint}">가져올 요청 행을 고르면 남은 수량으로 행이 추가됩니다.</p>
+                <table class="hb-cmp-table hb-plant-table" id="prLines">
+                    <thead><tr>
+                        <th></th>
+                        <th th:text="#{srm.po.col.prNo}">요청</th>
+                        <th th:text="#{srm.po.col.item}">품목</th>
+                        <th th:text="#{srm.po.col.remain}">남은 수량</th>
+                        <th th:text="#{srm.po.col.need}">필요일</th>
+                    </tr></thead>
+                    <tbody></tbody>
+                </table>
+                <div class="hb-toolbar">
+                    <button type="button" id="prAddBtn" class="hb-btn-secondary" th:text="#{srm.po.prAdd}">고른 행 추가</button>
+                </div>
+            </div>
+            <datalist id="itemList"></datalist>
+        </section>
+
+        <section class="hb-sub" id="revBox" hidden>
+            <h2 th:text="#{srm.po.revs}">발행 이력</h2>
+            <ul id="revList"></ul>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/srm/srm-ui.js}"></script>
+<script th:src="@{/js/views/srm/po-mgt.js}"></script>
+</body>
+</html>

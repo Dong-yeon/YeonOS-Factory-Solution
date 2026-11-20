@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- PMS 5단계 포트폴리오·내 할 일 (docs/32 PM5). 회사 범위는 RLS — 조건에 comp_cd 를 쓰지 않는다 -->
+<mapper namespace="io.smarthappy.module.pms.PortfolioMapper">
+
+    <sql id="portWhere">
+        <where>
+            <if test="keywordLike != null">
+                and (p.proj_no ilike #{keywordLike} escape '\' or p.proj_nm ilike #{keywordLike} escape '\'
+                     or c.cust_nm ilike #{keywordLike} escape '\')
+            </if>
+            <if test="projType != null">and p.proj_type = #{projType}</if>
+            <if test="statuses != null and statuses.size() > 0">
+                and p.status in <foreach collection="statuses" item="s" open="(" separator="," close=")">#{s}</foreach>
+            </if>
+            <if test="pmUserId != null">and p.pm_user_id = #{pmUserId}</if>
+            <if test="projId != null">and p.proj_id = #{projId}</if>
+        </where>
+    </sql>
+
+    <!-- 프로젝트마다 하위 질의(목록 = 상한, grid = 한 쪽) — 단계 = 끝나지 않은 첫 뿌리 작업, 다음 게이트 = 끝나지 않은 첫 게이트(계획일 순).
+         목록·grid·엑셀이 같은 칸·같은 조건(portWhere) -->
+    <sql id="portSelect">
+        select p.proj_id, p.proj_no, p.proj_nm, p.proj_type, c.cust_nm, u.user_nm as pm_user_nm, p.status, p.sop_date,
+               (p.sop_date - #{today}::date) as sop_days, p.plan_end, p.progress_pct,
+               (select k.task_nm from pms_task k where k.proj_id = p.proj_id and k.parent_id is null
+                   and k.status not in ('DONE', 'CANCELLED') order by k.seq limit 1) as phase_nm,
+               g.task_nm as next_gate_nm, g.plan_start as next_gate_date,
+               (p.plan_end - b.plan_end) as slip_days,
+               (select count(*) from pms_task k where k.proj_id = p.proj_id and k.is_summary = 'N'
+                   and k.status in ('NOT_STARTED', 'IN_PROGRESS') and k.plan_end &lt; #{lateRef}) as late_cnt,
+               d.req_cnt, d.ready_cnt,
+               case when d.req_cnt > 0 then (d.ready_cnt * 100 / d.req_cnt)::int end as ready_pct,
+               (select count(*) from pms_issue i where i.proj_id = p.proj_id and i.status &lt;&gt; 'CLOSED') as open_issue_cnt,
+               (select count(*) from pms_issue i where i.proj_id = p.proj_id and i.status in ('OPEN', 'IN_PROGRESS')
+                   and i.severity = 'HIGH') as high_issue_cnt,
+               (select count(*) from pms_gate_review r where r.proj_id = p.proj_id and r.status = 'IN_APPROVAL') as gate_in_approval_cnt,
+               trim_scale(e.plan_hours) as plan_hours, h.conf_hours, h.draft_hours,
+               case when e.plan_hours > 0 then round(h.conf_hours * 100 / e.plan_hours)::int end as burn_pct,
+               trim_scale(e.plan_hours - h.conf_hours) as remain_hours
+          from pms_project p
+          join sys_user u on u.user_id = p.pm_user_id
+          left join mst_cust c on c.cust_id = p.cust_id
+          left join lateral (select bl.plan_end from pms_baseline bl where bl.proj_id = p.proj_id
+                              order by bl.baseline_no desc limit 1) b on true
+          left join lateral (select k.task_nm, k.plan_start from pms_task k where k.proj_id = p.proj_id and k.task_type = 'GATE'
+                              and k.status not in ('DONE', 'CANCELLED') order by k.plan_start, k.task_id limit 1) g on true
+          cross join lateral (select count(*) filter (where x.required_yn = 'Y') as req_cnt,
+                                     count(*) filter (where x.required_yn = 'Y' and x.status in ('APPROVED', 'WAIVED')) as ready_cnt
+                                from pms_deliverable x where x.proj_id = p.proj_id) d
+          <!-- 계획 공수(docs/48 R-2) = 잎 작업 합(취소 제외, 모두 비었으면 null) · 실적 = 확정(CONFIRMED)만, 미확정은 따로 -->
+          cross join lateral (select sum(k.plan_hours) filter (where k.is_summary = 'N' and k.status &lt;&gt; 'CANCELLED') as plan_hours
+                                from pms_task k where k.proj_id = p.proj_id) e
+          cross join lateral (select trim_scale(coalesce(sum(w.hours) filter (where w.status = 'CONFIRMED'), 0)) as conf_hours,
+                                     trim_scale(coalesce(sum(w.hours) filter (where w.status = 'DRAFT'), 0)) as draft_hours
+                                from pms_work_log w where w.proj_id = p.proj_id) h
+        <include refid="portWhere"/>
+    </sql>
+
+    <!-- 홈 카드 pms-portfolio(docs/37 R8) — 목록과 같은 portSelect·portWhere 를 감싸 전체를 센다(목록 상한에 잘리지 않게) -->
+    <select id="portfolioCardStats" resultType="io.smarthappy.module.pms.PortfolioDtos$CardStats">
+        select count(*)::int as active_cnt,
+               (count(*) filter (where coalesce(x.slip_days, 0) > 0 or x.late_cnt > 0))::int as delayed_cnt,
+               coalesce(sum(x.gate_in_approval_cnt), 0)::int as gate_cnt,
+               coalesce(sum(x.high_issue_cnt), 0)::int as high_cnt,
+               (count(*) filter (where x.burn_pct > 100))::int as over_burn_cnt
+          from (<include refid="portSelect"/>) x
+    </select>
+
+    <!-- 지연 프로젝트 = 기준선보다 늦음 또는 지연 작업 있음, 많이 늦은 순 -->
+    <select id="findDelayedPortfolio" resultType="io.smarthappy.module.pms.PortfolioDtos$PortRow">
+        select * from (<include refid="portSelect"/>) x
+         where coalesce(x.slip_days, 0) > 0 or x.late_cnt > 0
+         order by coalesce(x.slip_days, 0) desc, x.late_cnt desc, x.proj_no
+         limit #{limit}
+    </select>
+
+    <select id="findPortfolio" resultType="io.smarthappy.module.pms.PortfolioDtos$PortRow">
+        <include refid="portSelect"/>
+         order by p.sop_date nulls last, p.proj_no
+         limit #{limit}
+    </select>
+
+    <!-- grid(UI 단계 3 ②) — 계산 칸도 같은 별칭으로 정렬(감싼 x), 허용 목록 enum 이름으로만, 마지막에 PK.
+         NOT NULL 키(번호·이름·PM·진척률)는 nulls last 를 붙이지 않는다 — desc 가 기본 색인 순서와 맞게(docs/qa/2026-10-24_sort-nulls-last.md) -->
+    <select id="findPortfolioPage" resultType="io.smarthappy.module.pms.PortfolioDtos$PortRow">
+        select * from (
+        <include refid="portSelect"/>
+        ) x
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'PROJ_NO'">x.proj_no<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PROJ_NM'">x.proj_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'CUST_NM'">x.cust_nm<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'PM_NM'">x.pm_user_nm<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PHASE_NM'">x.phase_nm<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'SOP_DAYS'">x.sop_days<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'SLIP_DAYS'">x.slip_days<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'LATE_CNT'">x.late_cnt<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'READY_PCT'">x.ready_pct<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'OPEN_ISSUES'">x.open_issue_cnt<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'NEXT_GATE'">x.next_gate_date<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'PROGRESS'">x.progress_pct<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'PLAN_HOURS'">x.plan_hours<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'CONF_HOURS'">x.conf_hours<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'BURN_PCT'">x.burn_pct<if test="s.desc"> desc</if> nulls last</when>
+                <when test="s.key == 'REMAIN_HOURS'">x.remain_hours<if test="s.desc"> desc</if> nulls last</when>
+                <otherwise>x.sop_date<if test="s.desc"> desc</if> nulls last</otherwise>
+            </choose>,
+         </foreach>
+         x.proj_id
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <!-- 차트(docs/32 4.15) — 지연 = 목록 late_cnt 와 같은 조건의 작업이 하나라도, 밀림 = 목록 slip_days 와 같은 계산이 0 보다 큼 -->
+    <select id="portfolioChart" resultType="io.smarthappy.module.pms.PortfolioDtos$ChartRow">
+        select p.status, count(*) as proj_cnt,
+               count(*) filter (where exists (select 1 from pms_task k where k.proj_id = p.proj_id and k.is_summary = 'N'
+                   and k.status in ('NOT_STARTED', 'IN_PROGRESS') and k.plan_end &lt; #{lateRef})) as late_cnt,
+               count(*) filter (where p.plan_end - b.plan_end > 0) as slip_cnt
+          from pms_project p
+          left join mst_cust c on c.cust_id = p.cust_id
+          left join lateral (select bl.plan_end from pms_baseline bl where bl.proj_id = p.proj_id
+                              order by bl.baseline_no desc limit 1) b on true
+        <include refid="portWhere"/>
+         group by p.status
+    </select>
+
+    <!-- 연도·유형 차트(docs/32 4.20) — 목록과 같은 조건(portWhere)으로 먼저 거른 뒤 묶는다 -->
+    <sql id="portFiltered">
+        with f as (
+            select p.plan_start, p.closed_on, p.status, p.proj_type
+              from pms_project p left join mst_cust c on c.cust_id = p.cust_id
+            <include refid="portWhere"/>
+        )
+    </sql>
+
+    <select id="portfolioYears" resultType="io.smarthappy.module.pms.PortfolioDtos$YearRow">
+        <include refid="portFiltered"/>
+        select y as year, sum(s)::int as start_cnt, sum(e)::int as close_cnt
+          from (select extract(year from plan_start)::int as y, 1 as s, 0 as e from f where plan_start is not null
+                union all
+                select extract(year from closed_on)::int, 0, 1 from f where status = 'CLOSED' and closed_on is not null) x
+         group by y
+         order by y
+    </select>
+
+    <select id="portfolioTypes" resultType="io.smarthappy.module.pms.PortfolioDtos$TypeRow">
+        <include refid="portFiltered"/>
+        select proj_type, count(*)::int as proj_cnt, (count(*) filter (where status = 'ACTIVE'))::int as active_cnt
+          from f group by proj_type order by proj_type
+    </select>
+
+    <select id="countPortfolioNoPlan" resultType="int">
+        <include refid="portFiltered"/>
+        select count(*)::int from f where plan_start is null
+    </select>
+
+    <select id="countPortfolio" resultType="long">
+        select count(*) from pms_project p left join mst_cust c on c.cust_id = p.cust_id
+        <include refid="portWhere"/>
+    </select>
+
+    <sql id="myTaskWhere">
+        from pms_task k join pms_project p on p.proj_id = k.proj_id
+         where k.owner_user_id = #{userId} and k.is_summary = 'N' and k.status in ('NOT_STARTED', 'IN_PROGRESS')
+           and p.status in ('DRAFT', 'ACTIVE', 'ON_HOLD') and k.plan_end &lt;= #{until}
+    </sql>
+
+    <select id="findMyTasks" resultType="io.smarthappy.module.pms.PortfolioDtos$MyTask">
+        select p.proj_id, p.proj_no, k.task_id, k.task_nm, k.plan_end, k.status, k.progress_pct, (k.plan_end &lt; #{lateRef}) as late,
+               k.plan_start, k.act_start, k.act_end, k.task_type, k.row_ver
+        <include refid="myTaskWhere"/>
+         order by k.plan_end, k.task_id
+         limit #{limit}
+    </select>
+
+    <select id="countMyTasks" resultType="long">
+        select count(*) <include refid="myTaskWhere"/>
+        <if test="lateOnly">and k.plan_end &lt; #{lateRef}</if>
+    </select>
+
+    <sql id="myDelivWhere">
+        from pms_deliverable d join pms_task t on t.task_id = d.task_id join pms_project p on p.proj_id = d.proj_id
+         where coalesce(d.owner_user_id, t.owner_user_id) = #{userId} and d.status in ('NONE', 'REJECTED')
+           and p.status in ('DRAFT', 'ACTIVE', 'ON_HOLD') and coalesce(d.due_date, t.plan_end) &lt;= #{until}
+    </sql>
+
+    <select id="findMyDelivs" resultType="io.smarthappy.module.pms.PortfolioDtos$MyDeliv">
+        select p.proj_id, p.proj_no, d.deliv_id, d.deliv_nm, t.task_nm, coalesce(d.due_date, t.plan_end) as due, d.status,
+               (coalesce(d.due_date, t.plan_end) &lt; #{lateRef}) as late
+        <include refid="myDelivWhere"/>
+         order by coalesce(d.due_date, t.plan_end), d.deliv_id
+         limit #{limit}
+    </select>
+
+    <select id="countMyDelivs" resultType="long">
+        select count(*) <include refid="myDelivWhere"/>
+    </select>
+
+    <!-- 하루 요약(docs/32 4.14) — 사람마다 내 할 일과 같은 조건(작업 = myTaskWhere, 산출물 = myDelivWhere)의 지연·임박 건수.
+         지연 = 기한 &lt; 지연 기준일(회사 휴일 반영), 임박 = 기준일 이상 ~ until. 0건 사람은 나오지 않는다 -->
+    <select id="digestCounts" resultType="io.smarthappy.module.pms.PortfolioDtos$DigestRow">
+        select x.user_id,
+               count(*) filter (where x.due &lt; #{lateRef}) as late_cnt,
+               count(*) filter (where x.due &gt;= #{lateRef}) as soon_cnt
+          from (select k.owner_user_id as user_id, k.plan_end as due
+                  from pms_task k join pms_project p on p.proj_id = k.proj_id
+                 where k.owner_user_id is not null and k.is_summary = 'N' and k.status in ('NOT_STARTED', 'IN_PROGRESS')
+                   and p.status in ('DRAFT', 'ACTIVE', 'ON_HOLD') and k.plan_end &lt;= #{until}
+                union all
+                select coalesce(d.owner_user_id, t.owner_user_id), coalesce(d.due_date, t.plan_end)
+                  from pms_deliverable d join pms_task t on t.task_id = d.task_id join pms_project p on p.proj_id = d.proj_id
+                 where coalesce(d.owner_user_id, t.owner_user_id) is not null and d.status in ('NONE', 'REJECTED')
+                   and p.status in ('DRAFT', 'ACTIVE', 'ON_HOLD') and coalesce(d.due_date, t.plan_end) &lt;= #{until}) x
+         group by x.user_id
+    </select>
+
+    <!-- 내 이슈(홈 카드 숫자 = 화면 "내 할 일" 목록, R8) — 내가 담당·열림·진행 중, 열린 프로젝트(작성·진행·보류)만 -->
+    <sql id="myIssueWhere">
+        from pms_issue i join pms_project p on p.proj_id = i.proj_id
+         where i.owner_user_id = #{userId} and i.status in ('OPEN', 'IN_PROGRESS') and p.status in ('DRAFT', 'ACTIVE', 'ON_HOLD')
+    </sql>
+
+    <select id="countMyIssues" resultType="long">
+        select count(*) <include refid="myIssueWhere"/>
+    </select>
+
+    <select id="findMyIssues" resultType="io.smarthappy.module.pms.WorkDtos$IssueRow">
+        select i.issue_id, i.proj_id, p.proj_no, i.issue_no, i.title, i.severity, i.status, i.due_date,
+               (i.due_date &lt; #{lateRef}) as late
+        <include refid="myIssueWhere"/>
+         order by case i.severity when 'HIGH' then 0 when 'MID' then 1 else 2 end, i.due_date nulls last, i.issue_id desc
+         limit #{limit}
+    </select>
+
+    <select id="findConfirmedDays" resultType="java.time.LocalDate">
+        select distinct work_day from pms_work_log
+         where user_id = #{userId} and work_day between #{from} and #{to} and status = 'CONFIRMED'
+    </select>
+
+    <select id="countLogs" resultType="long">
+        select count(*) from pms_work_log where user_id = #{userId} and work_day between #{from} and #{to}
+    </select>
+
+    <select id="hoursByCategory" resultType="io.smarthappy.module.pms.PortfolioDtos$HoursRow">
+        select category_cd,
+               trim_scale(coalesce(sum(hours) filter (where status = 'CONFIRMED'), 0)) as confirmed_hours,
+               trim_scale(coalesce(sum(hours) filter (where status = 'DRAFT'), 0)) as draft_hours
+          from pms_work_log where proj_id = #{projId}
+         group by category_cd order by category_cd nulls last
+    </select>
+
+    <select id="countGatesInApproval" resultType="long">
+        select count(*) from pms_gate_review r join pms_project p on p.proj_id = r.proj_id
+         where r.status = 'IN_APPROVAL' and p.status in ('DRAFT', 'ACTIVE', 'ON_HOLD')
+    </select>
+</mapper>

@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 협력사 정보 (SRM S1, docs/31 4장) — 회사 범위는 RLS, 쓰기의 comp_cd 는 hb_current_comp() -->
+<mapper namespace="io.smarthappy.module.srm.supplier.SupplierMapper">
+
+    <!-- ================================================================ 공통 -->
+
+    <select id="codeUsable" resultType="boolean">
+        select hb_code_usable(hb_current_comp(), #{grp}, #{code})
+    </select>
+
+    <select id="findItemByCd" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$ItemOption">
+        select item_id, item_cd, item_nm, unit_cd, use_yn from mst_item where item_cd = #{itemCd}
+    </select>
+
+    <select id="searchItems" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$ItemOption">
+        select item_id, item_cd, item_nm, unit_cd, use_yn from mst_item
+         where use_yn = 'Y'
+        <if test="keywordLike != null">and (item_cd ilike #{keywordLike} escape '\' or item_nm ilike #{keywordLike} escape '\')</if>
+         order by item_cd
+         limit 50
+    </select>
+
+    <!-- 단위 소수 자릿수(UNIT attrs.scale) — 시스템 코드 먼저, 없으면 회사 코드 -->
+    <select id="unitScale" resultType="integer">
+        select coalesce((select (attrs ->> 'scale')::int from sys_code where grp_cd = 'UNIT' and code = #{unitCd}),
+                        (select (attrs ->> 'scale')::int from sys_comp_code where grp_cd = 'UNIT' and code = #{unitCd}))
+    </select>
+
+    <!-- ================================================================ 협력사 -->
+
+    <sql id="supplierCols">
+        c.cust_id, c.cust_cd, c.cust_nm, c.cust_type, c.use_yn as cust_use_yn, c.biz_no, c.tel, c.email,
+        (s.cust_id is not null) as registered, s.buyer_user_id, u.login_id as buyer_login_id, u.user_nm as buyer_nm,
+        s.pay_terms_cd, s.currency_cd, s.country_cd, s.control_country_cd, s.trade_status, s.status_reason, s.sec_assessed_on,
+        s.remark, s.row_ver, s.updated_at, s.updated_by,
+        coalesce(ct.cnt, 0) as cert_cnt, ct.min_exp as cert_min_expires, coalesce(sc.cnt, 0) as source_cnt
+    </sql>
+    <!-- 현재 인증서 = 유형마다 사용 중 행 중 가장 최근 발행 행 -->
+    <sql id="supplierFrom">
+          from mst_cust c
+          left join srm_supplier s on s.cust_id = c.cust_id
+          left join sys_user u on u.user_id = s.buyer_user_id
+          left join lateral (select count(*) as cnt, min(x.expires_on) as min_exp
+                               from (select distinct on (cert_type_cd) expires_on from srm_supplier_cert
+                                      where cust_id = c.cust_id and use_yn = 'Y'
+                                      order by cert_type_cd, issued_on desc, cert_id desc) x) ct on s.cust_id is not null
+          left join lateral (select count(*) as cnt from srm_source where cust_id = c.cust_id and use_yn = 'Y') sc
+                 on s.cust_id is not null
+    </sql>
+
+    <!-- 목록·grid 공통 조건(c = SupplierCrit) — 구매·겸용 거래처(등록 전 포함) -->
+    <sql id="supplierWhere">
+         where c.cust_type in ('PURCHASE', 'BOTH')
+        <if test="c.keywordLike != null">and (c.cust_cd ilike #{c.keywordLike} escape '\' or c.cust_nm ilike #{c.keywordLike} escape '\')</if>
+        <if test="c.tradeStatus != null">and s.trade_status = #{c.tradeStatus}</if>
+        <if test='c.registered == "Y"'>and s.cust_id is not null</if>
+        <if test='c.registered == "N"'>and s.cust_id is null</if>
+    </sql>
+
+    <select id="findSuppliers" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$SupplierRow">
+        select <include refid="supplierCols"/>
+        <include refid="supplierFrom"/>
+        <include refid="supplierWhere"/>
+         order by c.cust_cd
+         limit 2000
+    </select>
+
+    <!-- grid(UI 단계 3 ①, docs/31 5.2) — 정렬은 허용 목록 enum 이름으로만 고른다(문자열 치환 없이), 마지막에 PK.
+         미등록 거래처는 거래 상태·담당·공급 품목이 비어 끝에 -->
+    <select id="findSupplierPage" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$SupplierRow">
+        select <include refid="supplierCols"/>
+        <include refid="supplierFrom"/>
+        <include refid="supplierWhere"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'CUST_NM'">c.cust_nm</when>
+                <when test="s.key == 'TRADE_STATUS'">s.trade_status is null, s.trade_status</when>
+                <when test="s.key == 'SOURCE_CNT'">sc.cnt is null, sc.cnt</when>
+                <when test="s.key == 'BUYER'">u.user_nm is null, u.user_nm</when>
+                <otherwise>c.cust_cd</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,
+         </foreach>
+         c.cust_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countSuppliers" resultType="long">
+        select count(*) from mst_cust c left join srm_supplier s on s.cust_id = c.cust_id <include refid="supplierWhere"/>
+    </select>
+
+    <select id="findSupplier" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$SupplierRow">
+        select <include refid="supplierCols"/>
+        <include refid="supplierFrom"/>
+         where c.cust_id = #{custId}
+    </select>
+
+    <insert id="insertSupplier">
+        insert into srm_supplier (cust_id, comp_cd, buyer_user_id, pay_terms_cd, currency_cd, country_cd, control_country_cd,
+                                  trade_status, status_reason, sec_assessed_on, remark, created_by, updated_by)
+        values (#{f.custId}, hb_current_comp(), #{f.buyerUserId}, #{f.payTermsCd}, #{f.currencyCd}, #{f.countryCd},
+                #{f.controlCountryCd}, #{f.tradeStatus}, #{f.statusReason}, #{f.secAssessedOn}, #{f.remark}, #{by}, #{by})
+    </insert>
+
+    <update id="updateSupplier">
+        update srm_supplier
+           set buyer_user_id = #{f.buyerUserId}, pay_terms_cd = #{f.payTermsCd}, currency_cd = #{f.currencyCd},
+               country_cd = #{f.countryCd}, control_country_cd = #{f.controlCountryCd}, trade_status = #{f.tradeStatus},
+               status_reason = #{f.statusReason}, sec_assessed_on = #{f.secAssessedOn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cust_id = #{f.custId} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 인증서 -->
+
+    <sql id="certCols">
+        cert_id, cust_id, cert_type_cd, cert_no, issuer_nm, issued_on, expires_on, use_yn, remark, row_ver, updated_at, updated_by
+    </sql>
+
+    <select id="findCerts" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$CertRow">
+        select <include refid="certCols"/> from srm_supplier_cert
+         where cust_id = #{custId}
+         order by cert_type_cd, issued_on desc, cert_id desc
+    </select>
+
+    <select id="findCert" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$CertRow">
+        select <include refid="certCols"/> from srm_supplier_cert where cert_id = #{id}
+    </select>
+
+    <select id="insertCert" resultType="long" flushCache="true">
+        insert into srm_supplier_cert (comp_cd, cust_id, cert_type_cd, cert_no, issuer_nm, issued_on, expires_on, use_yn, remark,
+                                       created_by, updated_by)
+        values (hb_current_comp(), #{custId}, #{f.certTypeCd}, #{f.certNo}, #{f.issuerNm}, #{f.issuedOn}, #{f.expiresOn},
+                #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning cert_id
+    </select>
+
+    <update id="updateCert">
+        update srm_supplier_cert
+           set cert_no = #{f.certNo}, issuer_nm = #{f.issuerNm}, expires_on = #{f.expiresOn}, use_yn = #{f.useYn},
+               remark = #{f.remark}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cert_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 공급 품목 -->
+
+    <sql id="sourceCols">
+        s.source_id, s.cust_id, s.item_id, i.item_cd, i.item_nm, i.unit_cd, i.use_yn as item_use_yn, s.supplier_item_cd,
+        s.supplier_item_nm, s.lead_days, trim_scale(s.moq)::text as moq, trim_scale(s.order_mult)::text as order_mult,
+        s.priority, s.use_yn, s.remark, s.row_ver, s.updated_at, s.updated_by
+    </sql>
+
+    <select id="findSources" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$SourceRow">
+        select <include refid="sourceCols"/> from srm_source s join mst_item i on i.item_id = s.item_id
+         where s.cust_id = #{custId}
+         order by i.item_cd
+    </select>
+
+    <select id="findSource" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$SourceRow">
+        select <include refid="sourceCols"/> from srm_source s join mst_item i on i.item_id = s.item_id
+         where s.source_id = #{id}
+    </select>
+
+    <select id="insertSource" resultType="long" flushCache="true">
+        insert into srm_source (comp_cd, cust_id, item_id, supplier_item_cd, supplier_item_nm, lead_days, moq, order_mult,
+                                priority, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{custId}, #{f.itemId}, #{f.supplierItemCd}, #{f.supplierItemNm}, #{f.leadDays}, #{f.moq},
+                #{f.orderMult}, #{f.priority}, #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning source_id
+    </select>
+
+    <update id="updateSource">
+        update srm_source
+           set supplier_item_cd = #{f.supplierItemCd}, supplier_item_nm = #{f.supplierItemNm}, lead_days = #{f.leadDays},
+               moq = #{f.moq}, order_mult = #{f.orderMult}, priority = #{f.priority}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where source_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 단가 -->
+
+    <sql id="priceCols">
+        p.price_id, p.cust_id, p.item_id, i.item_cd, i.item_nm, i.unit_cd, p.currency_cd, trim_scale(p.unit_price)::text as unit_price,
+        p.valid_from, p.valid_to, p.use_yn, p.remark, p.row_ver, p.updated_at, p.updated_by
+    </sql>
+
+    <select id="findPrices" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$PriceRow">
+        select <include refid="priceCols"/> from srm_price p join mst_item i on i.item_id = p.item_id
+         where p.cust_id = #{custId}
+        <if test="itemId != null">and p.item_id = #{itemId}</if>
+         order by i.item_cd, p.currency_cd, p.valid_from desc, p.price_id desc
+         limit 2000
+    </select>
+
+    <select id="findPrice" resultType="io.smarthappy.module.srm.supplier.SupplierDtos$PriceRow">
+        select <include refid="priceCols"/> from srm_price p join mst_item i on i.item_id = p.item_id
+         where p.price_id = #{id}
+    </select>
+
+    <update id="closeOpenPrice">
+        update srm_price
+           set valid_to = #{newFrom}::date - 1, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where cust_id = #{custId} and item_id = #{itemId} and currency_cd = #{currencyCd}
+           and use_yn = 'Y' and valid_to is null and valid_from &lt; #{newFrom}
+    </update>
+
+    <select id="insertPrice" resultType="long" flushCache="true">
+        insert into srm_price (comp_cd, cust_id, item_id, currency_cd, unit_price, valid_from, valid_to, remark, created_by, updated_by)
+        values (hb_current_comp(), #{custId}, #{itemId}, #{currencyCd}, #{unitPrice}, #{validFrom}, #{validTo}, #{remark}, #{by}, #{by})
+        returning price_id
+    </select>
+
+    <update id="updatePrice">
+        update srm_price
+           set valid_to = #{validTo}, use_yn = #{useYn}, remark = #{remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where price_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <!-- 기준일 단가(사용 중, 기간 안) — 배제 제약 때문에 많아야 1행 -->
+    <select id="effectivePrice" resultType="java.math.BigDecimal">
+        select unit_price from srm_price
+         where cust_id = #{custId} and item_id = #{itemId} and currency_cd = #{currencyCd} and use_yn = 'Y'
+           and valid_from &lt;= #{day} and (valid_to is null or valid_to &gt;= #{day})
+    </select>
+
+    <!-- 품질 요약 카드 (SRM 표만 — QMS 는 계약으로) -->
+    <select id="countOpenClaims" resultType="int">
+        select count(*) from srm_claim where cust_id = #{custId} and status in ('DRAFT', 'SENT', 'ANSWERED')
+    </select>
+
+    <select id="countReturnsToShip" resultType="int">
+        select count(*) from srm_return where cust_id = #{custId} and status = 'CONFIRMED'
+    </select>
+</mapper>

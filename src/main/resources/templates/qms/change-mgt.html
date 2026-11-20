@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  4M 변경 (qms-change) — P3 QMS 2부 Q5 (docs/29_P3 11장·12.1). PLM 설계 변경 지시(ECO)의 1:1 확장 — 4M 유형·변경 전/후·영향 평가·영향 특성.
+  사용성 체크(docs/11 4.3): 주 사용자 = 품질·생산기술(WEB). ECO 하나에 한 번, 상신 전 작성. 목록은 표 한 장(상한 200건).
+  직접 치는 값 = 4M 유형(복수)·변경 전·후·사유·영향 평가·임시 변경 복귀 조건·영향 특성/검사계획(ECO 대상 품목·공정에서 고름).
+  서버가 채우는 값 = ECO 머리(PLM 계약, 읽기 전용), "상신하면 막히는 이유" 미리보기, ECO 번호.
+  예외 = ECO 가 작성 중이 아니면 읽기 전용(상신 뒤 고정, 반려·회수되면 다시), 임시 변경은 복귀 조건 필수.
+  새 4M 세부는 "ECO 번호로 열기" 또는 PLM 설계 변경 지시 화면의 품질(4M) 링크(?ecoId=)로 연다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">4M 변경</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{qms.change.keyword}">ECO 번호·변경 내용</span><input name="keyword" maxlength="100"></label>
+    <label><span th:text="#{qms.change.col.m4Types}">4M 유형</span>
+        <select name="m4Type" data-hb="select" data-code="QMS_4M_TYPE" data-blank="all"></select></label>
+    <label><span th:text="#{qms.change.revertDue}">복귀 기한</span>
+        <select name="revertDue" data-help-key="qms-change.revertDue">
+            <option value="" th:text="#{common.all}">전체</option>
+            <option value="OVERDUE" th:text="#{qms.change.revertDue.OVERDUE}">기한 지남</option>
+        </select></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main hb-qms-scroll">
+        <form id="openForm" class="hb-qms-inline" autocomplete="off">
+            <label><span th:text="#{qms.change.openNo}">ECO 번호로 열기</span><input id="openNo" maxlength="50" data-help-key="qms-change.openNo"></label>
+            <button type="submit" class="hb-btn-secondary" th:text="#{qms.change.open}">열기</button>
+        </form>
+        <div id="changeGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+            <!-- 되돌릴 수 없는 동작은 저장과 떨어진 오른쪽 끝(docs/40 P1 ④) -->
+            <div class="hb-qms-danger-zone">
+                <button type="button" id="deleteBtn" class="hb-btn-danger-outline" th:if="${actions.contains('DELETE')}" th:text="#{qms.change.delete}">4M 세부 지우기</button>
+            </div>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{qms.change.select}">왼쪽에서 고르세요.</p>
+        <p id="ecoLine" class="hb-qms-status" role="status" hidden></p>
+        <ul id="issues" class="hb-qms-issues" hidden></ul>
+        <p id="setupLinkBox" hidden><a id="setupLink" href="#" th:text="#{qms.change.setupLink}">초품 확인 열기</a></p>
+
+        <form id="changeForm" class="hb-form" autocomplete="off" hidden>
+            <fieldset class="hb-wide hb-qms-m4" data-field="m4Types" data-help-key="qms-change.m4Types">
+                <legend th:text="#{qms.change.col.m4Types}">4M 유형</legend>
+                <div id="m4Box" class="hb-qms-checks"></div>
+            </fieldset>
+            <label class="hb-wide"><span th:text="#{qms.change.before}">변경 전</span><textarea data-field="beforeDesc" maxlength="2000" rows="3" required></textarea></label>
+            <label class="hb-wide"><span th:text="#{qms.change.after}">변경 후</span><textarea data-field="afterDesc" maxlength="2000" rows="3" required></textarea></label>
+            <label class="hb-wide"><span th:text="#{qms.change.reason}">변경 사유</span><textarea data-field="reasonDesc" maxlength="2000" rows="2"></textarea></label>
+            <label class="hb-wide"><span th:text="#{qms.change.impact}">영향 평가</span><textarea data-field="impactDesc" maxlength="4000" rows="3" data-help-key="qms-change.impact"></textarea></label>
+            <label class="hb-wide"><span th:text="#{qms.change.revert}">복귀 조건(임시 변경)</span><textarea data-field="revertCond" maxlength="1000" rows="2" data-help-key="qms-change.revert"></textarea></label>
+        </form>
+
+        <section class="hb-sub" id="impactSection" hidden>
+            <h2 data-help-key="qms-change.chars" th:text="#{qms.change.chars}">영향 특성·검사계획</h2>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="charTable"><tbody></tbody></table>
+            </div>
+            <div class="hb-toolbar" th:if="${actions.contains('SAVE')}">
+                <button type="button" id="addCharBtn" class="hb-btn-secondary" th:text="#{qms.change.addChar}">영향 행 추가</button>
+            </div>
+        </section>
+
+        <!-- 임시 변경 복귀 확인 (docs/29_P3 51.2) — 임시(TEMP) ECO 만. 표시 끝은 PLM 것이라 여기서 바꾸지 않고 차이만 경고 -->
+        <section class="hb-sub" id="revertSection" hidden>
+            <h2 data-help-key="qms-change.revertBox" th:text="#{qms.change.revertBox}">임시 변경 복귀</h2>
+            <p id="revertLine" class="hb-qms-status" role="status"></p>
+            <p id="revertGap" class="hb-qms-status" data-status="DUE_SOON" role="status" hidden></p>
+            <ul id="revertHist" class="hb-qms-issues"></ul>
+            <form id="revertForm" class="hb-form" autocomplete="off" hidden th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{qms.change.revertType}">복귀 구분</span>
+                    <select data-field="revertType" data-hb="select" data-code="QMS_4M_REVERT_TYPE" data-blank="select" required></select></label>
+                <label><span th:text="#{qms.change.revertedOn}">복귀일</span>
+                    <input type="date" data-field="revertedOn" required data-help-key="qms-change.revertedOn"></label>
+                <label class="hb-wide"><span th:text="#{qms.change.revertNote}">확인 내용</span>
+                    <textarea data-field="note" maxlength="1000" rows="2" required></textarea></label>
+            </form>
+            <div class="hb-toolbar">
+                <button type="button" id="revertBtn" th:if="${actions.contains('SAVE')}" hidden th:text="#{qms.change.revertSave}">복귀 기록</button>
+                <div class="hb-qms-danger-zone">
+                    <button type="button" id="revertVoidBtn" class="hb-btn-danger-outline" th:if="${actions.contains('DELETE')}" hidden th:text="#{qms.change.recordVoid}">기록 무효</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 변경 효과 확인 (docs/29_P3 51.3) — 비교 표는 읽기만(검사 강화 없음), 판정은 사람 -->
+        <section class="hb-sub" id="effectSection" hidden>
+            <h2 data-help-key="qms-change.effectBox" th:text="#{qms.change.effectBox}">변경 효과 확인</h2>
+            <form id="effectQuery" class="hb-qms-inline" autocomplete="off">
+                <label><span th:text="#{qms.change.effN}">측정값 수(앞·뒤)</span><input id="effN" inputmode="numeric" maxlength="3" value="30"></label>
+                <label><span th:text="#{qms.change.effDays}">기간(일)</span><input id="effDays" inputmode="numeric" maxlength="3" value="30"></label>
+                <button type="submit" id="effCompareBtn" class="hb-btn-secondary" th:text="#{qms.change.effCompare}">비교</button>
+            </form>
+            <p id="effectLine" class="hb-muted" role="status"></p>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="effCharTable"><thead></thead><tbody></tbody></table>
+            </div>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="effItemTable"><thead></thead><tbody></tbody></table>
+            </div>
+            <p id="effectState" class="hb-qms-status" role="status" hidden></p>
+            <ul id="effectHist" class="hb-qms-issues"></ul>
+            <form id="effectForm" class="hb-form" autocomplete="off" hidden th:if="${actions.contains('SAVE')}">
+                <label><span th:text="#{qms.change.effResult}">효과 판정</span>
+                    <select data-field="result" data-hb="select" data-code="QMS_4M_EFFECT" data-blank="select" required></select></label>
+                <label class="hb-wide"><span th:text="#{qms.change.effNote}">판정 근거</span>
+                    <textarea data-field="note" maxlength="2000" rows="2" required></textarea></label>
+            </form>
+            <div class="hb-toolbar">
+                <button type="button" id="effectBtn" th:if="${actions.contains('SAVE')}" hidden th:text="#{qms.change.effSave}">효과 판정 기록</button>
+                <div class="hb-qms-danger-zone">
+                    <button type="button" id="effectVoidBtn" class="hb-btn-danger-outline" th:if="${actions.contains('DELETE')}" hidden th:text="#{qms.change.recordVoid}">기록 무효</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 고객 통지 판단 (docs/29_P3 52장) — 대상 고객 = ECO 고객 칸, PCN 기록·메일은 PLM(읽기만) -->
+        <section class="hb-sub" id="notifySection" hidden>
+            <h2 data-help-key="qms-change.custNotify" th:text="#{qms.change.custNotify}">고객 통지</h2>
+            <p id="notifyLine" class="hb-qms-status" role="status"></p>
+            <ul id="notifyWarn" class="hb-qms-issues" hidden></ul>
+            <ul id="notifyBasis" class="hb-muted"></ul>
+            <div class="hb-qms-table-wrap">
+                <table class="hb-cmp-table" id="pcnTable" hidden><thead></thead><tbody></tbody></table>
+            </div>
+            <p class="hb-muted"><span th:text="#{qms.change.pcnHint}">PCN 기록·응답·메일은 설계 변경 지시 화면에서 합니다.</span>
+                <a id="ecoLink" href="#" th:text="#{qms.change.openEco}">설계 변경 지시 열기</a></p>
+        </section>
+
+        <section class="hb-sub" id="recSignBox" hidden>
+            <h2 th:text="#{qms.change.signs}">서명</h2>
+            <p id="recEsignLine" class="hb-muted"></p>
+            <ul id="recSigns"></ul>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/qms-ui.js}"></script>
+<script th:src="@{/js/views/qms/change-mgt.js}"></script>
+</body>
+</html>

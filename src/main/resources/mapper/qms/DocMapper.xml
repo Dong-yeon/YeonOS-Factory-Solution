@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 관리문서·정합 점검 (P3 QMS Q3, docs/29). 상태 전이는 모두 조건부 UPDATE(지금 상태) — 트리거 hb_guard_mst_doc_rev 가 최종 -->
+<mapper namespace="io.smarthappy.module.qms.DocMapper">
+
+    <sql id="docCols">
+        d.doc_id, d.doc_no, d.doc_type, d.doc_nm, d.use_yn, d.remark, d.row_ver, d.updated_at,
+        rr.doc_rev_id as released_rev_id, rr.rev as released_rev, rr.released_at,
+        orv.doc_rev_id as open_rev_id, orv.rev as open_rev, orv.status as open_status,
+        (select string_agg(coalesce(i.item_cd, c.class_cd, p.proc_cd), ', ' order by t.target_id)
+           from mst_doc_target t left join mst_item i on i.item_id = t.item_id left join mst_item_class c on c.class_id = t.item_class_id
+           left join mst_proc p on p.proc_id = t.proc_id where t.doc_id = d.doc_id) as target_text,
+        (select count(*) from mst_doc_target t where t.doc_id = d.doc_id) as target_cnt
+    </sql>
+
+    <sql id="docFrom">
+        from mst_doc d
+        left join mst_doc_rev rr on rr.doc_id = d.doc_id and rr.status = 'RELEASED'
+        left join mst_doc_rev orv on orv.doc_id = d.doc_id and orv.status in ('DRAFT', 'IN_APPROVAL')
+    </sql>
+
+    <sql id="where">
+        <include refid="docFrom"/>
+        <where>
+            <if test="q.keywordLike != null">and (d.doc_no ilike #{q.keywordLike} escape '\' or d.doc_nm ilike #{q.keywordLike} escape '\')</if>
+            <if test="q.docType != null">and d.doc_type = #{q.docType}</if>
+            <if test="!q.withUnused">and d.use_yn = 'Y'</if>
+        </where>
+    </sql>
+
+    <select id="findPage" resultType="io.smarthappy.module.qms.DocDtos$DocRow">
+        select <include refid="docCols"/> <include refid="where"/>
+        order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'DOC_NO'">d.doc_no</when>
+                <when test="o.key == 'DOC_TYPE'">d.doc_type</when>
+                <when test="o.key == 'DOC_NM'">d.doc_nm</when>
+                <when test="o.key == 'RELEASED_AT'">rr.released_at</when>
+                <otherwise>d.updated_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        d.doc_id
+        limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="count" resultType="long">
+        select count(*) <include refid="where"/>
+    </select>
+
+    <select id="findDoc" resultType="io.smarthappy.module.qms.DocDtos$DocRow">
+        select <include refid="docCols"/> <include refid="docFrom"/> where d.doc_id = #{id}
+    </select>
+
+    <select id="lockDoc" resultType="java.lang.Long">
+        select doc_id from mst_doc where doc_id = #{id} for update
+    </select>
+
+    <select id="findTargets" resultType="io.smarthappy.module.qms.DocDtos$TargetRow">
+        select t.target_id, t.target_type, coalesce(t.item_id, t.item_class_id, t.proc_id) as ref_id,
+               coalesce(i.item_cd, c.class_cd, p.proc_cd) as target_cd, coalesce(i.item_nm, c.class_nm, p.proc_nm) as target_nm,
+               coalesce(i.use_yn, c.use_yn, p.use_yn) as use_yn
+          from mst_doc_target t
+          left join mst_item i on i.item_id = t.item_id
+          left join mst_item_class c on c.class_id = t.item_class_id
+          left join mst_proc p on p.proc_id = t.proc_id
+         where t.doc_id = #{docId}
+         order by t.target_id
+    </select>
+
+    <select id="findItem" resultType="io.smarthappy.module.qms.DocDtos$Ref">
+        select item_id as id, use_yn from mst_item where item_cd = #{cd}
+    </select>
+
+    <select id="findClass" resultType="io.smarthappy.module.qms.DocDtos$Ref">
+        select class_id as id, use_yn from mst_item_class where class_cd = #{cd}
+    </select>
+
+    <select id="findProc" resultType="io.smarthappy.module.qms.DocDtos$Ref">
+        select proc_id as id, use_yn from mst_proc where proc_cd = #{cd}
+    </select>
+
+    <select id="insertDoc" resultType="long" flushCache="true">
+        insert into mst_doc (comp_cd, doc_no, doc_type, doc_nm, use_yn, remark, created_by, updated_by)
+        values (hb_current_comp(), #{docNo}, #{docType}, #{docNm}, #{useYn}, #{remark}, #{by}, #{by})
+        returning doc_id
+    </select>
+
+    <update id="updateDoc">
+        update mst_doc set doc_nm = #{docNm}, use_yn = #{useYn}, remark = #{remark},
+                           row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where doc_id = #{id} and row_ver = #{rowVer}
+    </update>
+
+    <delete id="deleteTargets">
+        delete from mst_doc_target where doc_id = #{docId}
+    </delete>
+
+    <insert id="insertTargets">
+        insert into mst_doc_target (comp_cd, doc_id, target_type, item_id, item_class_id, proc_id, created_by)
+        values
+        <foreach collection="targets" item="t" separator=",">
+            (hb_current_comp(), #{docId}, #{t.targetType}, #{t.itemId}, #{t.itemClassId}, #{t.procId}, #{by})
+        </foreach>
+    </insert>
+
+    <!-- ================================================================ 리비전 -->
+
+    <sql id="revCols">
+        r.doc_rev_id, r.doc_id, d.doc_no, d.doc_type, d.doc_nm, r.rev, r.status, r.change_summary, r.source_rev_id, r.apr_id,
+        a.status as apr_status, a.requester_id as apr_requester_id, r.submitted_at, r.submitted_by, r.released_at, r.released_by,
+        r.obsoleted_at, r.obsoleted_by, r.row_ver,
+        (select count(*) from sys_file f where f.target_type = 'qms-doc' and f.target_id = r.doc_rev_id::text and f.use_yn = 'Y') as file_cnt
+    </sql>
+
+    <select id="findRevs" resultType="io.smarthappy.module.qms.DocDtos$RevRow">
+        select <include refid="revCols"/>
+          from mst_doc_rev r join mst_doc d on d.doc_id = r.doc_id left join apr_request a on a.apr_id = r.apr_id
+         where r.doc_id = #{docId}
+         order by r.doc_rev_id desc
+    </select>
+
+    <select id="findRev" resultType="io.smarthappy.module.qms.DocDtos$RevRow">
+        select <include refid="revCols"/>
+          from mst_doc_rev r join mst_doc d on d.doc_id = r.doc_id left join apr_request a on a.apr_id = r.apr_id
+         where r.doc_rev_id = #{id}
+    </select>
+
+    <select id="lockRev" resultType="string">
+        select status from mst_doc_rev where doc_rev_id = #{id} for update
+    </select>
+
+    <select id="revStatus" resultType="string">
+        select status from mst_doc_rev where doc_rev_id = #{id}
+    </select>
+
+    <select id="findRevCodes" resultType="string">
+        select rev from mst_doc_rev where doc_id = #{docId}
+    </select>
+
+    <select id="insertRev" resultType="long" flushCache="true">
+        insert into mst_doc_rev (comp_cd, doc_id, rev, source_rev_id, change_summary, created_by, updated_by)
+        values (hb_current_comp(), #{docId}, #{rev}, #{sourceRevId}, #{summary}, #{by}, #{by})
+        returning doc_rev_id
+    </select>
+
+    <update id="updateRev">
+        update mst_doc_rev set rev = #{rev}, change_summary = #{summary}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where doc_rev_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="submitRev">
+        update mst_doc_rev set status = 'IN_APPROVAL', apr_id = #{aprId}, submitted_at = now(), submitted_by = #{by},
+                               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where doc_rev_id = #{id} and status = 'DRAFT' and row_ver = #{rowVer}
+    </update>
+
+    <update id="backToDraft">
+        update mst_doc_rev set status = 'DRAFT', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where doc_rev_id = #{id} and status = 'IN_APPROVAL'
+    </update>
+
+    <update id="obsoleteReleased">
+        update mst_doc_rev set status = 'OBSOLETE', obsoleted_at = now(), obsoleted_by = #{by},
+                               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where doc_id = #{docId} and status = 'RELEASED'
+    </update>
+
+    <update id="releaseRev">
+        update mst_doc_rev set status = 'RELEASED', released_at = now(), released_by = #{by},
+                               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where doc_rev_id = #{id} and status in ('DRAFT', 'IN_APPROVAL')
+    </update>
+
+    <update id="obsoleteRev">
+        update mst_doc_rev set status = 'OBSOLETE', obsoleted_at = now(), obsoleted_by = #{by},
+                               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where doc_rev_id = #{id} and status in ('DRAFT', 'RELEASED') and row_ver = #{rowVer}
+    </update>
+
+    <!-- 배포본 첨부는 근거로 굳힌다(공통 sys_file.locked_yn — 한 방향) -->
+    <update id="lockFiles">
+        update sys_file set locked_yn = 'Y', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where target_type = 'qms-doc' and target_id = cast(#{id} as varchar) and use_yn = 'Y' and locked_yn = 'N'
+    </update>
+
+    <!-- ================================================================ 결재 -->
+
+    <select id="findAprLines" resultType="io.smarthappy.module.qms.DocDtos$AprLineRow">
+        select l.seq, l.approver_id, u.user_nm as approver_nm, l.line_type, l.status, l.acted_at, l.comment
+          from apr_line l join sys_user u on u.user_id = l.approver_id
+         where l.apr_id = #{aprId} order by l.seq
+    </select>
+
+    <!-- ================================================================ 정합 점검 (오늘 유효한 확정 검사계획 기준) -->
+
+    <sql id="effective">
+        p.status = 'RELEASED' and p.valid_from &lt;= #{today} and (p.valid_to is null or p.valid_to &gt; #{today})
+    </sql>
+
+    <!-- 1. 특별특성(CC·SC·고객 기호)이 오늘 유효한 확정 검사계획 어디에도 없다 -->
+    <select id="findSpecialNotInPlan" resultType="io.smarthappy.module.qms.DocDtos$Finding">
+        select 'SPECIAL_NOT_IN_PLAN' as check_cd, ch.char_id as ref_id, coalesce(i.item_cd, pr.proc_cd) || '-' || ch.char_no as target_cd,
+               ch.char_nm as target_nm, ch.special_cls as detail
+          from qms_char ch
+          left join mst_item i on i.item_id = ch.item_id
+          left join mst_proc pr on pr.proc_id = ch.proc_id
+         where ch.use_yn = 'Y' and ch.special_cls &lt;&gt; 'NONE'
+           and (i.item_id is null or i.use_yn = 'Y') and (pr.proc_id is null or pr.use_yn = 'Y')
+           and not exists (select 1 from qms_insp_plan_line l join qms_insp_plan p on p.insp_plan_id = l.insp_plan_id
+                            where l.char_id = ch.char_id and <include refid="effective"/>)
+         order by 3
+         limit #{limit}
+    </select>
+
+    <!-- 2. 확정 검사계획이 있는데 대상(품목·품목 클래스·공정)에 맞는 검사기준서 배포본이 없다(계획에 직접 건 배포본도 인정) -->
+    <select id="findPlanNoInspStd" resultType="io.smarthappy.module.qms.DocDtos$Finding">
+        select 'PLAN_NO_INSP_STD' as check_cd, p.insp_plan_id as ref_id, coalesce(i.item_cd, c.class_cd) as target_cd,
+               coalesce(i.item_nm, c.class_nm) as target_nm,
+               p.insp_type || ' / ' || p.rev || coalesce(' / ' || pr.proc_cd, '') as detail
+          from qms_insp_plan p
+          left join mst_item i on i.item_id = p.item_id
+          left join mst_item_class c on c.class_id = p.item_class_id
+          left join mst_proc pr on pr.proc_id = p.proc_id
+         where <include refid="effective"/>
+           and not exists (select 1 from mst_doc_rev r where r.doc_rev_id = p.doc_rev_id and r.status = 'RELEASED')
+           and not exists (select 1 from mst_doc d join mst_doc_rev r on r.doc_id = d.doc_id and r.status = 'RELEASED'
+                             join mst_doc_target t on t.doc_id = d.doc_id
+                            where d.doc_type = 'INSP_STD' and d.use_yn = 'Y'
+                              and (t.item_id = p.item_id or t.item_class_id = coalesce(p.item_class_id, i.item_class_id)
+                                   or (p.proc_id is not null and t.proc_id = p.proc_id)))
+         order by 3, p.insp_type
+         limit #{limit}
+    </select>
+
+    <!-- 3. 확정(오늘 유효)·작성 중 검사계획이 가리키는 검사기준서 리비전이 폐기됐다 -->
+    <select id="findPlanDocObsolete" resultType="io.smarthappy.module.qms.DocDtos$Finding">
+        select 'PLAN_DOC_OBSOLETE' as check_cd, p.insp_plan_id as ref_id, coalesce(i.item_cd, c.class_cd) as target_cd,
+               coalesce(i.item_nm, c.class_nm) as target_nm, p.insp_type || ' / ' || p.rev || ' → ' || d.doc_no || ' / ' || r.rev as detail
+          from qms_insp_plan p
+          join mst_doc_rev r on r.doc_rev_id = p.doc_rev_id and r.status = 'OBSOLETE'
+          join mst_doc d on d.doc_id = r.doc_id
+          left join mst_item i on i.item_id = p.item_id
+          left join mst_item_class c on c.class_id = p.item_class_id
+         where (<include refid="effective"/>) or p.status = 'DRAFT'
+         order by 3, p.insp_type
+         limit #{limit}
+    </select>
+
+    <!-- ================================================================ 쓰기 계약 DocPort (docs/29_P3 20.2) -->
+
+    <select id="lockSourceKey" resultType="int">
+        select 1 from (select pg_advisory_xact_lock(hashtext('mst_doc_rev.source_key:' || #{key}))) x
+    </select>
+
+    <select id="findRevBySource" resultType="io.smarthappy.module.qms.DocDtos$RevRow">
+        select <include refid="revCols"/>
+          from mst_doc_rev r join mst_doc d on d.doc_id = r.doc_id left join apr_request a on a.apr_id = r.apr_id
+         where r.source_key = #{key}
+    </select>
+
+    <select id="findDocByNo" resultType="io.smarthappy.module.qms.DocDtos$DocRow">
+        select <include refid="docCols"/> <include refid="docFrom"/> where upper(d.doc_no) = upper(#{no})
+    </select>
+
+    <select id="findItemById" resultType="io.smarthappy.module.qms.DocDtos$Ref">
+        select item_id as id, use_yn from mst_item where item_id = #{id}
+    </select>
+
+    <select id="insertRevSourced" resultType="long" flushCache="true">
+        insert into mst_doc_rev (comp_cd, doc_id, rev, change_summary, source_key, created_by, updated_by)
+        values (hb_current_comp(), #{docId}, #{rev}, #{summary}, #{sourceKey}, #{by}, #{by})
+        returning doc_rev_id
+    </select>
+</mapper>

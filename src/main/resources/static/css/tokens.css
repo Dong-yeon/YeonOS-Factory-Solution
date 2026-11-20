@@ -1,0 +1,229 @@
+/* 글꼴: Pretendard 1.3.9 가변 dynamic subset(수정 없이 vendor, OFL — docs/12 V2). 화면에 나온 글자 조각만 받는다 */
+@import url("../vendor/pretendard/1.3.9/pretendardvariable-dynamic-subset.css");
+/*
+ * YeonOS 디자인 토큰 (docs/12 V1, 레이아웃 층은 docs/15 4.3)
+ * - 색·크기 값은 이 파일에만 쓴다. 다른 CSS 는 의미 토큰(--hb-*)·컴포넌트 토큰만 var() 로 쓴다.
+ *   원시 토큰(--hb-p-*)을 다른 파일에서 쓰는 것도 금지 — DesignTokenGuardTest 가 막는다.
+ * - 3단: 원시(--hb-p-*) → 의미(--hb-*) → 컴포넌트(--hbg-*, --hb-ctl-* …).
+ *   테마(다크·현장)는 의미 층만, 밀도(compact/normal)는 컴포넌트 층만 바꾼다.
+ * - 밀도·테마 전환은 body 의 data-density / data-surface 속성으로(인라인 style 없음 → CSP 그대로).
+ *
+ * 브레이크포인트 (CSS 변수는 @media 조건에 못 쓰므로 숫자의 원본은 이 표 — docs/15 4.2)
+ *   셸(창 폭)          : 1024 · 1366 · 1920        → shell.css
+ *   업무 화면(작업 영역): 900 · 1280 · 1800          → page.css (iframe 안이라 @media = 작업 영역 폭)
+ *   높이               : 600(낮은 화면)             → page.css
+ *   입력 팝업(작업 영역): 599 이하면 달력 1개월·아래 시트 → page.css (hb.dateRange)
+ *   로그인             : 900(좁음) · 720·520(낮음)  → login.css
+ *   상세 패널(@container detail, 패널 폭): 340(1열) · 420(담당자 행 접기) · 560(3열) → page.css
+ */
+:root {
+    /* ── 원시: 중립(약간 푸른 회색) ── */
+    --hb-p-gray-0: #ffffff;
+    --hb-p-gray-25: #f9fafb;
+    --hb-p-gray-50: #f4f6f8;
+    --hb-p-gray-100: #e9ecf0;
+    --hb-p-gray-200: #dde1e6;
+    --hb-p-gray-300: #c3c9d1;
+    --hb-p-gray-500: #8a929c;      /* 흰 바탕 3.15:1 — 입력 경계 최소 */
+    --hb-p-gray-600: #6b7480;      /* 4.74:1 */
+    --hb-p-gray-700: #4a525d;      /* 7.9:1 */
+    --hb-p-gray-900: #1b1f24;      /* 16.6:1 */
+    /* ── 원시: 브랜드·상태 ── */
+    --hb-p-blue-50: #eef4fd;
+    --hb-p-blue-100: #dce8fb;
+    --hb-p-blue-300: #9dbcf0;
+    --hb-p-blue-600: #1d5bd6;
+    --hb-p-blue-700: #174bb3;
+    --hb-p-blue-800: #123c8f;
+    --hb-p-navy-800: #1e3a8a;
+    --hb-p-navy-950: #0f1b2d;
+    --hb-p-red-50: #fdecea;
+    --hb-p-red-200: #f6c1bb;
+    --hb-p-red-700: #b42318;
+    --hb-p-amber-50: #fff4d6;
+    --hb-p-amber-300: #f2cf72;
+    --hb-p-amber-800: #8a5300;
+    --hb-p-green-50: #e7f5ec;
+    --hb-p-green-200: #a8dcbb;
+    --hb-p-green-700: #1a7a43;
+    --hb-p-orange-50: #fff0e5;
+    --hb-p-orange-300: #f5ac7a;
+    --hb-p-orange-700: #b4480f;
+    --hb-p-yellow-300: #f5d33d;
+    --hb-p-magenta-50: #fbeafb;
+    --hb-p-magenta-300: #e3a1e6;
+    --hb-p-magenta-700: #9a2fa3;
+    --hb-p-cyan-50: #e6f2fa;
+    --hb-p-cyan-200: #b5d7ee;
+    --hb-p-cyan-700: #0b6aa3;
+    --hb-p-teal-300: #5eead4;
+    --hb-p-slate-200: #e2e8f0;
+    --hb-p-slate-400: #a8b5c8;
+    --hb-p-black-a12: rgb(16 24 40 / 0.12);
+    --hb-p-black-a35: rgb(15 23 42 / 0.35);
+    --hb-p-white-a50: rgb(255 255 255 / 0.5);
+
+    /* ── 의미: 바탕·글자·선 ── */
+    --hb-bg-page: var(--hb-p-gray-0);
+    --hb-bg-surface: var(--hb-p-gray-0);
+    --hb-bg-subtle: var(--hb-p-gray-50);
+    --hb-bg-muted: var(--hb-p-gray-100);
+    --hb-bg-hover: var(--hb-p-gray-25);
+    --hb-bg-tab: var(--hb-p-gray-200);     /* 셸 비활성 탭 */
+    --hb-text: var(--hb-p-gray-900);
+    --hb-text-muted: var(--hb-p-gray-700);
+    --hb-text-subtle: var(--hb-p-gray-600);
+    --hb-text-disabled: var(--hb-p-gray-300);
+    --hb-text-on-action: var(--hb-p-gray-0);
+    --hb-border-subtle: var(--hb-p-gray-200);
+    --hb-border: var(--hb-p-gray-300);
+    --hb-border-control: var(--hb-p-gray-500);
+    /* ── 의미: 동작(파랑은 누를 것·선택·포커스에만, 상태 의미로 쓰지 않음) ── */
+    --hb-action: var(--hb-p-blue-600);
+    --hb-action-hover: var(--hb-p-blue-700);
+    --hb-action-pressed: var(--hb-p-blue-800);
+    --hb-action-subtle: var(--hb-p-blue-100);
+    --hb-action-faint: var(--hb-p-blue-50);
+    --hb-action-disabled: var(--hb-p-blue-300);
+    --hb-focus: var(--hb-p-blue-600);
+    --hb-brand-header: var(--hb-p-navy-800);
+    --hb-brand-panel: var(--hb-p-navy-950);
+    --hb-brand-panel-text: var(--hb-p-slate-200);
+    --hb-brand-panel-muted: var(--hb-p-slate-400);
+    --hb-brand-accent: var(--hb-p-teal-300);
+    --hb-on-header-line: var(--hb-p-white-a50);
+    /* ── 의미: 상태(fg 글자·아이콘·테두리 / bg 연한 배경 / line 테두리) ── */
+    --hb-status-danger-fg: var(--hb-p-red-700);
+    --hb-status-danger-bg: var(--hb-p-red-50);
+    --hb-status-danger-line: var(--hb-p-red-200);
+    --hb-status-warning-fg: var(--hb-p-amber-800);
+    --hb-status-warning-bg: var(--hb-p-amber-50);
+    --hb-status-warning-line: var(--hb-p-amber-300);
+    --hb-status-success-fg: var(--hb-p-green-700);
+    --hb-status-success-bg: var(--hb-p-green-50);
+    --hb-status-success-line: var(--hb-p-green-200);
+    --hb-status-info-fg: var(--hb-p-cyan-700);
+    --hb-status-info-bg: var(--hb-p-cyan-50);
+    --hb-status-info-line: var(--hb-p-cyan-200);
+    --hb-scrim: var(--hb-p-black-a35);
+    /* 설비 상태 분류(SEMI E10 6 + 통신 끊김) — MES P2 6단계 타임라인. 색만으로 구분하지 않는다(표·범례에 글자) */
+    --hb-equip-state-prd: var(--hb-p-green-700);
+    --hb-equip-state-sby: var(--hb-p-amber-300);
+    --hb-equip-state-eng: var(--hb-p-cyan-700);
+    --hb-equip-state-sdt: var(--hb-p-blue-300);
+    --hb-equip-state-udt: var(--hb-p-red-700);
+    --hb-equip-state-nst: var(--hb-p-gray-200);
+    --hb-equip-state-unknown: var(--hb-p-gray-500);
+    /* 상태 의미 사전 (docs/40 부록 A — 이름 고정, 값만 바꾼다) */
+    /* 설비 상태 현장 판(V-1 화면별): 안돈·POP·HMI 는 정상 계열을 회색 + 글자로, 이상(비계획 정지)만 알람색 — 사무 화면(타임라인·홈)은 위 equip-state */
+    --hb-equip-field-prd: var(--hb-p-gray-100);
+    --hb-equip-field-sby: var(--hb-p-gray-50);
+    --hb-equip-field-eng: var(--hb-p-gray-200);
+    --hb-equip-field-sdt: var(--hb-p-gray-200);
+    --hb-equip-field-udt: var(--hb-p-red-700);
+    --hb-equip-field-nst: var(--hb-p-gray-50);
+    --hb-equip-field-unknown: var(--hb-p-gray-500);
+    /* 알람 4단(ISA-18.2 우선순위, 모양 P1 ◆·P2 ▲·P3 ■·P4 ● + "P1" 글자 — docs/12 2.4) — 알람 색은 다른 용도로 쓰지 않는다 */
+    --hb-alarm-1-fg: var(--hb-p-red-700);
+    --hb-alarm-1-bg: var(--hb-p-red-50);
+    --hb-alarm-1-line: var(--hb-p-red-200);
+    --hb-alarm-2-fg: var(--hb-p-orange-700);
+    --hb-alarm-2-bg: var(--hb-p-orange-50);
+    --hb-alarm-2-line: var(--hb-p-orange-300);
+    --hb-alarm-3-fg: var(--hb-p-amber-800);
+    --hb-alarm-3-bg: var(--hb-p-amber-50);
+    --hb-alarm-3-line: var(--hb-p-amber-300);
+    --hb-alarm-4-fg: var(--hb-p-magenta-700);
+    --hb-alarm-4-bg: var(--hb-p-magenta-50);
+    --hb-alarm-4-line: var(--hb-p-magenta-300);
+    /* 안돈 등(관례 — V-6: 파랑·흰색의 뜻은 회사 정책 ANDON_BLUE_MEANING·ANDON_WHITE_MEANING, 색 이름은 고정) */
+    --hb-andon-green: var(--hb-p-green-700);
+    --hb-andon-yellow: var(--hb-p-yellow-300);
+    --hb-andon-red: var(--hb-p-red-700);
+    --hb-andon-blue: var(--hb-p-blue-600);
+    --hb-andon-white: var(--hb-p-gray-0);
+    /* 차트(hb.chart, docs/61 11장) — 계열 색은 상태 의미 없음(1이 기본 실적). 파랑은 동작 전용이라 계열에 쓰지 않는다.
+       색만으로 구분하지 않는다: 범례·표 보기에 글자, 관리도 위반 점은 크기·테두리도 다르다 */
+    --hb-chart-1: var(--hb-p-cyan-700);
+    --hb-chart-2: var(--hb-p-orange-700);
+    --hb-chart-3: var(--hb-p-magenta-700);
+    --hb-chart-4: var(--hb-p-navy-800);
+    --hb-chart-5: var(--hb-p-amber-800);
+    --hb-chart-6: var(--hb-p-gray-600);
+    --hb-chart-muted: var(--hb-p-gray-300);        /* 계획·기준 막대(실적과 겹쳐 볼 때) */
+    --hb-chart-grid: var(--hb-p-gray-100);
+    --hb-chart-axis: var(--hb-p-gray-300);
+    --hb-chart-ref: var(--hb-p-gray-700);          /* 목표선·80% 선 */
+    --hb-chart-limit: var(--hb-p-red-700);         /* 관리도 UCL·LCL */
+    --hb-chart-center: var(--hb-p-green-700);      /* 관리도 CL */
+
+    /* ── 크기: 간격(4px 기준)·모서리·그림자·글꼴 ── */
+    --hb-space-1: 2px;
+    --hb-space-2: 4px;
+    --hb-space-3: 6px;
+    --hb-space-4: 8px;
+    --hb-space-5: 12px;
+    --hb-space-6: 16px;
+    --hb-space-7: 24px;
+    --hb-space-8: 32px;
+    --hb-radius-sm: 3px;
+    --hb-radius-md: 4px;
+    --hb-radius-lg: 8px;
+    --hb-shadow-1: 0 1px 2px var(--hb-p-black-a12);
+    --hb-shadow-2: 0 8px 24px var(--hb-p-black-a12);
+    --hb-font: "Pretendard Variable", Pretendard, "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+    --hb-font-mono: Consolas, ui-monospace, monospace;
+    --hb-fs-xs: 11px;
+    --hb-fs-sm: 12px;
+    --hb-fs-md: 14px;
+    --hb-fs-lg: 15px;
+    --hb-fs-xl: 18px;
+    --hb-fs-2xl: 22px;
+    --hb-fw-regular: 400;
+    --hb-fw-semibold: 600;
+    --hb-fw-bold: 700;
+    --hb-z-sticky: 2;
+    --hb-z-menu: 50;
+    --hb-z-drawer: 60;
+    --hb-z-popup: 70;
+    --hb-z-dialog: 100;
+    --hb-z-tip: 110;                       /* 버튼 툴팁(docs/36 20장) — 모달 dialog 안에서는 그 dialog 안에 둔다 */
+
+    /* ── 컴포넌트(밀도 compact = 사무 기본) ── */
+    --hb-fs-body: 13px;
+    --hb-ctl-h: 28px;
+    --hb-ctl-pad: 0 var(--hb-space-3);
+    --hb-ctl-max-w: 320px;   /* 조회·도구줄 select 최대 폭 — 긴 선택지(214자 거래처명)가 칸을 2,571px 로 늘렸다(docs/40 D8) */
+    --hb-btn-pad: 0 var(--hb-space-5);
+    --hbg-row-h: 28px;
+    --hbg-cell-pad: 5px var(--hb-space-4);
+    --hb-target-min: 24px;                 /* 누를 곳 최소(WCAG 2.5.8) — 체크·토글·세그먼트 라벨 */
+    --hb-check-size: 16px;
+    --hb-switch-w: 32px;
+    --hb-switch-h: 18px;
+    --hb-switch-knob: 12px;
+    --hb-tip-bg: var(--hb-p-navy-950);    /* 버튼 툴팁 — 흰 글자 16:1 이상 */
+    --hb-tip-text: var(--hb-p-gray-0);
+    --hb-tip-max-w: 280px;
+
+    /* ── 레이아웃(밀도와 독립, docs/15 4.3) ── */
+    --hb-layout-header-h: 44px;
+    --hb-layout-menu-w: 220px;
+    --hb-layout-page-pad: var(--hb-space-5) var(--hb-space-6);
+    --hb-layout-split-gap: var(--hb-space-5);
+    --hb-layout-side-w: clamp(360px, 26%, 440px);     /* area-m·l. area-xl(≥1800) 은 page.css 에서 넓힌다 */
+    --hb-layout-drawer-w: min(100%, 480px);
+    --hb-layout-read-max: 72rem;
+    --hb-layout-help-w: 300px;
+}
+@media (min-width: 1920px) {
+    :root { --hb-layout-menu-w: 240px; }
+}
+
+/* 밀도 normal — 사용자 설정(P1 저장). 컴포넌트 층만 바뀐다 */
+body[data-density="normal"] {
+    --hb-fs-body: 14px;
+    --hb-ctl-h: 32px;
+    --hbg-row-h: 34px;
+    --hbg-cell-pad: 8px var(--hb-space-4);
+}

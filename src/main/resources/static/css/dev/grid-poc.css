@@ -1,0 +1,50 @@
+/* 편집 그리드·위젯 PoC (local 전용, docs/10 8장) */
+.poc h2 { font-size: 15px; margin: 0 0 8px; }
+.poc h3 { font-size: 13px; margin: 0 0 8px; }
+.poc-note, .poc-dim { color: #64748b; font-size: 12px; }
+.poc-section { margin: 18px 0; padding-top: 12px; border-top: 1px solid #e5e7eb; }
+.poc-status { padding: 8px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }
+.poc-count { display: inline-block; min-width: 28px; padding: 1px 8px; border-radius: 10px; text-align: center; font-weight: bold; }
+.poc-good { background: #dcfce7; color: #166534; }
+.poc-bad { background: #fee2e2; color: #991b1b; }
+.poc-csp-list { margin: 4px 0 0; padding-left: 18px; color: #991b1b; font-family: Consolas, monospace; font-size: 12px; }
+.poc-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.poc-sep { width: 12px; }
+.hb-page button.poc-secondary { background: #e2e8f0; color: #1f2937; }
+.poc-grid { border: 1px solid #cbd5e1; }
+.hb-msg.poc-bad { color: #b91c1c; background: none; }
+
+/* 그리드 상태 표시 */
+.tabulator-row.poc-row-new { background: #f0fdf4; }
+.tabulator-row.poc-row-dirty { background: #eff6ff; }
+.tabulator-row.poc-row-conflict { background: #ffedd5; }
+.tabulator .tabulator-cell.poc-cell-error { background: #fee2e2; color: #991b1b; box-shadow: inset 0 0 0 1px #ef4444; }
+.poc-cell-editor { width: 100%; height: 100%; padding: 2px 4px; border: 2px solid #2563eb; font: inherit; box-sizing: border-box; }
+
+/* 성능 표 */
+.poc-perf { border-collapse: collapse; font-size: 12px; min-width: 640px; }
+.poc-perf th, .poc-perf td { border: 1px solid #e2e8f0; padding: 3px 8px; text-align: left; }
+.poc-perf td:nth-child(3) { text-align: right; font-family: Consolas, monospace; }
+
+/* 위젯 */
+.poc-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.poc-widget { padding: 12px; border: 1px solid #e2e8f0; border-radius: 6px; }
+.poc-field { display: block; margin: 8px 0; }
+.poc-field > span { display: block; margin-bottom: 3px; color: #64748b; font-size: 12px; }
+.poc-field input:not(.k-input-inner), .poc-field select:not(.k-input-inner) { padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 4px; min-width: 260px; }
+.poc-field .k-picker, .poc-field .k-input, .poc-field .ts-wrapper { width: 280px; }
+.poc-input-error { border-color: #ef4444 !important; background: #fef2f2; }
+.poc-hidden-submit { display: none; }
+.poc-dialog { border: 1px solid #94a3b8; border-radius: 8px; padding: 16px 20px; min-width: 360px; }
+.poc-dialog::backdrop { background: rgba(15, 23, 42, 0.35); }
+
+/* Split.js: 크기는 라이브러리가 CSSOM 으로, 모양은 여기서 */
+.poc-split { display: flex; height: 140px; border: 1px solid #e2e8f0; }
+.poc-pane { padding: 10px; overflow: auto; background: #f8fafc; }
+.gutter { background: #cbd5e1; }
+.gutter.gutter-horizontal { cursor: col-resize; }
+
+/* 이벤트 기록 */
+.poc-log { height: 260px; overflow: auto; margin: 0; padding: 6px 6px 6px 48px; background: #0f172a; color: #e2e8f0;
+    font-family: Consolas, monospace; font-size: 12px; border-radius: 6px; }
+.poc-log li { white-space: pre-wrap; }

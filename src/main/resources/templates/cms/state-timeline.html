@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  설비 상태 타임라인 (cms-state) — MES P2 6단계 (docs/25 4.8). 공장·날짜(공장 현지 하루) → 설비마다 하루 막대(분류 색 + 글자 범례)
+  + 구간 표(시작·끝·분류·사유·지시) + 연결 로그(끊김·누락). 통신 끊김은 비가동이 아니라 UNKNOWN(회색). 조회만.
+-->
+<body data-table-menu="" class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">설비 상태 타임라인</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="cms-state-review" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <label><span th:text="#{cmsState.plant}">공장</span>
+        <select name="plantCd" id="plantSel" required data-help-key="cms-state.plant"></select></label>
+    <label><span th:text="#{cmsState.date}">날짜</span>
+        <input name="date" id="dateIn" type="date" data-help-key="cms-state.date"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-st-page">
+    <section class="hb-st-section" aria-labelledby="stBarsTitle">
+        <div class="hb-toolbar">
+            <h2 id="stBarsTitle" class="hb-st-title" th:text="#{cmsState.bars}">설비별 하루</h2>
+            <span id="dayInfo" class="hb-muted"></span>
+        </div>
+        <!--/* 지금(지난 날짜면 하루 끝) 상태별 설비 대수 — docs/40 D13 */-->
+        <div id="nowSum" class="hb-st-now" aria-live="polite" hidden></div>
+        <ul id="legend" class="hb-st-legend" th:aria-label="#{cmsState.legend}"></ul>
+        <div id="bars" class="hb-st-bars"></div>
+    </section>
+
+    <section class="hb-st-section" aria-labelledby="stIntTitle">
+        <div class="hb-toolbar">
+            <h2 id="stIntTitle" class="hb-st-title" th:text="#{cmsState.intervals}">상태 구간</h2>
+            <label class="hb-st-filter"><span th:text="#{cmsState.equip}">설비</span>
+                <select id="equipFilter"><option value="" th:text="#{common.all}">전체</option></select></label>
+            <span id="intCount" class="hb-muted"></span>
+        </div>
+        <div class="hb-replace-host hb-st-table-host">
+            <table class="hb-cmp-table" id="intervals">
+                <thead><tr>
+                    <th th:text="#{cmsState.col.equip}">설비</th>
+                    <th th:text="#{cmsState.col.state}">분류</th>
+                    <th th:text="#{cmsState.col.reason}">사유</th>
+                    <th th:text="#{cmsState.col.start}">시작</th>
+                    <th th:text="#{cmsState.col.end}">끝</th>
+                    <th class="hb-num" th:text="#{cmsState.col.minutes}">분</th>
+                    <th th:text="#{cmsState.col.wo}">작업지시</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="hb-st-section" aria-labelledby="stConnTitle">
+        <div class="hb-toolbar">
+            <h2 id="stConnTitle" class="hb-st-title" th:text="#{cmsState.conns}">연결 로그(끊김·누락)</h2>
+            <span id="connCount" class="hb-muted"></span>
+        </div>
+        <div class="hb-replace-host hb-st-table-host">
+            <table class="hb-cmp-table" id="conns">
+                <thead><tr>
+                    <th th:text="#{cmsState.col.at}">시각</th>
+                    <th th:text="#{cmsState.col.device}">수집 장치</th>
+                    <th th:text="#{cmsState.col.equip}">설비</th>
+                    <th th:text="#{cmsState.col.conn}">구분</th>
+                    <th th:text="#{cmsState.col.seq}">누락 seq</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/cms/cms-ui.js}"></script>
+<script th:src="@{/js/views/cms/state-timeline.js}"></script>
+</body>
+</html>

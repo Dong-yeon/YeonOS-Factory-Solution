@@ -1,0 +1,85 @@
+{
+  "F0": {"steps": [
+    ["mst-plant", "mst-class-prop", "mst-cust"],
+    ["mst-equip-hier", "mst-ext-system", "mst-proc", "mst-shift"],
+    ["mst-equip", "mst-item", "mst-qual", "mst-work-cal"],
+    ["mst-asset", "mst-bom", "mst-routing", "mst-char", "mst-defect", "mst-worker"],
+    ["mst-bom-tree", "mst-bom-where", "sys-terminal"],
+    ["mst-bom-replace"]
+  ]},
+  "F1": {"steps": [
+    ["sal-forecast"],
+    ["sal-order"],
+    ["prd-wo"],
+    ["aps-plan", "sys-terminal"],
+    ["prd-result", "prd-lot"],
+    ["prd-receipt", "prd-lot-report"],
+    ["wms-stock", "qms-insp", "prd-erp-export"],
+    ["wms-ship"]
+  ]},
+  "F2": {"steps": [
+    ["srm-supplier"],
+    ["srm-pr"],
+    ["srm-po"],
+    ["srm-po-print", "srm-notify"],
+    ["srm-ack"],
+    ["srm-po-status"],
+    ["srm-asn", "srm-asn-print"],
+    ["wms-rcv"],
+    ["qms-insp"],
+    ["wms-stock", "srm-eval-tmpl", "srm-eval"]
+  ]},
+  "F3": {"steps": [
+    ["qms-insp", "qms-setup", "qms-gauge-calib"],
+    ["qms-spc"],
+    ["qms-ncr"],
+    ["qms-contain", "srm-return"],
+    ["qms-capa", "prd-lot", "wms-rtn-issue", "srm-claim"]
+  ]},
+  "F4": {"steps": [
+    ["cms-fail-code", "cms-state-reason", "cms-chk-tmpl", "cms-counter", "cms-equip-profile", "cms-equip-sec", "cms-risk"],
+    ["cms-alarm-def", "cms-breakdown", "cms-state", "cms-pm-plan"],
+    ["cms-alarm", "cms-chk-run", "cms-spare"],
+    ["cms-mwo"],
+    ["cms-state-review", "cms-equip-count"],
+    ["cms-kpi"],
+    ["cms-equip-card"]
+  ]},
+  "F5": {"steps": [
+    ["mst-bom-where"],
+    ["plm-ecr", "mst-bom-replace"],
+    ["mst-bom", "mst-routing", "sys-approval"],
+    ["plm-eco"],
+    ["qms-change", "prd-lot"],
+    ["qms-setup"]
+  ]},
+  "F6": {"steps": [
+    ["pms-template", "apqp-ap"],
+    ["pms-project"],
+    ["pms-worklog", "apqp-fmea"],
+    ["apqp-cp"],
+    ["qms-insp-plan", "plm-eco"],
+    ["pms-deliverable"],
+    ["pms-gate"],
+    ["pms-issue", "pms-home"]
+  ]},
+  "F7": {"steps": [
+    ["wms-label"],
+    ["wms-loc"],
+    ["wms-stock", "wms-print-job"],
+    ["wms-move", "wms-count"],
+    ["wms-trx"],
+    ["wms-period"]
+  ]},
+  "F8": {"steps": [
+    ["sys-comp"],
+    ["sys-dept", "sys-user"],
+    ["sys-auth-group"],
+    ["sys-menu", "home-card-mgt"],
+    ["sys-policy", "sys-code", "sys-numbering"],
+    ["sys-notice", "home-main"],
+    ["sys-inbox", "sys-approval"],
+    ["sys-access-log", "sys-audit-log", "sys-feedback", "sys-integrity"],
+    ["sys-usage", "sys-support", "sys-my-info"]
+  ]}
+}

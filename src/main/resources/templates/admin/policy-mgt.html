@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  정책 (sys-policy) — 시스템관리 2단계 (docs/36 9.2). 고객 차이를 코드가 아니라 설정으로 흡수하는 값들.
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자(WEB). 도입 때 몇 개, 운영 중 드물게.
+  입력 = 정의에 따른 형식(예/아니오·선택·숫자 범위·글자). 공장 범위 정책은 공장 값이 회사 값보다 먼저.
+  예외 = 보안 정책(비밀번호·로그인·AI·첨부·자기 결재)은 관리자 그룹만 — 판정은 서버.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">정책</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <label><span th:text="#{sysPolicy.category}">분류</span>
+        <select name="category" id="catSel"><option value="" th:text="#{common.all}">전체</option></select></label>
+    <label><span th:text="#{sysPolicy.keyword}">키·설명</span>
+        <input name="keyword" id="keyword" maxlength="50"></label>
+    <label class="hb-check"><input type="checkbox" name="changedOnly" id="changedOnly">
+        <span th:text="#{sysPolicy.changedOnly}">바꾼 것만</span></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div id="policyGrid" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" id="resetBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{sysPolicy.reset}">기본값으로</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{sysPolicy.select}">왼쪽에서 정책을 고르세요.</p>
+        <dl class="hb-info" id="info"></dl>
+        <form id="policyForm" class="hb-form" autocomplete="off" hidden>
+            <label class="hb-wide"><span th:text="#{sysPolicy.scope}">범위</span>
+                <select data-field="plantCd" id="scopeSel" data-help-key="sys-policy.plantCd"></select></label>
+            <label class="hb-wide" id="valueBox"><span th:text="#{sysPolicy.col.value}">값</span></label>
+        </form>
+        <p id="scopeNote" class="hb-muted"></p>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/views/admin/policy-mgt.js}"></script>
+</body>
+</html>

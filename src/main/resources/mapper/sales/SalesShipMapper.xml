@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 출하 게이트 (docs/25 4.22, V123). 회사 조건은 RLS. 잠금 순서 = 머리(order_id 순, SalesMapper.lockOrder) → 행(line_id 순) -->
+<mapper namespace="io.smarthappy.module.sales.SalesShipMapper">
+
+    <sql id="cols">
+        l.line_id, l.order_id, o.order_no, l.line_no, l.qty, l.shipped_qty, l.status, l.done_by_ship_yn
+    </sql>
+
+    <select id="lineOrders" resultType="io.smarthappy.module.sales.SalesShipMapper$ShipLine" flushCache="true" useCache="false">
+        select <include refid="cols"/>
+          from sal_order_line l join sal_order o on o.order_id = l.order_id
+         where l.line_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="lockLines" resultType="io.smarthappy.module.sales.SalesShipMapper$ShipLine" flushCache="true" useCache="false">
+        select <include refid="cols"/>
+          from sal_order_line l join sal_order o on o.order_id = l.order_id
+         where l.line_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+         order by l.line_id
+           for update of l
+    </select>
+
+    <update id="updateShipped">
+        update sal_order_line
+           set shipped_qty = #{shipped}, status = #{status}, done_by_ship_yn = #{doneByShip},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where line_id = #{id}
+    </update>
+
+    <update id="reopenOrder">
+        update sal_order
+           set status = 'OPEN', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where order_id = #{id} and status = 'CLOSED'
+    </update>
+</mapper>

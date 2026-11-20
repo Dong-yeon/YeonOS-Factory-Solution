@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 담당자 일정변경 요청 (docs/32 4.13). 회사 범위는 RLS — 조건에 comp_cd 를 쓰지 않는다 -->
+<mapper namespace="io.smarthappy.module.pms.TaskChgMapper">
+
+    <select id="insertReq" resultType="long" flushCache="true">
+        insert into pms_task_chg_req (comp_cd, proj_id, task_id, requester_id, before_start, before_end, new_start, new_end, reason,
+                                      task_row_ver, status, created_by, updated_by)
+        values (hb_current_comp(), #{projId}, #{taskId}, #{requesterId}, #{beforeStart}, #{beforeEnd}, #{newStart}, #{newEnd},
+                #{reason}, #{taskRowVer}, #{status}, #{by}, #{by})
+        returning req_id
+    </select>
+
+    <update id="setAprId">
+        update pms_task_chg_req set apr_id = #{aprId} where req_id = #{id} and status = 'IN_APPROVAL' and apr_id is null
+    </update>
+
+    <sql id="reqCols">
+        r.req_id, r.proj_id, r.task_id, t.task_nm, r.requester_id, u.user_nm as requester_nm, r.before_start, r.before_end,
+        r.new_start, r.new_end, r.reason, r.task_row_ver, r.status, r.apr_id, a.status as apr_status,
+        a.requester_id as apr_requester_id, r.decided_at, r.decided_by, r.decide_note, r.row_ver, r.created_at
+    </sql>
+
+    <sql id="reqFrom">
+          from pms_task_chg_req r
+          join sys_user u on u.user_id = r.requester_id
+          left join pms_task t on t.task_id = r.task_id
+          left join apr_request a on a.apr_id = r.apr_id
+    </sql>
+
+    <select id="findReq" resultType="io.smarthappy.module.pms.TaskChgDtos$ChgRow">
+        select <include refid="reqCols"/>
+        <include refid="reqFrom"/>
+         where r.req_id = #{id}
+    </select>
+
+    <select id="lockReq" resultType="string" flushCache="true">
+        select status from pms_task_chg_req where req_id = #{id} for update
+    </select>
+
+    <select id="findOpenOfTask" resultType="io.smarthappy.module.pms.TaskChgDtos$ChgRow">
+        select <include refid="reqCols"/>
+        <include refid="reqFrom"/>
+         where r.task_id = #{taskId} and r.status in ('REQUESTED', 'IN_APPROVAL')
+    </select>
+
+    <select id="findReqsOfProject" resultType="io.smarthappy.module.pms.TaskChgDtos$ChgRow">
+        select <include refid="reqCols"/>
+        <include refid="reqFrom"/>
+         where r.proj_id = #{projId}
+         order by case when r.status in ('REQUESTED', 'IN_APPROVAL') then 0 else 1 end, r.created_at desc, r.req_id desc
+         limit #{limit}
+    </select>
+
+    <!-- 홈 카드 pms-chg-todo(docs/32 4.24) — 내가 PM 인 열린 프로젝트(작성·진행·보류)의 PM 처리 대기(REQUESTED) 요청, 내가 낸 것 제외.
+         결재 중(IN_APPROVAL)은 결재함 몫이라 세지 않는다 -->
+    <sql id="pmTodoWhere">
+          from pms_task_chg_req r
+          join pms_project p on p.proj_id = r.proj_id
+          join sys_user u on u.user_id = r.requester_id
+          left join pms_task t on t.task_id = r.task_id
+         where p.pm_user_id = #{userId} and p.status in ('DRAFT', 'ACTIVE', 'ON_HOLD')
+           and r.status = 'REQUESTED' and r.requester_id &lt;&gt; #{userId}
+    </sql>
+
+    <select id="countPmTodo" resultType="long">
+        select count(*) <include refid="pmTodoWhere"/>
+    </select>
+
+    <select id="findPmTodo" resultType="io.smarthappy.module.pms.TaskChgDtos$PmTodoRow">
+        select r.req_id, p.proj_no, t.task_nm, u.user_nm as requester_nm, r.new_start, r.new_end, r.created_at
+        <include refid="pmTodoWhere"/>
+         order by r.created_at, r.req_id
+         limit #{limit}
+    </select>
+
+    <update id="finish">
+        update pms_task_chg_req
+           set status = #{status}, decided_at = now(), decided_by = #{by}, decide_note = #{note},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where req_id = #{id} and status in ('REQUESTED', 'IN_APPROVAL')
+    </update>
+</mapper>

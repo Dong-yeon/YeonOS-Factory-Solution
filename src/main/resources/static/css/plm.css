@@ -1,0 +1,5 @@
+/* 설계 변경 지시 (plm-eco) — PLM 4단계 (docs/39 14장). 공통 page.css 는 건드리지 않는다 */
+
+/* 열이 많은 표(PPAP 요소·고객 통지·표시된 LOT)는 좁은 화면에서 상자 안에서만 가로 스크롤 */
+.plm-table-scroll { max-width: 100%; overflow-x: auto; }
+.plm-table-scroll .hb-cmp-table { min-width: 640px; }

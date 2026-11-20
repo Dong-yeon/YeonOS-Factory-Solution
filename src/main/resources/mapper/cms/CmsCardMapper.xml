@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- CMS C17 — 설비 이력 카드 (docs/33 13.5). 설비 한 대(대상 = 설비인 행만) × 기간 [from, to) — 공장 현지 날짜 경계 -->
+<mapper namespace="io.smarthappy.module.cms.CmsCardMapper">
+
+    <!-- 사용 중지 설비도 고른다(이력 보존) — 사용 중을 먼저 -->
+    <select id="findEquips" resultType="io.smarthappy.module.cms.CmsCardDtos$EquipOption">
+        select e.equip_id, e.equip_cd, e.equip_nm, e.plant_cd, e.use_yn
+          from mst_equip e
+         <where>
+            <if test="keyword != null">(e.equip_cd like #{keyword} escape '\' or e.equip_nm ilike #{keyword} escape '\')</if>
+            <if test="plantCd != null">and e.plant_cd = #{plantCd}</if>
+         </where>
+         order by e.use_yn desc, e.equip_cd
+         limit #{limit}
+    </select>
+
+    <select id="findEquip" resultType="io.smarthappy.module.cms.CmsCardDtos$EquipOption">
+        select e.equip_id, e.equip_cd, e.equip_nm, e.plant_cd, e.use_yn from mst_equip e where e.equip_cd = #{equipCd}
+    </select>
+
+    <!-- 작업지시 집계: 신고 시각 기준, 취소 제외. 정지 분 = 시작·끝 둘 다 있을 때만(내림) -->
+    <select id="mwoSum" resultType="io.smarthappy.module.cms.CmsCardDtos$MwoSum">
+        select count(*) as total,
+               count(*) filter (where m.mwo_type = 'BM') as bm,
+               count(*) filter (where m.mwo_type = 'CM') as cm,
+               count(*) filter (where m.mwo_type = 'PM') as pm,
+               count(*) filter (where m.status in ('REQ', 'OPEN', 'WIP')) as open,
+               coalesce(sum(floor(extract(epoch from (m.down_end_at - m.down_start_at)) / 60))
+                        filter (where m.down_start_at is not null and m.down_end_at is not null), 0)::bigint as down_min
+          from cms_mwo m
+         where m.equip_id = #{equipId} and m.status &lt;&gt; 'CANCELLED'
+           and m.reported_at &gt;= #{from} and m.reported_at &lt; #{to}
+    </select>
+
+    <!-- 점검 실행 집계: 예정일 기준(공장 현지 날짜 [fromDate, toDate]). 지연 = 열림 + 예정일 &lt; 오늘 -->
+    <select id="chkSum" resultType="io.smarthappy.module.cms.CmsCardDtos$ChkSum">
+        select count(*) as total,
+               count(*) filter (where r.status = 'DONE' and r.result = 'OK') as ok,
+               count(*) filter (where r.status = 'DONE' and r.result = 'NG') as ng,
+               count(*) filter (where r.status = 'SKIPPED') as skipped,
+               count(*) filter (where r.status = 'OPEN') as open,
+               count(*) filter (where r.status = 'OPEN' and r.due_date &lt; #{today}) as overdue
+          from cms_chk_run r
+         where r.equip_id = #{equipId} and r.due_date &gt;= #{fromDate} and r.due_date &lt;= #{toDate}
+    </select>
+
+    <!-- 사용 예비품: 사용일 = 작업지시 완료 시각(완료 전은 기록 시각), 취소 작업지시 제외 — 예비품 사용 이력(CmsSpareMapper.findUsage)과 같은 식(docs/33 16.1) -->
+    <select id="partSum" resultType="io.smarthappy.module.cms.CmsCardDtos$PartSum">
+        select count(*) as lines, count(distinct p.item_id) as items
+          from cms_mwo_part p join cms_mwo m on m.mwo_id = p.mwo_id
+         where m.equip_id = #{equipId} and m.status &lt;&gt; 'CANCELLED'
+           and coalesce(m.finished_at, p.created_at) &gt;= #{from} and coalesce(m.finished_at, p.created_at) &lt; #{to}
+    </select>
+
+    <select id="resetCount" resultType="long">
+        select count(*) from cms_counter_reading r join cms_counter c on c.counter_id = r.counter_id
+         where c.equip_id = #{equipId} and r.reset_yn = 'Y' and r.void_yn = 'N'
+           and r.read_at &gt;= #{from} and r.read_at &lt; #{to}
+    </select>
+
+    <!-- 카운터: 설비 것 + 지금 이 설비에 설치된 금형·지그 것(사용 중만) -->
+    <select id="findCounters" resultType="io.smarthappy.module.cms.CmsCounterDtos$CounterRow">
+        select <include refid="io.smarthappy.module.cms.CmsCounterMapper.counterCols"/>
+        <include refid="io.smarthappy.module.cms.CmsCounterMapper.counterFrom"/>
+         where c.use_yn = 'Y'
+           and (c.equip_id = #{equipId}
+                or c.asset_id in (select i.asset_id from mst_asset_install i
+                                   where i.equip_id = #{equipId} and i.removed_at is null and i.void_yn = 'N'))
+         order by c.target_type desc, c.counter_cd
+    </select>
+
+    <!-- 이력 한 표(종류 조건이면 그 가지만 — 가지마다 열 이름을 붙인다): 작업지시(신고 시각) · 점검 실행(실시 시각, 없으면 예정일 0시 — 기간은 예정일) · 사용 예비품(사용일 = 작업지시 완료, 완료 전은 기록 시각) · 카운터 리셋(읽은 시각) -->
+    <sql id="histFrom">
+        from (
+            <if test="kind == null or kind == 'MWO'">
+            select 'MWO' as kind, m.mwo_id as src_id, m.reported_at as at, m.mwo_no as ref_no, m.title, m.status, m.mwo_type as sub_type,
+                   null::varchar as result, null::numeric as qty, null::varchar as unit,
+                   case when m.down_start_at is not null and m.down_end_at is not null
+                        then floor(extract(epoch from (m.down_end_at - m.down_start_at)) / 60)::int end as down_min,
+                   u.user_nm as by_nm, m.mwo_id
+              from cms_mwo m left join sys_user u on u.user_id = m.requested_by
+             where m.equip_id = #{equipId} and m.reported_at &gt;= #{from} and m.reported_at &lt; #{to}
+            </if>
+            <if test="kind == null">union all</if>
+            <if test="kind == null or kind == 'CHK'">
+            select 'CHK' as kind, r.run_id as src_id, coalesce(r.performed_at, r.due_date::timestamp at time zone #{zone}) as at, p.plan_cd as ref_no,
+                   t.tmpl_nm as title, r.status, null::varchar as sub_type, r.result, null::numeric as qty, null::varchar as unit, null::int as down_min,
+                   u.user_nm as by_nm, r.mwo_id
+              from cms_chk_run r
+              join cms_pm_plan p on p.plan_id = r.plan_id
+              join cms_chk_tmpl t on t.tmpl_id = r.tmpl_id
+              left join sys_user u on u.user_id = r.performed_by
+             where r.equip_id = #{equipId} and r.due_date &gt;= #{fromDate} and r.due_date &lt;= #{toDate}
+            </if>
+            <if test="kind == null">union all</if>
+            <if test="kind == null or kind == 'PART'">
+            select 'PART' as kind, p.part_id as src_id, coalesce(m.finished_at, p.created_at) as at, m.mwo_no as ref_no, i.item_cd || ' · ' || i.item_nm as title,
+                   null::varchar as status, null::varchar as sub_type, null::varchar as result, p.qty, p.unit_cd as unit, null::int as down_min,
+                   coalesce(u.user_nm, p.created_by) as by_nm, m.mwo_id
+              from cms_mwo_part p
+              join cms_mwo m on m.mwo_id = p.mwo_id
+              join mst_item i on i.item_id = p.item_id
+              left join sys_user u on u.login_id = p.created_by
+             where m.equip_id = #{equipId} and m.status &lt;&gt; 'CANCELLED'
+               and coalesce(m.finished_at, p.created_at) &gt;= #{from} and coalesce(m.finished_at, p.created_at) &lt; #{to}
+            </if>
+            <if test="kind == null">union all</if>
+            <if test="kind == null or kind == 'RESET'">
+            select 'RESET' as kind, r.reading_id as src_id, r.read_at as at, c.counter_cd as ref_no, c.counter_nm as title,
+                   null::varchar as status, null::varchar as sub_type, null::varchar as result, r.gauge_value as qty, c.unit_nm as unit, null::int as down_min,
+                   coalesce(u.user_nm, r.recorded_by) as by_nm, null::bigint as mwo_id
+              from cms_counter_reading r join cms_counter c on c.counter_id = r.counter_id
+              left join sys_user u on u.login_id = r.recorded_by
+             where c.equip_id = #{equipId} and r.reset_yn = 'Y' and r.void_yn = 'N'
+               and r.read_at &gt;= #{from} and r.read_at &lt; #{to}
+            </if>
+        ) h
+    </sql>
+
+    <select id="findHistPage" resultType="io.smarthappy.module.cms.CmsCardDtos$HistRow">
+        select h.* <include refid="histFrom"/>
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'KIND'">h.kind</when>
+                <when test="s.key == 'REF_NO'">h.ref_no</when>
+                <otherwise>h.at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if> nulls last,
+         </foreach>
+         h.kind, h.src_id desc
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="countHist" resultType="long">
+        select count(*) <include refid="histFrom"/>
+    </select>
+</mapper>

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  클래스 속성 (mst-class-prop) — P1 7b (docs/22 5b, docs/02 6.3). 왼쪽 = 클래스(품목 클래스는 여기서 추가, 설비 클래스는 설비 관리),
+  오른쪽 = 고른 클래스의 속성 정의. 값은 품목관리·설비 관리 상세의 "클래스 속성" 칸에서 넣는다(대상 테이블 attrs jsonb).
+  직접 치는 값 = 클래스 코드·이름, 속성 코드·이름·형식·단위·자릿수·선택지·필수. 형식·코드는 만든 뒤 고정(저장된 값의 뜻이 바뀜).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">클래스 속성</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" autocomplete="off">
+    <fieldset class="hb-seg">
+        <legend th:text="#{classProp.classType}">클래스 유형</legend>
+        <label><input type="radio" name="classType" value="ITEM" checked><span th:text="#{code.CLASS_TYPE.ITEM}">품목 클래스</span></label>
+        <label><input type="radio" name="classType" value="EQUIP"><span th:text="#{code.CLASS_TYPE.EQUIP}">설비 클래스</span></label>
+    </fieldset>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div id="classGrid" class="hb-grid-host"></div>
+        <form id="classForm" class="hb-form hb-class-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+            <label><span th:text="#{classProp.col.classCd}">클래스 코드</span>
+                <input data-field="classCd" maxlength="30" data-help-key="mst-class-prop.classCd"></label>
+            <label><span th:text="#{classProp.col.classNm}">클래스명</span>
+                <input data-field="classNm" maxlength="100"></label>
+            <label><span th:text="#{classProp.col.useYn}">사용</span>
+                <select data-field="useYn"><option value="Y" th:text="#{yn.Y}">사용</option><option value="N" th:text="#{yn.N}">미사용</option></select></label>
+            <div class="hb-toolbar">
+                <button type="button" id="newClassBtn" class="hb-btn-secondary" th:text="#{classProp.newClass}">새 품목 클래스</button>
+                <button type="button" id="saveClassBtn" th:text="#{classProp.saveClass}">클래스 저장</button>
+            </div>
+        </form>
+        <p id="equipHint" class="hb-muted" hidden th:text="#{classProp.equipHint}">설비 클래스는 설비 관리 화면의 "클래스 관리"에서 추가합니다.</p>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{classProp.newProp}">새 속성</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{classProp.selectClass}">왼쪽에서 클래스를 고르세요.</p>
+        <section id="propBox" hidden>
+            <table class="hb-cmp-table hb-plant-table" id="props">
+                <thead><tr>
+                    <th th:text="#{classProp.col.propCd}">속성 코드</th>
+                    <th th:text="#{classProp.col.propNm}">속성명</th>
+                    <th th:text="#{classProp.col.dataType}">형식</th>
+                    <th th:text="#{classProp.col.requiredYn}">필수</th>
+                    <th th:text="#{classProp.col.useYn}">사용</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <form id="propForm" class="hb-form" autocomplete="off">
+                <label><span th:text="#{classProp.col.propCd}">속성 코드</span>
+                    <input data-field="propCd" maxlength="30" data-help-key="mst-class-prop.propCd"></label>
+                <label class="hb-wide-2"><span th:text="#{classProp.col.propNm}">속성명</span>
+                    <input data-field="propNm" maxlength="100"></label>
+                <label><span th:text="#{classProp.col.dataType}">형식</span>
+                    <select data-field="dataType" data-hb="select" data-code="PROP_DATA_TYPE" data-help-key="mst-class-prop.dataType"></select></label>
+                <label><span th:text="#{classProp.col.unitNm}">단위</span>
+                    <input data-field="unitNm" maxlength="20"></label>
+                <label class="hb-prop-num"><span th:text="#{classProp.col.scale}">소수 자릿수</span>
+                    <input data-field="scale" data-hb="number" data-scale="0" data-min="0" data-max="6" data-pad="false"></label>
+                <label class="hb-wide hb-prop-list"><span th:text="#{classProp.col.options}">선택지(한 줄에 하나)</span>
+                    <textarea data-field="options" rows="4"></textarea></label>
+                <label><span th:text="#{classProp.col.requiredYn}">필수</span>
+                    <select data-field="requiredYn"><option value="N" th:text="#{yn.N}">아니오</option><option value="Y" th:text="#{yn.Y}">예</option></select></label>
+                <label><span th:text="#{classProp.col.sortNo}">순서</span>
+                    <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+                <label><span th:text="#{classProp.col.useYn}">사용</span>
+                    <select data-field="useYn"><option value="Y" th:text="#{yn.Y}">사용</option><option value="N" th:text="#{yn.N}">미사용</option></select></label>
+                <label class="hb-wide"><span th:text="#{classProp.col.semanticId}">semantic ID (AAS, 선택)</span>
+                    <input data-field="semanticId" maxlength="200" data-help-key="mst-class-prop.semanticId"></label>
+            </form>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/master/class-prop-mgt.js}"></script>
+</body>
+</html>

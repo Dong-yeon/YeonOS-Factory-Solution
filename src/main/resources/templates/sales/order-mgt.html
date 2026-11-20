@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  수주 관리 (sal-order) — P2 2단계 (docs/25 4.3). 수주 머리(거래처·고객 발주 번호·수주일) + 행(품목·수량·납기).
+  행은 지우지 않고 마감·취소(사유)로 끝낸다. 끝난 행은 바꿀 수 없다. 머리 상태는 행에서 계산된다.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">수주 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{salOrder.period}" data-from-name="from" data-to-name="to"
+         data-presets="thisMonth,lastMonth,last30" data-default="last30" data-max-days="366" data-required="false"></div>
+    <div id="duePeriod" data-hb="dateRange" th:data-label="#{salOrder.duePeriod}" data-from-name="dueFrom" data-to-name="dueTo"
+         data-presets="today,thisWeek,thisMonth" data-max-days="366" data-required="false"></div>
+    <label><span th:text="#{salOrder.col.cust}">거래처</span><select name="custCd" id="custSel"></select></label>
+    <fieldset class="hb-seg">
+        <legend th:text="#{salOrder.col.status}">상태</legend>
+        <label><input type="radio" name="status" value=""><span th:text="#{common.all}">전체</span></label>
+        <label><input type="radio" name="status" value="OPEN" checked><span th:text="#{code.SAL_ORDER_STATUS.OPEN}">진행</span></label>
+        <label><input type="radio" name="status" value="CLOSED"><span th:text="#{code.SAL_ORDER_STATUS.CLOSED}">완료</span></label>
+        <label><input type="radio" name="status" value="CANCELLED"><span th:text="#{code.SAL_ORDER_STATUS.CANCELLED}">취소</span></label>
+    </fieldset>
+    <label><span th:text="#{salOrder.keyword}">수주·발주 번호</span><input name="keyword" maxlength="50"></label>
+    <label><span th:text="#{salOrder.col.itemCd}">품목 코드</span><input name="itemCd" maxlength="40"></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtnList" class="hb-btn-secondary hb-drawer-only" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="importBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{import.button}">엑셀 올리기</button>
+            <span id="listInfo" class="hb-muted"></span>
+        </div>
+        <div id="orderGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="newBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.new}">신규</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 되돌리기 어려운 동작은 저장 줄에서 떼어 외곽선 위험 톤(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}" hidden>
+            <button type="button" id="cancelOrderBtn" class="hb-btn-danger-outline" hidden th:text="#{salOrder.cancelOrder}">수주 취소</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{salOrder.selectOrNew}">왼쪽에서 수주를 고르거나 신규를 누르세요.</p>
+        <form id="orderForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{salOrder.col.cust}">거래처</span>
+                <select data-field="custCd" id="formCust" data-help-key="sal-order.cust"></select></label>
+            <label><span th:text="#{salOrder.col.custPoNo}">고객 발주 번호</span>
+                <input data-field="custPoNo" maxlength="50" data-help-key="sal-order.custPoNo"></label>
+            <label><span th:text="#{salOrder.col.orderDate}">수주일</span>
+                <input data-field="orderDate" type="date" min="2000-01-01" max="2999-12-31"></label>
+            <label><span th:text="#{salOrder.col.status}">상태</span>
+                <output id="orderStatus" class="hb-output"></output></label>
+            <label class="hb-wide"><span th:text="#{salOrder.col.remark}">비고</span>
+                <input data-field="remark" maxlength="1000"></label>
+        </form>
+        <section class="hb-sub">
+            <h2 th:text="#{salOrder.lines}">수주 행</h2>
+            <p id="linesHint" class="hb-muted" th:text="#{salOrder.linesHint}">새 수주는 행을 하나 이상 넣고 저장합니다.</p>
+            <table class="hb-cmp-table" id="lines">
+                <thead><tr>
+                    <th th:text="#{salOrder.col.lineNo}">행</th>
+                    <th th:text="#{salOrder.col.item}">품목</th>
+                    <th class="hb-num" th:text="#{salOrder.col.qty}">수량</th>
+                    <th class="hb-num" th:text="#{salOrder.col.shippedQty}">출하 수량</th>
+                    <th th:text="#{salOrder.col.dueDate}">납기</th>
+                    <th th:text="#{salOrder.col.lineStatus}">상태</th>
+                    <th></th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <form id="lineForm" class="hb-form" autocomplete="off" th:if="${actions.contains('SAVE')}">
+                <p id="lineMode" class="hb-muted hb-wide"></p>
+                <label><span th:text="#{salOrder.col.itemCd}">품목 코드</span>
+                    <input data-field="itemCd" maxlength="40" list="itemList" data-help-key="sal-order.itemCd">
+                    <datalist id="itemList"></datalist></label>
+                <label><span th:text="#{salOrder.col.qty}">수량</span>
+                    <input data-field="qty" inputmode="decimal" maxlength="30" data-help-key="sal-order.qty"></label>
+                <label><span th:text="#{salOrder.col.dueDate}">납기</span>
+                    <input data-field="dueDate" type="date" min="2000-01-01" max="2999-12-31"></label>
+                <label><span th:text="#{salOrder.col.lineNo}">행</span>
+                    <input data-field="lineNo" inputmode="numeric" maxlength="5" data-help-key="sal-order.lineNo"></label>
+                <label class="hb-wide"><span th:text="#{salOrder.col.remark}">비고</span>
+                    <input data-field="remark" maxlength="1000"></label>
+                <div class="hb-toolbar hb-wide">
+                    <button type="button" id="lineSaveBtn" class="hb-btn-secondary" th:text="#{salOrder.addLine}">행 추가</button>
+                    <button type="button" id="lineResetBtn" class="hb-btn-ghost" th:text="#{salOrder.lineReset}">새 행으로</button>
+                </div>
+            </form>
+        </section>
+    </aside>
+</div>
+
+<!-- 납기 답변(APS CTP 계약 POST /api/aps/ctp, docs/38 15.4) — 읽기 전용, 저장 없음. 버튼은 APS 생산 계획 화면을 볼 수 있을 때만(판정은 APS API) -->
+<dialog id="ctpDialog" class="hb-dialog" aria-labelledby="ctpTitle">
+    <h2 id="ctpTitle" th:text="#{salOrder.ctp.title}">납기 답변</h2>
+    <div class="hb-dialog-body">
+        <form id="ctpForm" class="hb-form" autocomplete="off">
+            <label><span th:text="#{salOrder.ctp.plant}">생산 공장</span><select data-field="plantCd" id="ctpPlant"></select></label>
+            <label><span th:text="#{salOrder.col.item}">품목</span><output id="ctpItem" class="hb-output"></output></label>
+            <label><span th:text="#{salOrder.col.qty}">수량</span><output id="ctpQty" class="hb-output"></output></label>
+            <label><span th:text="#{salOrder.col.dueDate}">납기</span><output id="ctpDue" class="hb-output"></output></label>
+        </form>
+        <p class="hb-muted" th:text="#{salOrder.ctp.note}">지금 생산 지시 뒤에 넣었을 때의 계산입니다. 저장하지 않으며 지시가 바뀌면 답도 바뀝니다.</p>
+        <div id="ctpResult" hidden>
+            <p id="ctpAnswer" role="status"></p>
+            <table class="hb-cmp-table" id="ctpOps">
+                <thead><tr>
+                    <th th:text="#{salOrder.ctp.op}">공정</th>
+                    <th th:text="#{salOrder.ctp.res}">자원</th>
+                    <th th:text="#{salOrder.ctp.start}">시작</th>
+                    <th th:text="#{salOrder.ctp.end}">끝</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+            <table class="hb-cmp-table" id="ctpMats">
+                <thead><tr>
+                    <th th:text="#{salOrder.col.item}">품목</th>
+                    <th class="hb-num" th:text="#{salOrder.ctp.short}">부족</th>
+                    <th th:text="#{salOrder.ctp.coveredAt}">충족 시각</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="hb-dialog-bar">
+        <button type="button" id="ctpClose" class="hb-btn-secondary" th:text="#{common.close}">닫기</button>
+        <button type="button" id="ctpRun" th:text="#{salOrder.ctp.run}">답 받기</button>
+    </div>
+</dialog>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.import.js}"></script>
+<script th:src="@{/js/views/mes/mes-ui.js}"></script>
+<script th:src="@{/js/views/sales/order-mgt.js}"></script>
+</body>
+</html>

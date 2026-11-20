@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  출하 전 검수 (qms-preship) — docs/78. 출하 목록(검수 필요·검수 상태) + 상세(시작·항목 판정·사진·완료).
+  주 사용자: 품질 검수자(사무 PC·태블릿), 고객 입회 때는 입회자 이름을 남긴다.
+  직접 치는 값 = 판정·비고·검수자·입회자 이름(서버가 모르는 값). 판정 시각·판정자는 서버.
+  예외 흐름: NG → 미결(검수 미결 화면에서 조치·재확인), 출하 줄이 바뀌면 [검수 취소] 뒤 다시 시작.
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<link rel="stylesheet" th:href="@{/css/qms.css}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">출하 전 검수</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="qms-preship-punch" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" autocomplete="off">
+    <div data-hb="dateRange" th:data-label="#{qms.preship.planDate}" data-from-name="from" data-to-name="to"
+         data-presets="today,thisWeek,thisMonth,last30" data-max-days="186"></div>
+    <label><span th:text="#{qms.preship.shipKeyword}">출하·고객·검수 번호</span>
+        <input name="keyword" maxlength="100" data-help-key="qms-preship.keyword"></label>
+    <fieldset class="hb-seg" data-help-key="qms-preship.inspStatus">
+        <legend th:text="#{qms.preship.col.inspStatus}">검수 상태</legend>
+        <label><input type="radio" name="inspStatus" value="" checked><span th:text="#{qms.preship.all}">전체</span></label>
+        <label><input type="radio" name="inspStatus" value="NONE"><span th:text="#{qms.preship.inspStatus.NONE}">검수 없음</span></label>
+        <label><input type="radio" name="inspStatus" value="OPEN"><span th:text="#{qms.preship.inspStatus.OPEN}">검수 중</span></label>
+        <label><input type="radio" name="inspStatus" value="DONE"><span th:text="#{qms.preship.inspStatus.DONE}">완료</span></label>
+    </fieldset>
+    <label class="hb-check"><input type="checkbox" name="onlyRequired" value="true" checked>
+        <span th:text="#{qms.preship.onlyRequired}">검수 필요 출하만</span></label>
+    <div class="hb-sp-actions">
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div id="shipGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="startBtn" th:if="${actions.contains('SAVE')}" th:text="#{qms.preship.start}" hidden>검수 시작</button>
+            <button type="button" id="saveHeadBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{common.save}" hidden>저장</button>
+            <button type="button" id="completeBtn" th:if="${actions.contains('APPROVE')}" th:text="#{qms.preship.complete}" hidden>검수 완료</button>
+            <button type="button" id="reopenBtn" class="hb-btn-secondary" th:if="${actions.contains('APPROVE')}" th:text="#{qms.preship.reopen}" hidden>완료 취소</button>
+            <button type="button" id="cancelBtn" class="hb-btn-ghost" th:if="${actions.contains('SAVE')}" th:text="#{qms.preship.cancel}" hidden>검수 취소</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="shipInfo" class="hb-muted" th:text="#{qms.preship.selectShip}">왼쪽에서 출하를 고르세요.</p>
+        <p id="requiredInfo" class="hb-muted"></p>
+        <form id="headForm" class="hb-form" autocomplete="off" hidden>
+            <label><span th:text="#{qms.preship.col.inspNo}">검수 번호</span>
+                <output data-field="inspNo"></output></label>
+            <label><span th:text="#{qms.preship.col.inspStatus}">검수 상태</span>
+                <output data-field="status"></output></label>
+            <label><span th:text="#{qms.preship.inspector}">검수자</span>
+                <input data-field="inspectorNm" maxlength="100" data-help-key="qms-preship.inspectorNm"></label>
+            <label><span th:text="#{qms.preship.witness}">고객 입회자</span>
+                <input data-field="witnessNm" maxlength="100" data-help-key="qms-preship.witnessNm"></label>
+            <label class="hb-wide"><span th:text="#{qms.preship.col.remark}">비고</span>
+                <input data-field="remark" maxlength="500"></label>
+            <p class="hb-muted hb-wide" data-field="results"></p>
+        </form>
+        <div id="results"></div>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/qms/preship-insp.js}"></script>
+</body>
+</html>

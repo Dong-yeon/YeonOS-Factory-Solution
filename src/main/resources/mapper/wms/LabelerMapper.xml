@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 오토라벨러 (docs/65 21장) — 라벨러·사전 등록 박스·박스 단위 원장·장비 단위 원장 -->
+<mapper namespace="io.smarthappy.module.wms.labeler.LabelerMapper">
+
+    <!-- ================================================================ 라벨러 -->
+    <sql id="labelerCols">
+        l.labeler_id, l.plant_cd, l.labeler_cd, l.labeler_nm, l.terminal_id, t.terminal_cd, t.last_seen_at as terminal_seen_at,
+        l.conn_mode, l.tpl_id, p.tpl_cd, l.deadline_ms, l.use_yn, l.remark, l.row_ver, l.updated_at
+    </sql>
+    <sql id="labelerFrom">
+        from wms_labeler l
+        join sys_terminal t on t.terminal_id = l.terminal_id
+        join wms_label_tpl p on p.tpl_id = l.tpl_id
+    </sql>
+
+    <select id="findLabelers" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$LabelerRow">
+        select <include refid="labelerCols"/> <include refid="labelerFrom"/>
+        <where><if test="plantCd != null">l.plant_cd = #{plantCd}</if></where>
+        order by l.plant_cd, l.labeler_cd
+    </select>
+
+    <select id="findLabeler" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$LabelerRow" flushCache="true" useCache="false">
+        select <include refid="labelerCols"/> <include refid="labelerFrom"/> where l.labeler_id = #{id}
+    </select>
+
+    <!-- 장치 키 → 라벨러(사용 중, 장치가 폐기되지 않음) -->
+    <select id="findByTerminal" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$LabelerRow" flushCache="true" useCache="false">
+        select <include refid="labelerCols"/> <include refid="labelerFrom"/>
+         where l.terminal_id = #{terminalId} and l.use_yn = 'Y' and t.revoked_at is null
+    </select>
+
+    <select id="insertLabeler" resultType="long" flushCache="true">
+        insert into wms_labeler (comp_cd, plant_cd, labeler_cd, labeler_nm, terminal_id, conn_mode, tpl_id, deadline_ms, use_yn, remark,
+                                 created_by, updated_by)
+        values (hb_current_comp(), #{f.plantCd}, #{f.labelerCd}, #{f.labelerNm}, #{f.terminalId}, #{f.connMode}, #{f.tplId}, #{f.deadlineMs},
+                #{f.useYn}, #{f.remark}, #{by}, #{by})
+        returning labeler_id
+    </select>
+
+    <update id="updateLabeler">
+        update wms_labeler
+           set labeler_nm = #{f.labelerNm}, terminal_id = #{f.terminalId}, conn_mode = #{f.connMode}, tpl_id = #{f.tplId},
+               deadline_ms = #{f.deadlineMs}, use_yn = #{f.useYn}, remark = #{f.remark},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where labeler_id = #{id} and row_ver = #{f.rowVer}
+    </update>
+
+    <!-- ================================================================ 박스 -->
+    <sql id="boxCols">
+        b.box_id, b.plant_cd, b.box_cd, b.item_id, i.item_cd, i.item_nm, i.unit_cd, b.qty, b.lot_no, b.ref_no, b.label_skip_yn, b.sscc,
+        b.status, b.attempt_cnt, b.last_reason_cd, b.prefetched_by, b.prefetched_at, b.done_at, b.row_ver, b.created_at, b.updated_at
+    </sql>
+
+    <sql id="boxWhere">
+          from wms_labeler_box b
+          join mst_item i on i.item_id = b.item_id
+         where b.created_at &gt;= #{q.fromAt} and b.created_at &lt; #{q.toAt}
+        <if test="q.plantCd != null">and b.plant_cd = #{q.plantCd}</if>
+        <if test="q.status != null">and b.status = #{q.status}</if>
+        <if test="q.boxLike != null">and (b.box_cd ilike #{q.boxLike} escape '\' or b.sscc like #{q.boxLike} escape '\'
+                                          or b.ref_no ilike #{q.boxLike} escape '\')</if>
+    </sql>
+
+    <select id="findBoxPage" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$BoxRow">
+        select <include refid="boxCols"/> <include refid="boxWhere"/>
+         order by
+        <foreach collection="q.page.sorts" item="o">
+            <choose>
+                <when test="o.key == 'BOX_CD'">b.box_cd</when>
+                <when test="o.key == 'STATUS'">b.status</when>
+                <otherwise>b.created_at</otherwise>
+            </choose>
+            <if test="o.desc"> desc</if>,
+        </foreach>
+        b.box_id desc
+         limit #{q.page.size} offset #{q.page.offset}
+    </select>
+
+    <select id="countBoxes" resultType="long">select count(*) <include refid="boxWhere"/></select>
+
+    <select id="findBox" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$BoxRow" flushCache="true" useCache="false">
+        select <include refid="boxCols"/> from wms_labeler_box b join mst_item i on i.item_id = b.item_id where b.box_id = #{id}
+    </select>
+
+    <select id="lockByCode" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$BoxRow" flushCache="true" useCache="false">
+        select <include refid="boxCols"/>
+          from wms_labeler_box b join mst_item i on i.item_id = b.item_id
+         where b.plant_cd = #{plantCd} and b.box_cd = #{boxCd}
+         order by case when b.status in ('VERIFIED', 'SKIPPED') then 1 else 0 end, b.box_id desc
+         limit 1
+           for update of b
+    </select>
+
+    <select id="lockBox" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$BoxRow" flushCache="true" useCache="false">
+        select <include refid="boxCols"/> from wms_labeler_box b join mst_item i on i.item_id = b.item_id where b.box_id = #{id}
+           for update of b
+    </select>
+
+    <select id="itemIdByCd" resultType="java.lang.Long">
+        select item_id from mst_item where item_cd = #{itemCd} and use_yn = 'Y'
+    </select>
+
+    <select id="insertBox" resultType="long" flushCache="true">
+        insert into wms_labeler_box (comp_cd, plant_cd, box_cd, item_id, qty, lot_no, ref_no, label_skip_yn, created_by, updated_by)
+        values (hb_current_comp(), #{plantCd}, #{f.boxCd}, #{itemId}, #{f.qty}, #{f.lotNo}, #{f.refNo}, #{f.labelSkipYn}, #{by}, #{by})
+        returning box_id
+    </select>
+
+    <update id="updateBoxInfo">
+        update wms_labeler_box
+           set qty = #{f.qty}, lot_no = #{f.lotNo}, ref_no = #{f.refNo}, label_skip_yn = #{f.labelSkipYn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where box_id = #{id} and row_ver = #{f.rowVer} and status = 'REGISTERED'
+    </update>
+
+    <!-- 상태 바꾸기 — 전이·SSCC 고정은 트리거가 다시 본다 -->
+    <update id="setBoxState">
+        update wms_labeler_box
+           set status = #{status}, sscc = #{sscc}, last_reason_cd = #{reasonCd}, attempt_cnt = attempt_cnt + #{attemptAdd},
+               prefetched_by = #{prefetchedBy},
+               prefetched_at = case when #{prefetchedBy}::bigint is null then null else coalesce(prefetched_at, now()) end,
+               done_at = case when #{done} then now() else done_at end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where box_id = #{id}
+    </update>
+
+    <select id="lockForPrefetch" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$BoxRow" flushCache="true" useCache="false">
+        select <include refid="boxCols"/>
+          from wms_labeler_box b join mst_item i on i.item_id = b.item_id
+         where b.plant_cd = #{plantCd} and b.status = 'REGISTERED' and b.label_skip_yn = 'N'
+         order by b.box_id
+         limit #{max}
+           for update of b skip locked
+    </select>
+
+    <select id="lockPrefetchedOlder" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$BoxRow" flushCache="true" useCache="false">
+        select <include refid="boxCols"/>
+          from wms_labeler_box b join mst_item i on i.item_id = b.item_id
+         where b.status = 'PREFETCHED' and b.prefetched_at &lt; now() - make_interval(hours => #{hours})
+         order by b.box_id
+         limit 500
+           for update of b skip locked
+    </select>
+
+    <!-- ================================================================ 원장 -->
+    <insert id="insertEvent">
+        insert into wms_labeler_event (comp_cd, labeler_id, box_id, request_id, event_cd, action_cd, reason_cd, sscc, scanned, elapsed_ms,
+                                       answer, detail, src, occurred_at, entry_method, recorded_by)
+        values (hb_current_comp(), #{labelerId}, #{boxId}, #{requestId}, #{eventCd}, #{actionCd}, #{reasonCd}, #{sscc}, #{scanned},
+                #{elapsedMs}, #{answer}::jsonb, #{detail}, #{src}, #{occurredAt}, #{method}, #{by})
+    </insert>
+
+    <select id="answerOf" resultType="string" flushCache="true" useCache="false">
+        select answer::text from wms_labeler_event
+         where labeler_id = #{labelerId} and request_id = #{requestId} and event_cd = 'REQUEST'
+    </select>
+
+    <select id="requestBox" resultType="java.lang.Long" flushCache="true" useCache="false">
+        select coalesce(box_id, 0) from wms_labeler_event
+         where labeler_id = #{labelerId} and request_id = #{requestId} and event_cd = 'REQUEST'
+    </select>
+
+    <select id="phaseExists" resultType="boolean" flushCache="true" useCache="false">
+        select exists (select 1 from wms_labeler_event
+                        where labeler_id = #{labelerId} and request_id = #{requestId} and event_cd = #{eventCd})
+    </select>
+
+    <select id="lastRequestOf" resultType="string" flushCache="true" useCache="false">
+        select request_id from wms_labeler_event where box_id = #{boxId} and event_cd = 'REQUEST' order by event_id desc limit 1
+    </select>
+
+    <select id="eventsOfBox" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$EventRow" flushCache="true" useCache="false">
+        select e.event_id, e.labeler_id, l.labeler_cd, e.box_id, e.request_id, e.event_cd, e.action_cd, e.reason_cd, e.sscc, e.scanned,
+               e.elapsed_ms, e.detail, e.src, e.occurred_at, e.recorded_by
+          from wms_labeler_event e
+          left join wms_labeler l on l.labeler_id = e.labeler_id
+         where e.box_id = #{boxId}
+         order by e.event_id
+         limit 500
+    </select>
+
+    <select id="insertDevLog" resultType="long" flushCache="true">
+        insert into wms_labeler_dev_log (comp_cd, labeler_id, event_cd, code, detail, reply_cd, occurred_at, recorded_by)
+        values (hb_current_comp(), #{labelerId}, #{eventCd}, #{code}, #{detail}, #{replyCd}, #{occurredAt}, #{by})
+        returning log_id
+    </select>
+
+    <select id="devLogs" resultType="io.smarthappy.module.wms.labeler.LabelerDtos$DevLogRow" flushCache="true" useCache="false">
+        select log_id, labeler_id, event_cd, code, detail, reply_cd, occurred_at
+          from wms_labeler_dev_log where labeler_id = #{labelerId}
+         order by log_id desc limit #{limit}
+    </select>
+
+    <select id="plants" resultType="map">
+        select plant_cd as "plantCd", plant_nm as "plantNm" from sys_plant where use_yn = 'Y' order by plant_cd
+    </select>
+
+    <!-- 시스템 코드 또는 이 회사가 더한 코드(사용 중) -->
+    <select id="codeUsable" resultType="boolean">
+        select exists (select 1 from sys_code where grp_cd = #{grpCd} and code = #{code} and use_yn = 'Y')
+            or exists (select 1 from sys_comp_code where grp_cd = #{grpCd} and code = #{code} and use_yn = 'Y')
+    </select>
+</mapper>

@@ -1,0 +1,451 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 설계 변경 (PLM 1단계, docs/39). 회사 조건은 RLS — comp_cd 를 적지 않는다 -->
+<mapper namespace="io.smarthappy.module.plm.PlmMapper">
+
+    <!-- ================================================================ 선택지 -->
+
+    <select id="findItem" resultType="io.smarthappy.module.plm.PlmDtos$ItemRef">
+        select i.item_id, i.item_cd, i.item_nm, i.use_yn from mst_item i where i.item_cd = #{itemCd}
+    </select>
+
+    <!-- 영향 대상 후보 (docs/39 20.7) — 확정 리비전과 같은 모품목·대체 번호의 작성 중 리비전(하나뿐, uq_mst_bom_draft) -->
+    <select id="draftsOf" resultType="io.smarthappy.module.plm.PlmMapper$DraftOf">
+        select s.bom_id as src_bom_id, d.bom_id as draft_bom_id, d.rev as draft_rev,
+               <include refid="openEcoOf"/> and t.bom_id = d.bom_id and e.eco_id &lt;&gt; #{ecoId} limit 1) as open_eco_no,
+               exists (select 1 from plm_eco_target t where t.bom_id = d.bom_id and t.eco_id = #{ecoId}) as in_this
+          from mst_bom s
+          join mst_bom d on d.item_id = s.item_id and d.alt_no = s.alt_no and d.status = 'DRAFT'
+         where s.bom_id in <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="itemTargetsOf" resultType="long">
+        select t.item_id from plm_eco_target t where t.eco_id = #{ecoId} and t.target_type = 'ITEM'
+    </select>
+
+    <select id="plantUsable" resultType="boolean">
+        select exists (select 1 from sys_plant p where p.plant_cd = #{plantCd} and p.use_yn = 'Y')
+    </select>
+
+    <select id="findSalesCust" resultType="io.smarthappy.module.plm.PlmDtos$CustOption">
+        select c.cust_id, c.cust_cd, c.cust_nm from mst_cust c
+         where c.cust_cd = #{custCd} and c.use_yn = 'Y' and c.cust_type in ('SALES', 'BOTH')
+    </select>
+
+    <select id="salesCusts" resultType="io.smarthappy.module.plm.PlmDtos$CustOption">
+        select c.cust_id, c.cust_cd, c.cust_nm from mst_cust c
+         where c.use_yn = 'Y' and c.cust_type in ('SALES', 'BOTH') order by c.cust_cd limit 500
+    </select>
+
+    <select id="reasonUsable" resultType="boolean">
+        select hb_code_usable(hb_current_comp(), 'PLM_CHANGE_REASON', #{code})
+    </select>
+
+    <select id="findEquip" resultType="long">
+        select q.equip_id from mst_equip q where q.equip_cd = #{equipCd} and q.use_yn = 'Y'
+    </select>
+
+    <select id="findProc" resultType="long">
+        select p.proc_id from mst_proc p where p.proc_cd = #{procCd} and p.use_yn = 'Y'
+    </select>
+
+    <select id="findDocRef" resultType="io.smarthappy.module.plm.PlmDtos$DocRef">
+        select d.doc_id, d.doc_type, r.doc_rev_id, r.rev, r.status,
+               (select e.eco_no from plm_eco_target t join plm_eco e on e.eco_id = t.eco_id
+                 where e.status in ('DRAFT', 'PENDING', 'APPROVED') and t.doc_rev_id = r.doc_rev_id
+                   <if test="ecoId != null">and e.eco_id &lt;&gt; #{ecoId}</if> limit 1) as open_eco_no
+          from mst_doc d
+          left join mst_doc_rev r on r.doc_id = d.doc_id and r.status in ('DRAFT', 'IN_APPROVAL')
+         where d.doc_no = #{docNo} and d.use_yn = 'Y'
+         limit 1
+    </select>
+
+    <update id="lockFiles">
+        update sys_file set locked_yn = 'Y', row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where target_type = 'plm-eco' and target_id = #{targetId} and use_yn = 'Y' and locked_yn = 'N'
+    </update>
+
+    <select id="docRevInOpenEco" resultType="boolean">
+        select exists (select 1 from plm_eco_target t join plm_eco e on e.eco_id = t.eco_id
+                        where t.doc_rev_id = #{docRevId} and e.status in ('PENDING', 'APPROVED'))
+    </select>
+
+    <sql id="openEcoOf">
+        (select e.eco_no from plm_eco_target t join plm_eco e on e.eco_id = t.eco_id
+          where e.status in ('DRAFT', 'PENDING', 'APPROVED')
+    </sql>
+
+    <select id="candidates" resultType="io.smarthappy.module.plm.PlmDtos$Candidate">
+        select * from (
+            select 'BOM' as target_type, b.bom_id as ref_id, b.item_id, i.item_cd, i.item_nm, b.rev, b.alt_no,
+                   null::varchar as plant_cd, b.valid_from, b.row_ver,
+                   <include refid="openEcoOf"/> and t.bom_id = b.bom_id limit 1) as open_eco_no
+              from mst_bom b join mst_item i on i.item_id = b.item_id
+             where b.status = 'DRAFT'
+               <if test="itemId != null">and b.item_id = #{itemId}</if>
+            union all
+            select 'ROUTING', r.routing_id, r.item_id, i.item_cd, i.item_nm, r.rev, r.alt_no, r.plant_cd, r.valid_from, r.row_ver,
+                   <include refid="openEcoOf"/> and t.routing_id = r.routing_id limit 1)
+              from mst_routing r join mst_item i on i.item_id = r.item_id
+             where r.status = 'DRAFT'
+               <if test="itemId != null">and r.item_id = #{itemId}</if>
+        ) c order by c.item_cd, c.target_type, c.plant_cd nulls first, c.alt_no
+        limit #{limit}
+    </select>
+
+    <select id="findBomRef" resultType="io.smarthappy.module.plm.PlmDtos$RefInfo">
+        select b.bom_id as ref_id, b.item_id, b.status, b.row_ver, b.rev, trim_scale(b.base_qty)::text as base_qty, b.remark,
+               <include refid="openEcoOf"/> and t.bom_id = b.bom_id
+               <if test="ecoId != null">and e.eco_id &lt;&gt; #{ecoId}</if> limit 1) as open_eco_no
+          from mst_bom b where b.bom_id = #{bomId}
+    </select>
+
+    <select id="findRoutingRef" resultType="io.smarthappy.module.plm.PlmDtos$RefInfo">
+        select r.routing_id as ref_id, r.item_id, r.status, r.row_ver, r.rev, null as base_qty, r.remark,
+               <include refid="openEcoOf"/> and t.routing_id = r.routing_id
+               <if test="ecoId != null">and e.eco_id &lt;&gt; #{ecoId}</if> limit 1) as open_eco_no
+          from mst_routing r where r.routing_id = #{routingId}
+    </select>
+
+    <!-- ================================================================ ECR -->
+
+    <!-- 요청 목록·grid·건수 공통(UI 단계 3, docs/39 21.2) — 조건이 갈라지면 "grid 건수 = 목록 건수" 가 깨진다 -->
+    <sql id="ecrFrom">
+          from plm_ecr r
+          join sys_user u on u.user_id = r.requester_id
+          left join mst_item i on i.item_id = r.item_id
+          left join plm_eco e on e.eco_id = r.eco_id
+    </sql>
+
+    <sql id="ecrWhere">
+         <where>
+            <if test="ecrId != null">r.ecr_id = #{ecrId}</if>
+            <if test="ecoId != null">and r.eco_id = #{ecoId}</if>
+            <if test="status != null">and r.status = #{status}</if>
+            <if test="itemId != null">and r.item_id = #{itemId}</if>
+            <if test="keyword != null">and (upper(r.ecr_no) like #{keyword} escape '\' or upper(r.title) like #{keyword} escape '\')</if>
+         </where>
+    </sql>
+
+    <sql id="ecrCols">
+        r.ecr_id, r.ecr_no, r.title, r.reason_cd, r.description, r.item_id, i.item_cd, i.item_nm,
+        r.requester_id, u.user_nm as requester_nm, r.status, r.eco_id, e.eco_no, r.decided_at, r.decided_by,
+        r.decision_comment, r.row_ver, r.created_at, r.updated_at, r.updated_by
+    </sql>
+
+    <select id="findEcrs" resultType="io.smarthappy.module.plm.PlmDtos$EcrRow">
+        select <include refid="ecrCols"/>
+        <include refid="ecrFrom"/>
+        <include refid="ecrWhere"/>
+         order by r.ecr_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid — 정렬은 허용 목록 enum 이름으로만(마지막 PK) -->
+    <!-- 정렬(grid·엑셀 공통 — 화면과 엑셀 순서가 같게, docs/09 6.1) -->
+    <sql id="ecrOrder">
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <!-- NOT NULL 키에는 nulls last 를 붙이지 않는다(색인 순서를 못 씀 — QA 가드 SortNullsLastGuardTest).
+                     빈 값이 있는 키(left join — 품목·지시)는 "(칸 is null), 칸" 으로 빈 값을 늘 뒤에(예전 nulls last 와 같은 순서) -->
+                <when test="s.key == 'ECR_NO'">r.ecr_no<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'TITLE'">r.title<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ITEM_CD'">(i.item_cd is null), i.item_cd<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'STATUS'">r.status<if test="s.desc"> desc</if></when>
+                <when test="s.key == 'ECO_NO'">(e.eco_no is null), e.eco_no<if test="s.desc"> desc</if></when>
+                <otherwise>r.created_at<if test="s.desc"> desc</if></otherwise>
+            </choose>,
+         </foreach>
+         r.ecr_id desc
+    </sql>
+
+    <select id="findEcrPage" resultType="io.smarthappy.module.plm.PlmDtos$EcrRow">
+        select <include refid="ecrCols"/>
+        <include refid="ecrFrom"/>
+        <include refid="ecrWhere"/>
+        <include refid="ecrOrder"/>
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <!-- 엑셀(docs/39 25장) — grid 와 같은 조건·정렬, 행 수 제한은 엑셀 서비스(건수 먼저) -->
+    <select id="cursorEcrs" resultType="io.smarthappy.module.plm.PlmDtos$EcrRow" fetchSize="1000">
+        select <include refid="ecrCols"/>
+        <include refid="ecrFrom"/>
+        <include refid="ecrWhere"/>
+        <include refid="ecrOrder"/>
+    </select>
+
+    <select id="countEcrs" resultType="long">
+        select count(*) <include refid="ecrFrom"/> <include refid="ecrWhere"/>
+    </select>
+
+    <select id="lockEcr" resultType="io.smarthappy.module.plm.PlmDtos$EcrRow">
+        select r.ecr_id, r.ecr_no, r.title, r.reason_cd, r.description, r.item_id, r.requester_id, r.status, r.eco_id, r.row_ver
+          from plm_ecr r where r.ecr_id = #{ecrId} for update
+    </select>
+
+    <select id="insertEcr" resultType="long" flushCache="true">
+        insert into plm_ecr (comp_cd, ecr_no, title, reason_cd, description, item_id, requester_id, created_by, updated_by)
+        values (hb_current_comp(), #{no}, #{title}, #{reasonCd}, #{description}, #{itemId}, #{requesterId}, #{by}, #{by})
+        returning ecr_id
+    </select>
+
+    <update id="updateEcr">
+        update plm_ecr
+           set title = #{title}, reason_cd = #{reasonCd}, description = #{description}, item_id = #{itemId},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ecr_id = #{ecrId} and row_ver = #{rowVer} and status = 'OPEN'
+    </update>
+
+    <update id="closeEcr">
+        update plm_ecr
+           set status = #{status}, eco_id = #{ecoId}, decision_comment = #{comment}, decided_at = now(), decided_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where ecr_id = #{ecrId} and row_ver = #{rowVer} and status = 'OPEN'
+    </update>
+
+    <!-- ================================================================ ECO -->
+
+    <sql id="ecoCols">
+        e.eco_id, e.eco_no, e.title, e.reason_cd, e.description, e.effective_date, e.owner_id, o.user_nm as owner_nm,
+        e.cust_approval_req_yn, e.cust_id, c.cust_cd, c.cust_nm, e.cust_approval_status, e.cust_approval_ref, e.cust_approved_on,
+        e.status, e.apr_id, a.status as apr_status, a.requester_id as apr_requester_id, e.submitted_at, e.approved_at, e.released_at, e.released_by, e.cancel_reason,
+        e.change_kind, e.mark_lots, e.mark_until,
+        e.apply_cond, e.stock_item_id, si.item_cd as stock_item_cd, si.item_nm as stock_item_nm, e.stock_plant_cd,
+        (select count(*) from plm_eco_target t where t.eco_id = e.eco_id) as target_cnt,
+        (select count(*) from plm_eco_lot m where m.eco_id = e.eco_id) as mark_cnt,
+        e.row_ver, e.created_at, e.updated_at, e.updated_by
+    </sql>
+
+    <!-- 지시 목록·grid·건수 공통(UI 단계 3, docs/39 21.2) -->
+    <sql id="ecoFrom">
+          from plm_eco e
+          join sys_user o on o.user_id = e.owner_id
+          left join mst_cust c on c.cust_id = e.cust_id
+          left join apr_request a on a.apr_id = e.apr_id
+          left join mst_item si on si.item_id = e.stock_item_id
+    </sql>
+
+    <sql id="ecoWhere">
+         <where>
+            <if test="ecoId != null">e.eco_id = #{ecoId}</if>
+            <if test="status != null">and e.status = #{status}</if>
+            <!-- 고객 응답 대기(docs/39 30장) — 홈 카드 "고객 응답 대기" 숫자도 이 조건으로 센다(countEcos). PPAP 판정 대기 또는 응답 기한 지난 열린 PCN, 취소 지시 제외 -->
+            <if test="custWaitOn != null">and e.status &lt;&gt; 'CANCELLED'
+                and (exists (select 1 from plm_ppap p where p.eco_id = e.eco_id and p.status = 'SUBMITTED')
+                     or exists (select 1 from plm_pcn n where n.eco_id = e.eco_id and n.status = 'SENT' and n.response_due &lt; cast(#{custWaitOn} as date)))</if>
+            <if test="itemId != null">and exists (select 1 from plm_eco_target t where t.eco_id = e.eco_id and t.item_id = #{itemId})</if>
+            <if test="keyword != null">and (upper(e.eco_no) like #{keyword} escape '\' or upper(e.title) like #{keyword} escape '\')</if>
+         </where>
+    </sql>
+
+    <select id="findEcos" resultType="io.smarthappy.module.plm.PlmDtos$EcoRow">
+        select <include refid="ecoCols"/>
+        <include refid="ecoFrom"/>
+        <include refid="ecoWhere"/>
+         order by e.eco_id desc
+         limit #{limit}
+    </select>
+
+    <!-- grid — 정렬은 허용 목록 enum 이름으로만(마지막 PK) -->
+    <sql id="ecoOrder">
+         order by
+         <foreach collection="page.sorts" item="s">
+            <choose>
+                <when test="s.key == 'ECO_NO'">e.eco_no</when>
+                <when test="s.key == 'TITLE'">e.title</when>
+                <when test="s.key == 'EFFECTIVE_DATE'">e.effective_date</when>
+                <when test="s.key == 'OWNER'">o.user_nm</when>
+                <when test="s.key == 'STATUS'">e.status</when>
+                <otherwise>e.created_at</otherwise>
+            </choose>
+            <if test="s.desc"> desc</if>,   <!-- 키가 모두 NOT NULL — nulls last 를 붙이지 않는다(QA 가드 SortNullsLastGuardTest) -->
+         </foreach>
+         e.eco_id desc
+    </sql>
+
+    <select id="findEcoPage" resultType="io.smarthappy.module.plm.PlmDtos$EcoRow">
+        select <include refid="ecoCols"/>
+        <include refid="ecoFrom"/>
+        <include refid="ecoWhere"/>
+        <include refid="ecoOrder"/>
+         limit #{page.size} offset #{page.offset}
+    </select>
+
+    <select id="cursorEcos" resultType="io.smarthappy.module.plm.PlmDtos$EcoRow" fetchSize="1000">
+        select <include refid="ecoCols"/>
+        <include refid="ecoFrom"/>
+        <include refid="ecoWhere"/>
+        <include refid="ecoOrder"/>
+    </select>
+
+    <select id="countEcos" resultType="long">
+        select count(*) <include refid="ecoFrom"/> <include refid="ecoWhere"/>
+    </select>
+
+    <select id="lockEco" resultType="io.smarthappy.module.plm.PlmDtos$EcoRow">
+        select e.eco_id, e.eco_no, e.title, e.reason_cd, e.effective_date, e.owner_id, e.cust_approval_req_yn, e.cust_id,
+               e.cust_approval_status, e.status, e.apr_id, e.change_kind, e.mark_lots, e.mark_until,
+               e.apply_cond, e.stock_item_id, e.stock_plant_cd, e.row_ver
+          from plm_eco e where e.eco_id = #{ecoId} for update
+    </select>
+
+    <select id="insertEco" resultType="long" flushCache="true">
+        insert into plm_eco (comp_cd, eco_no, title, reason_cd, description, effective_date, owner_id, cust_approval_req_yn,
+                             cust_id, cust_approval_status, change_kind, mark_lots, mark_until,
+                             apply_cond, stock_item_id, stock_plant_cd, created_by, updated_by)
+        values (hb_current_comp(), #{no}, #{v.title}, #{v.reasonCd}, #{v.description}, #{v.effectiveDate}, #{v.ownerId},
+                #{v.custApprovalReqYn}, #{v.custId}, #{v.custApprovalStatus}, #{v.changeKind},
+                #{v.markLots,jdbcType=INTEGER}, #{v.markUntil,jdbcType=DATE},
+                #{v.applyCond}, #{v.stockItemId,jdbcType=BIGINT}, #{v.stockPlantCd,jdbcType=VARCHAR}, #{by}, #{by})
+        returning eco_id
+    </select>
+
+    <!-- 고객 승인 필요를 끄면 승인 기록도 지운다(필요 없음 = 기록 없음, ck_plm_eco_cust) -->
+    <update id="updateEco">
+        update plm_eco
+           set title = #{v.title}, reason_cd = #{v.reasonCd}, description = #{v.description}, effective_date = #{v.effectiveDate},
+               owner_id = #{v.ownerId}, cust_approval_req_yn = #{v.custApprovalReqYn}, cust_id = #{v.custId},
+               change_kind = #{v.changeKind}, mark_lots = #{v.markLots,jdbcType=INTEGER}, mark_until = #{v.markUntil,jdbcType=DATE},
+               apply_cond = #{v.applyCond}, stock_item_id = #{v.stockItemId,jdbcType=BIGINT}, stock_plant_cd = #{v.stockPlantCd,jdbcType=VARCHAR},
+               cust_approval_status = case when #{v.custApprovalReqYn} = 'N' then 'NA'
+                                           when cust_approval_status = 'NA' then 'PENDING' else cust_approval_status end,
+               cust_approval_ref = case when #{v.custApprovalReqYn} = 'N' then null else cust_approval_ref end,
+               cust_approved_on = case when #{v.custApprovalReqYn} = 'N' then null else cust_approved_on end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="touchEco">
+        update plm_eco set row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="submitEco">
+        update plm_eco set status = 'PENDING', submitted_at = now(), row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and row_ver = #{rowVer} and status = 'DRAFT'
+    </update>
+
+    <update id="setAprId">
+        update plm_eco set apr_id = #{aprId} where eco_id = #{ecoId} and status = 'PENDING'
+    </update>
+
+    <update id="finishApproval">
+        update plm_eco
+           set status = #{status}, approved_at = case when #{status} = 'APPROVED' then now() else approved_at end,
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and status = 'PENDING'
+    </update>
+
+    <update id="snapshotBaseRowVer">
+        update plm_eco_target t
+           set base_row_ver = coalesce((select b.row_ver from mst_bom b where b.bom_id = t.bom_id),
+                                       (select r.row_ver from mst_routing r where r.routing_id = t.routing_id),
+                                       (select d.row_ver from mst_doc_rev d where d.doc_rev_id = t.doc_rev_id)),
+               row_ver = t.row_ver + 1, updated_at = now(), updated_by = #{by}
+         where t.eco_id = #{ecoId}
+    </update>
+
+    <update id="clearBaseRowVer">
+        update plm_eco_target set base_row_ver = null, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and base_row_ver is not null
+    </update>
+
+    <update id="setCustApproval">
+        update plm_eco
+           set cust_approval_status = #{status}, cust_approval_ref = #{ref}, cust_approved_on = #{approvedOn},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and row_ver = #{rowVer} and cust_approval_req_yn = 'Y'
+           and status in ('DRAFT', 'PENDING', 'APPROVED')
+    </update>
+
+    <update id="releaseEco">
+        update plm_eco set status = 'RELEASED', released_at = now(), released_by = #{by},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and row_ver = #{rowVer} and status = 'APPROVED'
+    </update>
+
+    <update id="cancelEco">
+        update plm_eco set status = 'CANCELLED', cancel_reason = #{reason},
+               row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where eco_id = #{ecoId} and row_ver = #{rowVer} and status in ('DRAFT', 'APPROVED')
+    </update>
+
+    <!-- ================================================================ 대상 -->
+
+    <select id="findTargets" resultType="io.smarthappy.module.plm.PlmDtos$TargetRow">
+        select t.target_id, t.seq, t.target_type, t.item_id, i.item_cd, i.item_nm, t.bom_id, t.routing_id,
+               t.equip_id, q.equip_cd, q.equip_nm, t.proc_id, p.proc_cd, p.proc_nm, t.doc_rev_id, dd.doc_no, dd.doc_nm,
+               (t.doc_rev_id is not null and t.item_id is not null
+                and exists (select 1 from mst_doc_target dt where dt.doc_id = dd.doc_id and dt.target_type in ('ITEM', 'ITEM_CLASS'))
+                and not exists (select 1 from mst_doc_target dt where dt.doc_id = dd.doc_id
+                                   and ((dt.target_type = 'ITEM' and dt.item_id = t.item_id)
+                                     or (dt.target_type = 'ITEM_CLASS' and dt.item_class_id = i.item_class_id)))) as doc_target_warn,
+               coalesce(b.rev, r.rev, dr.rev) as rev, r.plant_cd, coalesce(b.status, r.status, dr.status) as ref_status,
+               coalesce(b.row_ver, r.row_ver, dr.row_ver) as ref_row_ver, coalesce(b.valid_from, r.valid_from) as ref_valid_from,
+               coalesce(b.change_no, r.change_no) as ref_change_no,
+               t.change_desc, t.base_row_ver, t.row_ver
+          from plm_eco_target t
+          left join mst_item i on i.item_id = t.item_id
+          left join mst_bom b on b.bom_id = t.bom_id
+          left join mst_routing r on r.routing_id = t.routing_id
+          left join mst_equip q on q.equip_id = t.equip_id
+          left join mst_proc p on p.proc_id = t.proc_id
+          left join mst_doc_rev dr on dr.doc_rev_id = t.doc_rev_id
+          left join mst_doc dd on dd.doc_id = dr.doc_id
+         where t.eco_id = #{ecoId}
+         order by t.seq
+    </select>
+
+    <insert id="insertTarget">
+        insert into plm_eco_target (comp_cd, eco_id, seq, target_type, item_id, bom_id, routing_id, equip_id, proc_id, doc_rev_id,
+                                    change_desc, created_by, updated_by)
+        values (hb_current_comp(), #{ecoId}, #{seq}, #{type}, #{itemId,jdbcType=BIGINT}, #{bomId}, #{routingId}, #{equipId,jdbcType=BIGINT},
+                #{procId,jdbcType=BIGINT}, #{docRevId,jdbcType=BIGINT}, #{changeDesc}, #{by}, #{by})
+    </insert>
+
+    <update id="updateTarget">
+        update plm_eco_target set seq = #{seq}, change_desc = #{changeDesc}, row_ver = row_ver + 1, updated_at = now(), updated_by = #{by}
+         where target_id = #{targetId}
+           and (seq &lt;&gt; #{seq} or change_desc is distinct from #{changeDesc,jdbcType=VARCHAR})
+    </update>
+
+    <delete id="deleteTarget">
+        delete from plm_eco_target where target_id = #{targetId}
+    </delete>
+
+    <!-- ================================================================ 변경 표시 (3b) — 읽기만 -->
+
+    <select id="findMarks" resultType="io.smarthappy.module.plm.PlmDtos$MarkRow">
+        select m.seq_no, m.mark_reason, m.lot_id, l.lot_no, i.item_cd, i.item_nm, w.wo_no, q.equip_cd, m.occurred_at, m.recorded_at
+          from plm_eco_lot m
+          join lot_master l on l.lot_id = m.lot_id
+          join mst_item i on i.item_id = l.item_id
+          left join prd_wo w on w.wo_id = m.wo_id
+          left join mst_equip q on q.equip_id = m.equip_id
+         where m.eco_id = #{ecoId}
+         order by m.seq_no
+         limit #{limit}
+    </select>
+
+    <!-- ================================================================ 결재 -->
+
+    <select id="findAprLines" resultType="io.smarthappy.module.plm.PlmDtos$AprLineRow">
+        select l.seq, l.approver_id, u.user_nm as approver_nm, l.line_type, l.status, l.acted_at, l.comment
+          from apr_line l join sys_user u on u.user_id = l.approver_id
+         where l.apr_id = #{aprId} order by l.seq
+    </select>
+
+    <select id="aprStatus" resultType="string">
+        select status from apr_request where apr_id = #{aprId}
+    </select>
+
+    <select id="ecoStatus" resultType="string">
+        select status from plm_eco where eco_id = #{ecoId}
+    </select>
+
+    <select id="compHead" resultType="map">
+        select c.comp_nm, c.locale_cd from sys_comp c where c.comp_cd = hb_current_comp()
+    </select>
+</mapper>

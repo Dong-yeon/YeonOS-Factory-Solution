@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  부서 관리 (sys-dept) — 시스템관리 2단계 (docs/36 9.1). 회사 부서 트리, 사용자 소속은 사용자 관리에서.
+  사용성 체크(docs/11 4.3): 주 사용자 = 회사 관리자·인사(WEB). 도입 때 한 번, 조직 개편 때 가끔.
+  직접 치는 값 = 코드·이름·순서. 부서장 = 사용 중 회사 사용자 중 고르기(결재선 기본값, 9.7 D-1). 예외 = 자기 하위 아래로 이동(순환)·10단 초과·사용 중 하위가 있는 부서 사용 중지 → 칸 오류(DB 트리거가 최종).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">부서 관리</h1>
+    <div class="hb-page-tools">
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<!-- 건수 적은 목록 = 빠른 찾기 1칸(docs/40 P1 ②) -->
+<form id="quickFind" class="hb-search" role="search" autocomplete="off">
+    <label><span th:text="#{sysUi.quickFind}">빠른 찾기</span>
+        <input type="search" maxlength="50" th:placeholder="#{sysUi.quickFindTreeHint}"></label>
+</form>
+
+<div class="hb-split">
+    <section class="hb-split-main">
+        <div class="hb-toolbar hb-tree-tools">
+            <span id="summary" class="hb-muted hb-tree-summary"></span>
+            <button type="button" id="expandBtn" class="hb-btn-secondary" th:text="#{bomTree.expandAll}">모두 펼치기</button>
+            <button type="button" id="collapseBtn" class="hb-btn-secondary" th:text="#{bomTree.collapse}">1레벨만</button>
+        </div>
+        <div id="tree" class="hb-grid-host"></div>
+    </section>
+
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="addRootBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{sysDept.addRoot}">최상위 추가</button>
+            <button type="button" id="addChildBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{sysDept.addChild}">하위 추가</button>
+            <button type="button" id="saveBtn" th:if="${actions.contains('SAVE')}" th:text="#{common.save}">저장</button>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <p id="formMode" class="hb-muted" th:text="#{sysDept.selectOrNew}">왼쪽에서 부서를 고르거나 추가를 누르세요.</p>
+        <form id="deptForm" class="hb-form" autocomplete="off">
+            <label class="hb-wide"><span th:text="#{sysDept.parent}">상위 부서</span>
+                <select data-field="parentId" data-help-key="sys-dept.parentId"></select></label>
+            <label><span th:text="#{sysDept.col.deptCd}">코드</span>
+                <input data-field="deptCd" maxlength="30" required spellcheck="false" data-help-key="sys-dept.deptCd"></label>
+            <label><span th:text="#{sysDept.col.deptNm}">이름</span>
+                <input data-field="deptNm" maxlength="100" required></label>
+            <label class="hb-wide"><span th:text="#{sysDept.head}">부서장</span>
+                <select data-field="headUserId" data-help-key="sys-dept.headUserId"></select>
+                <small class="hb-muted" th:text="#{sysDept.headHint}">결재선 기본값 — 비면 상위 부서의 장</small></label>
+            <label><span th:text="#{sysDept.col.sortNo}">순서</span>
+                <input data-field="sortNo" data-hb="number" data-scale="0" data-min="0" data-max="99999" data-pad="false"></label>
+            <label><span th:text="#{sysDept.col.useYn}">사용</span>
+                <select data-field="useYn" data-help-key="sys-dept.useYn">
+                    <option value="Y" th:text="#{yn.Y}">사용</option>
+                    <option value="N" th:text="#{yn.N}">미사용</option>
+                </select></label>
+        </form>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/common/hb.tree.js}"></script>
+<script th:src="@{/js/views/admin/sys-ui.js}"></script>
+<script th:src="@{/js/views/admin/dept-mgt.js}"></script>
+</body>
+</html>

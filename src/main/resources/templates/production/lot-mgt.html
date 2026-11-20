@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head th:replace="~{fragments/page :: head}"></head>
+<!--
+  LOT 추적 (prd-lot) — P2 4단계 (docs/25 4.5). LOT 표(잔량은 계보 원장에서 계산) → 상세: 정보·분할·병합·라벨 바꿈·보류 +
+  "어디서 왔나(역추적)" / "어디로 갔나(정추적)". 자재 LOT 간이 등록(D2 — 재고 위치는 P4).
+-->
+<body class="hb-page hb-page-app" th:data-prog="${prog.progCd}" th:data-actions="${#strings.setJoin(actions, ',')}">
+<header class="hb-page-head">
+    <h1 th:text="${prog.name}">LOT 추적</h1>
+    <div class="hb-page-tools">
+        <span class="hb-prog-links" role="group" th:aria-label="#{page.related}" data-prog-links="prd-lot-report,qms-lot-trace" hidden></span>
+        <button type="button" id="hbHelpBtn" class="hb-btn-secondary" aria-expanded="false" th:text="#{page.help}">도움말</button>
+        <button type="button" id="hbFeedbackBtn" class="hb-btn-secondary" th:text="#{page.feedback}">의견 보내기</button>
+    </div>
+</header>
+
+<form id="search" class="hb-search" data-hb="searchPanel" data-autofocus="true" autocomplete="off">
+    <div id="period" data-hb="dateRange" th:data-label="#{prdLot.period}" data-from-name="from" data-to-name="to"
+         data-presets="today,last7,last30,thisMonth" data-default="last30" data-max-days="366" data-required="false"></div>
+    <label><span th:text="#{prdLot.keyword}">LOT·공급사 LOT 번호</span><input name="keyword" maxlength="60"></label>
+    <label><span th:text="#{prdLot.col.itemCd}">품목 코드</span><input name="itemCd" maxlength="40"></label>
+    <label><span th:text="#{prdLot.col.origin}">출처</span>
+        <select name="origin" id="originSel">
+            <option value="" th:text="#{common.all}">전체</option>
+            <option value="RECEIVED" th:text="#{code.LOT_ORIGIN.RECEIVED}">자재 입고</option>
+            <option value="PRODUCED" th:text="#{code.LOT_ORIGIN.PRODUCED}">생산</option>
+            <option value="SPLIT" th:text="#{code.LOT_ORIGIN.SPLIT}">분할</option>
+            <option value="MERGE" th:text="#{code.LOT_ORIGIN.MERGE}">병합</option>
+            <option value="RELABEL" th:text="#{code.LOT_ORIGIN.RELABEL}">라벨 바꿈</option>
+            <option value="REWORK" th:text="#{code.LOT_ORIGIN.REWORK}">재작업</option>
+            <option value="REPAIR" th:text="#{code.LOT_ORIGIN.REPAIR}">수리</option>
+            <option value="UNIT" th:text="#{code.LOT_ORIGIN.UNIT}">장비(시리얼)</option>
+        </select></label>
+    <label class="hb-switch"><input type="checkbox" role="switch" name="holdOnly" value="Y"><span th:text="#{prdLot.holdOnly}">보류만</span></label>
+    <div class="hb-sp-actions">
+        <button type="reset" class="hb-btn-ghost" th:text="#{common.reset}">초기화</button>
+        <button type="submit" class="hb-btn-secondary hb-btn-search" th:text="#{common.search}">조회</button>
+    </div>
+</form>
+
+<div class="hb-split hb-split-wide">
+    <section class="hb-split-main">
+        <div class="hb-toolbar">
+            <button type="button" id="receiveBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" th:text="#{prdLot.receive}">자재 LOT 등록</button>
+            <button type="button" id="mergeBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" disabled th:text="#{prdLot.merge}">고른 LOT 병합</button>
+        </div>
+        <div id="lotGrid" class="hb-grid-host"></div>
+    </section>
+    <aside class="hb-split-side" id="detail">
+        <div class="hb-toolbar">
+            <button type="button" id="splitBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{prdLot.split}">분할</button>
+            <button type="button" id="relabelBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{prdLot.relabel}">라벨 바꿈</button>
+            <button type="button" id="reworkBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{prdLot.rework}">재작업</button>
+            <button type="button" id="repairBtn" class="hb-btn-secondary" th:if="${actions.contains('SAVE')}" hidden th:text="#{prdLot.repair}">수리</button>
+            <a id="reportLink" class="hb-btn-secondary hb-link-btn" hidden th:text="#{prdLot.report}">역추적 보고서</a>
+            <button type="button" class="hb-btn-secondary hb-drawer-close" data-hb-detail-close th:text="#{common.close}">닫기</button>
+        </div>
+        <!-- 되돌리기 어려운 동작은 작업 줄에서 떼어 외곽선 위험 톤(docs/40 P1 ④) -->
+        <div class="hb-toolbar" th:if="${actions.contains('SAVE')}" hidden>
+            <button type="button" id="holdBtn" class="hb-btn-danger-outline" hidden th:text="#{prdLot.hold}">보류</button>
+        </div>
+        <p id="lotInfo" class="hb-muted" th:text="#{prdLot.select}">왼쪽에서 LOT 을 고르세요.</p>
+        <dl class="hb-info" id="lotFacts" hidden></dl>
+
+        <form id="receiveForm" class="hb-form" autocomplete="off" hidden th:if="${actions.contains('SAVE')}">
+            <h2 class="hb-wide" th:text="#{prdLot.receive}">자재 LOT 등록</h2>
+            <label><span th:text="#{prdLot.col.itemCd}">품목 코드</span>
+                <input data-field="itemCd" maxlength="40"></label>
+            <label><span th:text="#{prdLot.col.qty}">수량</span>
+                <input data-field="qty" inputmode="decimal" maxlength="30" data-help-key="prd-lot.qty"></label>
+            <label><span th:text="#{prdLot.col.supplierCd}">공급사 코드</span>
+                <input data-field="supplierCd" maxlength="30"></label>
+            <label><span th:text="#{prdLot.col.supplierLotNo}">공급사 LOT 번호</span>
+                <input data-field="supplierLotNo" maxlength="60" data-help-key="prd-lot.supplierLotNo"></label>
+            <label class="hb-wide"><span th:text="#{prdLot.col.remark}">비고</span>
+                <input data-field="remark" maxlength="1000"></label>
+            <div class="hb-toolbar hb-wide">
+                <button type="button" id="receiveSaveBtn" th:text="#{common.save}">저장</button>
+            </div>
+        </form>
+
+        <section class="hb-sub" id="traceSection" hidden>
+            <div class="hb-toolbar">
+                <fieldset class="hb-seg" id="dirSeg">
+                    <legend th:text="#{prdLot.trace}">추적</legend>
+                    <label><input type="radio" name="dir" value="BACK" checked><span th:text="#{prdLot.back}">어디서 왔나</span></label>
+                    <label><input type="radio" name="dir" value="FWD"><span th:text="#{prdLot.fwd}">어디로 갔나</span></label>
+                </fieldset>
+            </div>
+            <p id="traceInfo" class="hb-muted"></p>
+            <table class="hb-cmp-table" id="trace">
+                <thead><tr>
+                    <th th:text="#{prdLot.col.lotNo}">LOT 번호</th>
+                    <th th:text="#{prdLot.col.item}">품목</th>
+                    <th th:text="#{prdLot.col.rel}">연결</th>
+                    <th class="hb-num" th:text="#{prdLot.col.qty}">수량</th>
+                    <th th:text="#{prdLot.col.source}">지시·공급사 LOT</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </section>
+    </aside>
+</div>
+
+<p id="msg" class="hb-msg" role="status"></p>
+<aside id="hbHelp" class="hb-help" hidden></aside>
+
+<th:block th:replace="~{fragments/page :: scripts}"></th:block>
+<script th:src="@{/js/common/hb.dates.js}"></script>
+<script th:src="@{/js/common/hb.calendar.js}"></script>
+<script th:src="@{/js/common/hb.daterange.js}"></script>
+<script th:src="@{/js/common/hb.numbers.js}"></script>
+<script th:src="@{/js/common/hb.input.js}"></script>
+<script th:src="@{/js/common/hb.grid.js}"></script>
+<script th:src="@{/js/common/hb.page.js}"></script>
+<script th:src="@{/js/views/mes/mes-ui.js}"></script>
+<script th:src="@{/js/views/production/lot-mgt.js}"></script>
+</body>
+</html>
