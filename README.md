@@ -1,2 +1,2 @@
-# YeonOS-Factory-Soulution
-Yeon OS Demo Factory Soulution
+# YeonOS-Factory-Solution
+Yeon OS Demo Factory Solution
