@@ -10,7 +10,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 주소 | (공개 데모 주소 — 배포 도메인이 정해지면 적습니다) |
+| 주소 | <https://yeonos-production.up.railway.app/> |
 | 회사코드 | `DEMO` |
 | 아이디 | `user1` |
 | 비밀번호 | `yeonos-demo-1234` |
